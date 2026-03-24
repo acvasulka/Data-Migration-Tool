@@ -1,6 +1,6 @@
 import { C } from "../theme";
 
-export default function StepUpload({ schemaType, aiLoading, dragOver, setDragOver, fileRef, handleFileAndMap }) {
+export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, setDragOver, fileRef, handleFileAndMap }) {
   return (
     <div>
       <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>
@@ -18,18 +18,27 @@ export default function StepUpload({ schemaType, aiLoading, dragOver, setDragOve
           transition: "all 0.15s ease",
         }}
       >
-        <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: C.navy }}>Drag & drop CSV here</p>
-        <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>or click to browse</p>
+        <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: C.navy }}>Drag & drop a spreadsheet here</p>
+        <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>Supports CSV, Excel (.xlsx, .xls), and ODS · or click to browse</p>
       </div>
       <input
         ref={fileRef}
         type="file"
-        accept=".csv"
+        accept=".csv,.xlsx,.xls,.ods"
         style={{ display: "none" }}
         onChange={e => handleFileAndMap(e.target.files[0])}
       />
       {aiLoading && (
-        <p style={{ fontSize: 13, color: C.textMid, marginTop: 12 }}>Analyzing columns and suggesting mappings...</p>
+        <div style={{ marginTop: 12 }}>
+          {fileInfo && (
+            <p style={{ fontSize: 12, color: C.textMid, margin: "0 0 4px" }}>
+              Detected: <strong>{fileInfo.type}</strong>
+              {fileInfo.sheetName && <> · Sheet: '<strong>{fileInfo.sheetName}</strong>'</>}
+              {fileInfo.rowCount != null && <> · {fileInfo.rowCount} rows</>}
+            </p>
+          )}
+          <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>Analyzing columns and suggesting mappings...</p>
+        </div>
       )}
     </div>
   );

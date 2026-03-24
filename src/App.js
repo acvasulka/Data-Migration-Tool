@@ -30,6 +30,12 @@ const GLOBAL_STYLES = `
     font-weight: 500; transition: all 0.15s ease;
   }
   .fmx-btn-secondary:hover { background: #FFF5F2; }
+  .fmx-btn-nav-back {
+    background: ${C.white}; color: ${C.navy}; border: 1px solid ${C.navy};
+    border-radius: 6px; padding: 8px 20px; cursor: pointer; font-size: 14px;
+    font-weight: 500; transition: all 0.15s ease;
+  }
+  .fmx-btn-nav-back:hover { background: ${C.navyTint}; }
   .fmx-btn-destructive {
     background: ${C.white}; color: #888; border: 1px solid #888;
     border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
@@ -97,8 +103,10 @@ export default function App() {
   const [wStep, setWStep] = useState(0);
   const [schemaType, setSchemaType] = useState("");
   const [csv, setCsv] = useState(null);
+  const [fileInfo, setFileInfo] = useState(null);
   const [mapping, setMapping] = useState({});
   const [transformRules, setTransformRules] = useState({});
+  // customFields: array of { name: string, required: boolean }
   const [customFields, setCustomFields] = useState([]);
   const [dynamicRates, setDynamicRates] = useState([]);
   const [mappedRows, setMappedRows] = useState([]);
@@ -112,7 +120,9 @@ export default function App() {
   const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
   const allFields = schema ? [
     ...schema.fields,
-    ...customFields.filter(Boolean).map(cf => ({ name: cf, required: false, type: "string", group: "Custom Fields" })),
+    ...customFields.filter(cf => cf.name).map(cf => ({
+      name: cf.name, required: cf.required || false, type: "string", group: "Custom Fields",
+    })),
     ...dynamicRates.flatMap((_, i) => [
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
       { name: `Rate ${i + 1} Unit`, required: false, type: "string", group: "Scheduling Rates" },
@@ -134,33 +144,50 @@ export default function App() {
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
-    setTransformRules({}); setCertified(false); setWStep(1);
+    setTransformRules({}); setCertified(false); setFileInfo(null); setWStep(1);
   };
 
-  const handleFileAndMap = async file => {
+  const processCSV = async (csvStr, info) => {
+    const parsed = parseCSV(csvStr);
+    setCsv(parsed);
+    setFileInfo({ ...info, rowCount: parsed.rows.length });
+    setAiLoading(true);
+    const suggested = suggestMapping(parsed.headers, FMX_SCHEMAS[schemaType].fields);
+    try {
+      const res = await fetch("/api/claude", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514", max_tokens: 1000,
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+        })
+      });
+      const data = await res.json();
+      const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+      setMapping({ ...suggested, ...JSON.parse(clean) });
+    } catch { setMapping(suggested); }
+    setAiLoading(false);
+    setWStep(2);
+  };
+
+  const handleFileAndMap = file => {
     if (!file) return;
+    const ext = file.name.split(".").pop().toLowerCase();
     const reader = new FileReader();
-    reader.onload = async e => {
-      const parsed = parseCSV(e.target.result);
-      setCsv(parsed);
-      setAiLoading(true);
-      const suggested = suggestMapping(parsed.headers, FMX_SCHEMAS[schemaType].fields);
-      try {
-        const res = await fetch("/api/claude", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 1000,
-            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-          })
-        });
-        const data = await res.json();
-        const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
-        setMapping({ ...suggested, ...JSON.parse(clean) });
-      } catch { setMapping(suggested); }
-      setAiLoading(false);
-      setWStep(2);
-    };
-    reader.readAsText(file);
+    if (ext === "csv") {
+      reader.onload = e => processCSV(e.target.result, { type: "CSV", sheetName: null });
+      reader.readAsText(file);
+    } else {
+      reader.onload = async e => {
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
+        const sheetName = wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+        const csvStr = XLSX.utils.sheet_to_csv(ws);
+        const typeLabel = ext === "xlsx" ? "Excel (.xlsx)" : ext === "xls" ? "Excel (.xls)" : "ODS";
+        await processCSV(csvStr, { type: typeLabel, sheetName });
+      };
+      reader.readAsArrayBuffer(file);
+    }
   };
 
   const goToValidate = () => {
@@ -180,20 +207,33 @@ export default function App() {
     }));
   };
 
-  const handleExport = () => {
+  const handleExport = async (format = "csv") => {
     const refField = schema.crossRef;
     if (refField) {
       const vals = [...new Set(mappedRows.map(r => r[refField]).filter(Boolean))];
       setImportedData(prev => ({ ...prev, [schemaType]: vals }));
     }
+    const baseName = schemaType.replace(/\s+/g, "_");
     setHistory(h => [...h, { type: schemaType, rows: mappedRows.length, time: new Date().toLocaleTimeString() }]);
-    downloadCSV(`${schemaType.replace(/\s+/g, "_")}_FMX_Import.csv`, mappedHeaders, mappedRows);
+    if (format === "xlsx") {
+      const XLSX = await import("xlsx");
+      const ws = XLSX.utils.json_to_sheet(mappedRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, schemaType.slice(0, 31));
+      XLSX.writeFile(wb, `${baseName}_FMX_Import.xlsx`);
+    } else {
+      downloadCSV(`${baseName}_FMX_Import.csv`, mappedHeaders, mappedRows);
+    }
   };
 
   const reset = () => {
-    setWStep(0); setSchemaType(""); setCsv(null); setMapping({});
+    setWStep(0); setSchemaType(""); setCsv(null); setFileInfo(null); setMapping({});
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
+  };
+
+  const handleBack = () => {
+    if (wStep > 0) setWStep(wStep - 1);
   };
 
   return (
@@ -218,7 +258,7 @@ export default function App() {
       </div>
 
       {/* Page content */}
-      <div style={{ padding: "1.5rem 24px 2rem" }}>
+      <div style={{ padding: "1.5rem 24px 0" }}>
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
           {/* Main wizard area */}
@@ -243,6 +283,7 @@ export default function App() {
               <StepUpload
                 schemaType={schemaType}
                 aiLoading={aiLoading}
+                fileInfo={fileInfo}
                 dragOver={dragOver}
                 setDragOver={setDragOver}
                 fileRef={fileRef}
@@ -264,7 +305,7 @@ export default function App() {
                 setCustomFields={setCustomFields}
                 dynamicRates={dynamicRates}
                 setDynamicRates={setDynamicRates}
-                goToValidate={goToValidate}
+                fileInfo={fileInfo}
                 setPreview={setPreview}
                 setTransformModal={setTransformModal}
               />
@@ -280,9 +321,7 @@ export default function App() {
                 hasErrors={hasErrors}
                 certified={certified}
                 setCertified={setCertified}
-                canProceed={canProceed}
                 applyNLEdit={applyNLEdit}
-                setWStep={setWStep}
               />
             )}
 
@@ -294,8 +333,32 @@ export default function App() {
                 mappedHeaders={mappedHeaders}
                 allFields={allFields}
                 handleExport={handleExport}
-                reset={reset}
               />
+            )}
+
+            {/* Sticky footer nav */}
+            {wStep > 0 && (
+              <div style={{
+                position: "sticky", bottom: 0, background: C.white,
+                borderTop: `1px solid ${C.border}`, padding: "12px 0",
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                marginTop: 24, zIndex: 50,
+              }}>
+                <button className="fmx-btn-nav-back" onClick={handleBack}>← Back</button>
+                <div>
+                  {wStep === 2 && (
+                    <button className="fmx-btn-primary" onClick={goToValidate}>Validate →</button>
+                  )}
+                  {wStep === 3 && (
+                    <button className="fmx-btn-primary" onClick={() => setWStep(4)} disabled={!canProceed}>
+                      Review & export →
+                    </button>
+                  )}
+                  {wStep === 4 && (
+                    <button className="fmx-btn-secondary" onClick={reset}>Import another sheet</button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 

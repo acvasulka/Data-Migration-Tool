@@ -1,12 +1,40 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
 
-export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange }) {
+export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell }) {
   const [editCell, setEditCell] = useState(null);
   const [editVal, setEditVal] = useState("");
+  const [widths, setWidths] = useState(() => Object.fromEntries(headers.map(h => [h, 130])));
   const inputRef = useRef();
+  const rowRefs = useRef({});
+  const containerRef = useRef();
 
-  const startEdit = (ri, h, val) => { setEditCell(`${ri}-${h}`); setEditVal(val); setTimeout(() => inputRef.current?.focus(), 0); };
+  // Sync widths when headers change (new columns added)
+  useEffect(() => {
+    setWidths(prev => {
+      const next = { ...prev };
+      headers.forEach(h => { if (next[h] == null) next[h] = 130; });
+      return next;
+    });
+  }, [headers]);
+
+  // Jump to a specific cell when focusCell changes
+  useEffect(() => {
+    if (!focusCell) return;
+    const { ri, header } = focusCell;
+    if (rows[ri] == null) return;
+    setEditCell(`${ri}-${header}`);
+    setEditVal(rows[ri][header] ?? "");
+    setTimeout(() => {
+      inputRef.current?.focus();
+      rowRefs.current[ri]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 0);
+  }, [focusCell]); // eslint-disable-line
+
+  const startEdit = (ri, h, val) => {
+    setEditCell(`${ri}-${h}`); setEditVal(val);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
   const commit = (ri, h) => { onChange(rows.map((r, i) => i === ri ? { ...r, [h]: editVal } : r)); setEditCell(null); };
   const handleKey = (e, ri, h) => { if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commit(ri, h); } if (e.key === "Escape") setEditCell(null); };
   const addRow = () => onChange([...rows, Object.fromEntries(headers.map(h => [h, ""]))]);
@@ -25,7 +53,22 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
     return C.textDark;
   };
 
-  const CW = 130;
+  const startResize = useCallback((e, h) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = widths[h] || 130;
+    const onMove = ev => {
+      const w = Math.max(80, Math.min(400, startW + ev.clientX - startX));
+      setWidths(prev => ({ ...prev, [h]: w }));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [widths]);
+
   const errorCount = Object.values(cellErrors).filter(v => v === "error").length;
   const warnCount = Object.values(cellErrors).filter(v => v === "warning").length;
 
@@ -46,16 +89,22 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
           <span style={{ fontSize: 12, color: C.textLight, padding: "4px 0" }}>Click any cell to edit inline</span>
         </div>
       )}
-      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: 420, border: `1px solid ${C.border}`, borderRadius: 8 }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: (headers.length + 1) * CW }}>
+      <div ref={containerRef} style={{ overflowX: "auto", overflowY: "auto", maxHeight: 420, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", width: (headers.length + 1) * 130 }}>
           <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
             <tr style={{ background: C.navy }}>
-              <th style={{ width: 32, padding: "7px 8px", borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)" }}></th>
+              <th style={{ width: 32, minWidth: 32, padding: "7px 8px", borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)" }}></th>
               {headers.map(h => {
                 const f = allFields.find(f => f.name === h);
+                const w = widths[h] || 130;
                 return (
-                  <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: CW, maxWidth: CW, overflow: "hidden", textOverflow: "ellipsis", color: C.white }}>
+                  <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: w, minWidth: w, overflow: "hidden", textOverflow: "ellipsis", color: C.white, position: "relative", userSelect: "none" }}>
                     {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={e => startResize(e, h)}
+                      style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 5, cursor: "col-resize", background: "rgba(255,255,255,0.15)", zIndex: 1 }}
+                    />
                   </th>
                 );
               })}
@@ -63,15 +112,16 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
           </thead>
           <tbody>
             {rows.map((row, ri) => (
-              <tr key={ri}>
-                <td style={{ padding: "4px 6px", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, textAlign: "center", background: C.bgPage }}>
+              <tr key={ri} ref={el => rowRefs.current[ri] = el}>
+                <td style={{ padding: "4px 6px", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, textAlign: "center", background: C.bgPage, width: 32 }}>
                   <button onClick={() => removeRow(ri)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 14, padding: 0, transition: "color 0.15s ease" }}>×</button>
                 </td>
                 {headers.map(h => {
                   const key = `${ri}-${h}`, isEditing = editCell === key;
                   const bg = getCellBg(ri, h), fg = getCellColor(ri, h);
+                  const w = widths[h] || 130;
                   return (
-                    <td key={h} style={{ padding: 0, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, width: CW, maxWidth: CW, background: bg }}>
+                    <td key={h} style={{ padding: 0, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, width: w, maxWidth: w, background: bg }}>
                       {isEditing
                         ? <input ref={inputRef} value={editVal} onChange={e => setEditVal(e.target.value)} onBlur={() => commit(ri, h)} onKeyDown={e => handleKey(e, ri, h)}
                             style={{ width: "100%", boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "none", outline: `2px solid ${C.blue}`, background: C.white, color: C.textDark, borderRadius: 0, fontFamily: "inherit" }} />
