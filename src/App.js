@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef } from "react";
 
 const IMPORT_ORDER = ["Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory"];
 
@@ -223,7 +223,6 @@ function buildMappedRows(rows, mapping, transformRules, allFields) {
 }
 
 function computeCellErrors(rows, allFields, importedData) {
-  // returns map: `${rowIdx}-${fieldName}` -> "error"|"warning"
   const cellMap = {};
   allFields.forEach(f => {
     rows.forEach((row, ri) => {
@@ -261,17 +260,52 @@ function suggestMapping(headers, fields) {
 
 const WIZARD_STEPS = ["Select Type", "Upload CSV", "Map Fields", "Validate & Edit", "Export"];
 
+// ─── Brand tokens ────────────────────────────────────────────────────────────
+const C = {
+  orange:    "#CF4A12",
+  orangeHov: "#b5420f",
+  navy:      "#041662",
+  blue:      "#66C8E3",
+  white:     "#FFFFFF",
+  bgPage:    "#F5F5F5",
+  border:    "#E0E0E0",
+  textDark:  "#444444",
+  textMid:   "#717171",
+  textLight: "#AAAAAA",
+  navyTint:  "#EEF0F8",
+  errBg:     "#FFF0F0",
+  errText:   "#CF4A12",
+  errBorder: "#FFCDD2",
+  warnBg:    "#FFFBE6",
+  warnText:  "#856404",
+  warnBorder:"#FFE082",
+  okBg:      "#E8F5E9",
+  okText:    "#2E7D32",
+  okBorder:  "#A5D6A7",
+  blueBg:    "#E3F6FB",
+  blueBorder:"#B2EBF2",
+};
+
 function Badge({ children, color = "gray" }) {
-  const p = { gray: ["var(--color-background-secondary)", "var(--color-text-secondary)", "var(--color-border-secondary)"], green: ["var(--color-background-success)", "var(--color-text-success)", "var(--color-border-success)"], amber: ["var(--color-background-warning)", "var(--color-text-warning)", "var(--color-border-warning)"], red: ["var(--color-background-danger)", "var(--color-text-danger)", "var(--color-border-danger)"] };
+  const p = {
+    gray:  [C.bgPage,   C.textMid,  C.border],
+    green: [C.okBg,     C.okText,   C.okBorder],
+    amber: [C.warnBg,   C.warnText, C.warnBorder],
+    red:   [C.errBg,    C.errText,  C.errBorder],
+    blue:  [C.blueBg,   C.blue,     C.blueBorder],
+  };
   const [bg, fg, bd] = p[color] || p.gray;
-  return <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: "var(--border-radius-md)", background: bg, color: fg, border: `0.5px solid ${bd}`, whiteSpace: "nowrap" }}>{children}</span>;
+  return (
+    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: bg, color: fg, border: `1px solid ${bd}`, whiteSpace: "nowrap" }}>
+      {children}
+    </span>
+  );
 }
 
-// Solid modal wrapper — no translucent overlay bleed
 function Modal({ width = 380, onClose, children }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 60, backgroundColor: "rgba(0,0,0,0.5)" }} onClick={onClose}>
-      <div style={{ width, background: "var(--color-background-primary)", border: "1px solid var(--color-border-primary)", borderRadius: "var(--border-radius-lg)", padding: "1.25rem", boxShadow: "0 4px 24px rgba(0,0,0,0.18)", maxHeight: "80vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+      <div style={{ width, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: "1.25rem", boxShadow: "0 4px 16px rgba(0,0,0,0.12)", maxHeight: "80vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
         {children}
       </div>
     </div>
@@ -282,13 +316,13 @@ function DataPreviewModal({ header, values, onClose }) {
   return (
     <Modal width={340} onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>"{header}" — sample values</p>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "var(--color-text-secondary)", lineHeight: 1, padding: "0 4px" }}>×</button>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.navy }}>"{header}" — sample values</p>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMid, lineHeight: 1, padding: "0 4px" }}>×</button>
       </div>
       {values.length === 0
-        ? <p style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>No data found in this column.</p>
+        ? <p style={{ fontSize: 12, color: C.textLight }}>No data found in this column.</p>
         : values.map((v, i) => (
-          <div key={i} style={{ fontSize: 13, padding: "5px 8px", background: i % 2 === 0 ? "var(--color-background-secondary)" : "var(--color-background-primary)", borderRadius: 4, color: v ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
+          <div key={i} style={{ fontSize: 13, padding: "5px 8px", background: i % 2 === 0 ? C.bgPage : C.white, borderRadius: 4, color: v ? C.textDark : C.textLight }}>
             {v || "(empty)"}
           </div>
         ))}
@@ -322,26 +356,33 @@ function TransformModal({ fieldName, csvHeaders, currentRule, onSave, onClose })
   return (
     <Modal width={440} onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>Transform rule — "{fieldName}"</p>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "var(--color-text-secondary)", lineHeight: 1, padding: "0 4px" }}>×</button>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.navy }}>Transform rule — "{fieldName}"</p>
+        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMid, lineHeight: 1, padding: "0 4px" }}>×</button>
       </div>
-      <p style={{ fontSize: 12, color: "var(--color-text-secondary)", margin: "0 0 8px" }}>Describe what this field should contain in plain language:</p>
-      <textarea value={instruction} onChange={e => setInstruction(e.target.value)}
+      <p style={{ fontSize: 12, color: C.textMid, margin: "0 0 8px" }}>Describe what this field should contain in plain language:</p>
+      <textarea
+        className="fmx-textarea"
+        value={instruction}
+        onChange={e => setInstruction(e.target.value)}
         placeholder={`e.g. "Combine 'description' and 'type' with a dash. If only one exists, use that."`}
-        style={{ width: "100%", boxSizing: "border-box", fontSize: 12, padding: 8, borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-secondary)", color: "var(--color-text-primary)", minHeight: 72, resize: "vertical" }} />
+        style={{ minHeight: 72 }}
+      />
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button onClick={generate} disabled={loading} style={{ fontSize: 12, padding: "6px 14px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", color: "var(--color-text-primary)" }}>
+        <button className="fmx-btn-secondary" style={{ fontSize: 12, padding: "6px 14px" }} onClick={generate} disabled={loading}>
           {loading ? "Generating..." : "Generate rule"}
         </button>
       </div>
-      {err && <p style={{ fontSize: 12, color: "var(--color-text-danger)", marginTop: 6 }}>{err}</p>}
+      {err && <p style={{ fontSize: 12, color: C.errText, marginTop: 6 }}>{err}</p>}
       {code && (
         <div style={{ marginTop: 14 }}>
-          <p style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)", margin: "0 0 6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Generated rule (editable)</p>
-          <textarea value={code} onChange={e => setCode(e.target.value)}
-            style={{ width: "100%", boxSizing: "border-box", fontSize: 11, fontFamily: "var(--font-mono)", padding: 8, borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-secondary)", color: "var(--color-text-primary)", minHeight: 100, resize: "vertical" }} />
-          <button onClick={() => onSave({ instruction, code })}
-            style={{ marginTop: 8, fontSize: 12, padding: "6px 18px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-success)", background: "var(--color-background-success)", color: "var(--color-text-success)", cursor: "pointer", fontWeight: 500 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: C.navy, margin: "0 0 6px", textTransform: "uppercase", letterSpacing: "0.08em" }}>Generated rule (editable)</p>
+          <textarea
+            className="fmx-textarea"
+            value={code}
+            onChange={e => setCode(e.target.value)}
+            style={{ fontFamily: "monospace", fontSize: 11, minHeight: 100 }}
+          />
+          <button className="fmx-btn-primary" style={{ marginTop: 8, fontSize: 12, padding: "6px 18px" }} onClick={() => onSave({ instruction, code })}>
             Apply rule
           </button>
         </div>
@@ -376,17 +417,23 @@ function NLEditPanel({ headers, onApply }) {
   };
 
   return (
-    <div style={{ padding: "12px 14px", background: "var(--color-background-secondary)", border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", marginBottom: "1rem" }}>
-      <p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>Bulk edit in plain language</p>
-      <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--color-text-secondary)" }}>e.g. "Fill blank 'Type' fields with HVAC" or "Set Building to 'Main Campus' where it's empty"</p>
+    <div style={{ padding: "12px 16px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: "1rem" }}>
+      <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: C.navy }}>Bulk edit in plain language</p>
+      <p style={{ margin: "0 0 8px", fontSize: 12, color: C.textMid }}>e.g. "Fill blank 'Type' fields with HVAC" or "Set Building to 'Main Campus' where it's empty"</p>
       <div style={{ display: "flex", gap: 8 }}>
-        <input value={instruction} onChange={e => setInstruction(e.target.value)} onKeyDown={e => e.key === "Enter" && apply()}
-          placeholder="Describe what to change..." style={{ flex: 1, fontSize: 13 }} />
-        <button onClick={apply} disabled={loading} style={{ fontSize: 13, padding: "6px 16px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", whiteSpace: "nowrap", color: "var(--color-text-primary)" }}>
+        <input
+          className="fmx-input"
+          value={instruction}
+          onChange={e => setInstruction(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && apply()}
+          placeholder="Describe what to change..."
+          style={{ flex: 1 }}
+        />
+        <button className="fmx-btn-primary" style={{ fontSize: 13, padding: "6px 16px", whiteSpace: "nowrap" }} onClick={apply} disabled={loading}>
           {loading ? "Applying..." : "Apply"}
         </button>
       </div>
-      {err && <p style={{ fontSize: 12, color: "var(--color-text-danger)", marginTop: 6 }}>{err}</p>}
+      {err && <p style={{ fontSize: 12, color: C.errText, marginTop: 6 }}>{err}</p>}
     </div>
   );
 }
@@ -404,15 +451,15 @@ function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange 
 
   const getCellBg = (ri, h) => {
     const key = `${ri}-${h}`;
-    if (cellErrors[key] === "error") return "#fff0f0";
-    if (cellErrors[key] === "warning") return "#fffbe6";
-    return ri % 2 === 0 ? "var(--color-background-primary)" : "var(--color-background-secondary)";
+    if (cellErrors[key] === "error") return C.errBg;
+    if (cellErrors[key] === "warning") return C.warnBg;
+    return ri % 2 === 0 ? C.white : C.bgPage;
   };
   const getCellColor = (ri, h) => {
     const key = `${ri}-${h}`;
-    if (cellErrors[key] === "error") return "#c0392b";
-    if (cellErrors[key] === "warning") return "#856404";
-    return "var(--color-text-primary)";
+    if (cellErrors[key] === "error") return C.errText;
+    if (cellErrors[key] === "warning") return C.warnText;
+    return C.textDark;
   };
 
   const CW = 130;
@@ -423,21 +470,21 @@ function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange 
     <div>
       {(errorCount > 0 || warnCount > 0) && (
         <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-          {errorCount > 0 && <span style={{ fontSize: 12, padding: "4px 10px", background: "#fff0f0", color: "#c0392b", border: "0.5px solid #f5c6cb", borderRadius: "var(--border-radius-md)" }}>{errorCount} cell{errorCount > 1 ? "s" : ""} with errors (red)</span>}
-          {warnCount > 0 && <span style={{ fontSize: 12, padding: "4px 10px", background: "#fffbe6", color: "#856404", border: "0.5px solid #ffeaa7", borderRadius: "var(--border-radius-md)" }}>{warnCount} cross-sheet warning{warnCount > 1 ? "s" : ""} (yellow)</span>}
-          <span style={{ fontSize: 12, color: "var(--color-text-tertiary)", padding: "4px 0" }}>Click any cell to edit inline</span>
+          {errorCount > 0 && <span style={{ fontSize: 12, padding: "4px 10px", background: C.errBg, color: C.errText, border: `1px solid ${C.errBorder}`, borderRadius: 6 }}>{errorCount} cell{errorCount > 1 ? "s" : ""} with errors (red)</span>}
+          {warnCount > 0 && <span style={{ fontSize: 12, padding: "4px 10px", background: C.warnBg, color: C.warnText, border: `1px solid ${C.warnBorder}`, borderRadius: 6 }}>{warnCount} cross-sheet warning{warnCount > 1 ? "s" : ""} (yellow)</span>}
+          <span style={{ fontSize: 12, color: C.textLight, padding: "4px 0" }}>Click any cell to edit inline</span>
         </div>
       )}
-      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: 420, border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)" }}>
+      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: 420, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: (headers.length + 1) * CW }}>
           <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
-            <tr style={{ background: "var(--color-background-secondary)" }}>
-              <th style={{ width: 32, padding: "7px 8px", borderBottom: "0.5px solid var(--color-border-tertiary)", borderRight: "0.5px solid var(--color-border-tertiary)" }}></th>
+            <tr style={{ background: C.navy }}>
+              <th style={{ width: 32, padding: "7px 8px", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid rgba(255,255,255,0.15)` }}></th>
               {headers.map(h => {
                 const f = allFields.find(f => f.name === h);
                 return (
-                  <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 500, borderBottom: "0.5px solid var(--color-border-tertiary)", borderRight: "0.5px solid var(--color-border-tertiary)", whiteSpace: "nowrap", width: CW, maxWidth: CW, overflow: "hidden", textOverflow: "ellipsis", color: "var(--color-text-primary)" }}>
-                    {h}{f?.required && <span style={{ color: "#c0392b" }}> *</span>}
+                  <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid rgba(255,255,255,0.15)`, whiteSpace: "nowrap", width: CW, maxWidth: CW, overflow: "hidden", textOverflow: "ellipsis", color: C.white }}>
+                    {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
                   </th>
                 );
               })}
@@ -446,19 +493,19 @@ function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange 
           <tbody>
             {rows.map((row, ri) => (
               <tr key={ri}>
-                <td style={{ padding: "4px 6px", borderBottom: "0.5px solid var(--color-border-tertiary)", borderRight: "0.5px solid var(--color-border-tertiary)", textAlign: "center", background: "var(--color-background-secondary)" }}>
-                  <button onClick={() => removeRow(ri)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-tertiary)", fontSize: 14, padding: 0 }}>×</button>
+                <td style={{ padding: "4px 6px", borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, textAlign: "center", background: C.bgPage }}>
+                  <button onClick={() => removeRow(ri)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 14, padding: 0, transition: "color 0.15s ease" }}>×</button>
                 </td>
                 {headers.map(h => {
                   const key = `${ri}-${h}`, isEditing = editCell === key;
                   const bg = getCellBg(ri, h), fg = getCellColor(ri, h);
                   return (
-                    <td key={h} style={{ padding: 0, borderBottom: "0.5px solid var(--color-border-tertiary)", borderRight: "0.5px solid var(--color-border-tertiary)", width: CW, maxWidth: CW, background: bg }}>
+                    <td key={h} style={{ padding: 0, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, width: CW, maxWidth: CW, background: bg }}>
                       {isEditing
                         ? <input ref={inputRef} value={editVal} onChange={e => setEditVal(e.target.value)} onBlur={() => commit(ri, h)} onKeyDown={e => handleKey(e, ri, h)}
-                            style={{ width: "100%", boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "none", outline: "2px solid var(--color-border-info)", background: "var(--color-background-info)", color: "var(--color-text-primary)", borderRadius: 0 }} />
+                            style={{ width: "100%", boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "none", outline: `2px solid ${C.blue}`, background: C.white, color: C.textDark, borderRadius: 0, fontFamily: "inherit" }} />
                         : <div onClick={() => startEdit(ri, h, row[h] ?? "")}
-                            style={{ padding: "5px 8px", minHeight: 28, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: row[h] ? fg : "var(--color-text-tertiary)", fontWeight: cellErrors[key] ? 500 : 400 }}>
+                            style={{ padding: "5px 8px", minHeight: 28, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: row[h] ? fg : C.textLight, fontWeight: cellErrors[key] ? 500 : 400 }}>
                             {row[h] || "—"}
                           </div>}
                     </td>
@@ -469,7 +516,7 @@ function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange 
           </tbody>
         </table>
       </div>
-      <button onClick={addRow} style={{ marginTop: 8, fontSize: 12, padding: "5px 14px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", color: "var(--color-text-primary)" }}>+ Add row</button>
+      <button className="fmx-btn-secondary" style={{ marginTop: 8, fontSize: 12, padding: "5px 14px" }} onClick={addRow}>+ Add row</button>
     </div>
   );
 }
@@ -573,199 +620,329 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   return (
-    <div style={{ padding: "0 0 2rem" }}>
+    <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: C.bgPage, minHeight: "100vh", color: C.textDark }}>
+      <style>{`
+        *, *::before, *::after { box-sizing: border-box; }
+        body { margin: 0; }
+        input, select, textarea, button { font-family: system-ui, -apple-system, sans-serif; }
+        .fmx-btn-primary {
+          background: ${C.orange}; color: ${C.white}; border: none; border-radius: 6px;
+          padding: 8px 20px; cursor: pointer; font-size: 14px; font-weight: 500;
+          transition: all 0.15s ease;
+        }
+        .fmx-btn-primary:hover:not(:disabled) { background: ${C.orangeHov}; }
+        .fmx-btn-primary:disabled { background: ${C.border}; color: ${C.textLight}; cursor: not-allowed; }
+        .fmx-btn-secondary {
+          background: ${C.white}; color: ${C.orange}; border: 1px solid ${C.orange};
+          border-radius: 6px; padding: 8px 20px; cursor: pointer; font-size: 14px;
+          font-weight: 500; transition: all 0.15s ease;
+        }
+        .fmx-btn-secondary:hover { background: #FFF5F2; }
+        .fmx-btn-destructive {
+          background: ${C.white}; color: #888; border: 1px solid #888;
+          border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 13px;
+          transition: all 0.15s ease;
+        }
+        .fmx-btn-destructive:hover { background: ${C.bgPage}; }
+        .fmx-btn-xs {
+          background: ${C.white}; color: ${C.textMid}; border: 1px solid ${C.border};
+          border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11px;
+          transition: all 0.15s ease; white-space: nowrap;
+        }
+        .fmx-btn-xs:hover { background: ${C.bgPage}; }
+        .fmx-btn-xs-rule {
+          background: ${C.white}; color: ${C.orange}; border: 1px solid ${C.orange};
+          border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11px;
+          transition: all 0.15s ease; white-space: nowrap;
+        }
+        .fmx-btn-xs-rule:hover { background: #FFF5F2; }
+        .fmx-btn-xs-rule.active {
+          background: ${C.errBg}; color: ${C.errText}; border-color: ${C.errBorder};
+        }
+        .fmx-btn-xs-rule.active:hover { background: #FFE5E5; }
+        .fmx-input {
+          font-size: 13px; padding: 6px 10px; border-radius: 6px; border: 1px solid ${C.border};
+          background: ${C.white}; color: ${C.textDark}; outline: none;
+          transition: border-color 0.15s ease;
+        }
+        .fmx-input:focus { border-color: ${C.blue}; }
+        select.fmx-select {
+          font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid ${C.border};
+          background: ${C.white}; color: ${C.textDark}; width: 100%;
+        }
+        textarea.fmx-textarea {
+          font-size: 12px; padding: 8px; border-radius: 6px; border: 1px solid ${C.border};
+          background: ${C.white}; color: ${C.textDark}; resize: vertical; outline: none;
+          width: 100%; box-sizing: border-box; transition: border-color 0.15s ease;
+        }
+        textarea.fmx-textarea:focus { border-color: ${C.blue}; }
+        .fmx-type-card {
+          padding: 14px 10px; border-radius: 8px; border: 1px solid ${C.border};
+          background: ${C.white}; cursor: pointer; text-align: left; font-size: 13px;
+          font-weight: 500; display: flex; flex-direction: column; gap: 6px;
+          transition: all 0.15s ease;
+        }
+        .fmx-type-card:hover { background: ${C.navyTint}; border-color: ${C.navy}; }
+        .fmx-tab {
+          padding: 12px 16px; font-size: 13px; white-space: nowrap;
+          user-select: none; border-bottom: 2px solid transparent;
+          transition: all 0.15s ease; cursor: default;
+        }
+        .fmx-tab-active { font-weight: 700; color: ${C.orange}; border-bottom-color: ${C.orange}; }
+        .fmx-tab-completed { color: ${C.blue}; cursor: pointer; }
+        .fmx-tab-completed:hover { color: #4ab0cc; }
+        .fmx-tab-inactive { color: ${C.textLight}; }
+        .fmx-section-label {
+          font-size: 11px; font-weight: 600; color: ${C.navy};
+          text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 8px;
+        }
+        .fmx-history-card {
+          padding: 8px 10px; background: ${C.white}; border-radius: 6px;
+          margin-bottom: 8px; border: 1px solid ${C.border};
+          border-left: 3px solid ${C.blue};
+        }
+      `}</style>
+
+      {/* Modals */}
       {preview && <DataPreviewModal header={preview.header} values={preview.values} onClose={() => setPreview(null)} />}
-      {transformModal && <TransformModal fieldName={transformModal} csvHeaders={csv?.headers || []} currentRule={transformRules[transformModal]}
-        onSave={rule => { setTransformRules(r => ({ ...r, [transformModal]: { ...rule, type: "formula" } })); setTransformModal(null); }}
-        onClose={() => setTransformModal(null)} />}
+      {transformModal && (
+        <TransformModal
+          fieldName={transformModal}
+          csvHeaders={csv?.headers || []}
+          currentRule={transformRules[transformModal]}
+          onSave={rule => { setTransformRules(r => ({ ...r, [transformModal]: { ...rule, type: "formula" } })); setTransformModal(null); }}
+          onClose={() => setTransformModal(null)}
+        />
+      )}
 
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Step tabs */}
-          <div style={{ display: "flex", gap: 0, borderBottom: "0.5px solid var(--color-border-tertiary)", marginBottom: "1.5rem", overflowX: "auto" }}>
-            {WIZARD_STEPS.map((label, i) => (
-              <div key={i} onClick={() => i < wStep && setWStep(i)} style={{ padding: "10px 14px", fontSize: 13, whiteSpace: "nowrap", fontWeight: i === wStep ? 500 : 400, color: i === wStep ? "var(--color-text-primary)" : i < wStep ? "var(--color-text-info)" : "var(--color-text-tertiary)", borderBottom: i === wStep ? "2px solid var(--color-text-primary)" : "2px solid transparent", cursor: i < wStep ? "pointer" : "default" }}>
-                {i+1}. {label}
-              </div>
-            ))}
-          </div>
+      {/* Header */}
+      <div style={{ position: "sticky", top: 0, zIndex: 100, height: 52, background: C.navy, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ color: C.white, fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
+        <span style={{ color: C.blue, fontSize: 13 }}>Step {wStep + 1} — {WIZARD_STEPS[wStep]}</span>
+      </div>
 
-          {/* Step 0 — Select Type */}
-          {wStep === 0 && (
-            <div>
-              <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: "1rem" }}>Suggested order: {IMPORT_ORDER.join(" → ")}</p>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10 }}>
-                {IMPORT_ORDER.map(type => (
-                  <button key={type} onClick={() => handleSelectType(type)} style={{ padding: "14px 10px", borderRadius: "var(--border-radius-lg)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", textAlign: "left", fontSize: 13, fontWeight: 500, display: "flex", flexDirection: "column", gap: 6 }}>
-                    <span style={{ color: "var(--color-text-primary)" }}>{type}</span>
-                    {history.filter(h => h.type === type).length > 0 && <Badge color="green">{history.filter(h => h.type === type).reduce((a,b)=>a+b.rows,0)} rows exported</Badge>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+      {/* Page content */}
+      <div style={{ padding: "1.5rem 24px 2rem" }}>
+        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
-          {/* Step 1 — Upload */}
-          {wStep === 1 && (
-            <div>
-              <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: "1rem" }}>Importing into: <strong style={{ color: "var(--color-text-primary)" }}>{schemaType}</strong></p>
-              <div onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
-                onDrop={e => { e.preventDefault(); setDragOver(false); handleFileAndMap(e.dataTransfer.files[0]); }}
-                onClick={() => fileRef.current.click()}
-                style={{ border: `2px dashed ${dragOver ? "var(--color-border-info)" : "var(--color-border-secondary)"}`, borderRadius: "var(--border-radius-lg)", padding: "2.5rem 2rem", textAlign: "center", cursor: "pointer", background: dragOver ? "var(--color-background-info)" : "var(--color-background-secondary)" }}>
-                <p style={{ fontSize: 15, fontWeight: 500, margin: "0 0 6px", color: "var(--color-text-primary)" }}>Drag & drop CSV here</p>
-                <p style={{ fontSize: 13, color: "var(--color-text-secondary)", margin: 0 }}>or click to browse</p>
-              </div>
-              <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handleFileAndMap(e.target.files[0])} />
-              {aiLoading && <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginTop: 12 }}>Analyzing columns and suggesting mappings...</p>}
-            </div>
-          )}
+          {/* Main wizard area */}
+          <div style={{ flex: 1, minWidth: 0 }}>
 
-          {/* Step 2 — Map Fields */}
-          {wStep === 2 && schema && (
-            <div>
-              <p style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: "1rem" }}>
-                <strong style={{ color: "var(--color-text-primary)" }}>{csv.rows.length} rows</strong> · <strong style={{ color: "var(--color-text-primary)" }}>{csv.headers.length} columns</strong> detected. Map CSV columns to FMX fields. <span style={{ color: "#c0392b" }}>*</span> = required.
-              </p>
-              {(schemaType === "Building" || schemaType === "Resource") && (
-                <div style={{ marginBottom: "1.5rem", padding: "14px 16px", background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-lg)", border: "0.5px solid var(--color-border-tertiary)" }}>
-                  <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>Custom fields</p>
-                  {customFields.map((cf, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                      <input value={cf} onChange={e => setCustomFields(fs => fs.map((f,j) => j===i ? e.target.value : f))} placeholder="Custom field name" style={{ flex: 1, fontSize: 13 }} />
-                      <button onClick={() => setCustomFields(fs => fs.filter((_,j) => j!==i))} style={{ fontSize: 13, padding: "4px 10px" }}>Remove</button>
-                    </div>
-                  ))}
-                  <button onClick={() => setCustomFields(fs => [...fs, ""])} style={{ fontSize: 13, padding: "4px 12px" }}>+ Add custom field</button>
-                </div>
-              )}
-              {schemaType === "Resource" && (
-                <div style={{ marginBottom: "1.5rem", padding: "14px 16px", background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-lg)", border: "0.5px solid var(--color-border-tertiary)" }}>
-                  <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>Scheduling rate buckets</p>
-                  {dynamicRates.map((_, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, color: "var(--color-text-secondary)", minWidth: 60 }}>Rate {i+1}</span>
-                      <span style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>Cost + Unit</span>
-                      <button onClick={() => setDynamicRates(r => r.filter((_,j) => j!==i))} style={{ fontSize: 13, padding: "4px 10px", marginLeft: "auto" }}>Remove</button>
-                    </div>
-                  ))}
-                  <button onClick={() => setDynamicRates(r => [...r, ""])} style={{ fontSize: 13, padding: "4px 12px" }}>+ Add rate bucket</button>
-                </div>
-              )}
-              {Object.entries(groupedFields).map(([group, fields]) => (
-                <div key={group} style={{ marginBottom: "1.5rem" }}>
-                  <p style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{group}</p>
-                  <div style={{ border: "0.5px solid var(--color-border-tertiary)", borderRadius: "var(--border-radius-lg)", overflow: "hidden" }}>
-                    {fields.map((f, i) => {
-                      const hasRule = !!transformRules[f.name], mappedCol = mapping[f.name];
-                      return (
-                        <div key={f.name} style={{ display: "grid", gridTemplateColumns: "180px 16px 1fr auto auto", alignItems: "center", gap: 8, padding: "7px 12px", borderBottom: i < fields.length-1 ? "0.5px solid var(--color-border-tertiary)" : "none", background: hasRule ? "var(--color-background-info)" : i % 2 === 0 ? "var(--color-background-primary)" : "var(--color-background-secondary)" }}>
-                          <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--color-text-primary)" }}>
-                            {f.name}{f.required && <span style={{ color: "#c0392b" }}> *</span>}
-                            {f.crossSheet && <span style={{ fontSize: 10, color: "var(--color-text-info)", marginLeft: 5 }}>→{f.crossSheet}</span>}
-                          </div>
-                          <div style={{ textAlign: "center", color: "var(--color-text-tertiary)", fontSize: 12 }}>→</div>
-                          {hasRule
-                            ? <span style={{ fontSize: 12, color: "var(--color-text-info)", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Rule: {transformRules[f.name].instruction}</span>
-                            : <select value={mappedCol ?? ""} onChange={e => setMapping(m => ({ ...m, [f.name]: e.target.value || undefined }))}
-                                style={{ fontSize: 12, padding: "4px 8px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", color: "var(--color-text-primary)", width: "100%" }}>
-                                <option value="">— skip —</option>
-                                {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
-                              </select>}
-                          {mappedCol && !hasRule && (
-                            <button onClick={() => setPreview({ header: mappedCol, values: getColPreview(mappedCol) })}
-                              style={{ fontSize: 11, padding: "3px 8px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", whiteSpace: "nowrap", color: "var(--color-text-secondary)" }}>
-                              View data
-                            </button>
-                          )}
-                          <button onClick={() => hasRule ? setTransformRules(r => { const n={...r}; delete n[f.name]; return n; }) : setTransformModal(f.name)}
-                            style={{ fontSize: 11, padding: "3px 8px", borderRadius: "var(--border-radius-md)", border: `0.5px solid ${hasRule ? "var(--color-border-danger)" : "var(--color-border-secondary)"}`, background: hasRule ? "var(--color-background-danger)" : "var(--color-background-primary)", cursor: "pointer", whiteSpace: "nowrap", color: hasRule ? "var(--color-text-danger)" : "var(--color-text-secondary)" }}>
-                            {hasRule ? "Clear rule" : "Add rule"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+            {/* Step tabs */}
+            <div style={{ display: "flex", gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: "1.5rem", overflowX: "auto" }}>
+              {WIZARD_STEPS.map((label, i) => (
+                <div
+                  key={i}
+                  className={`fmx-tab ${i === wStep ? "fmx-tab-active" : i < wStep ? "fmx-tab-completed" : "fmx-tab-inactive"}`}
+                  onClick={() => i < wStep && setWStep(i)}
+                >
+                  {i + 1}. {label}
                 </div>
               ))}
-              <button onClick={goToValidate} style={{ padding: "8px 20px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", fontSize: 14, color: "var(--color-text-primary)" }}>
-                Validate →
-              </button>
             </div>
-          )}
 
-          {/* Step 3 — Validate & Edit */}
-          {wStep === 3 && (
-            <div>
-              <NLEditPanel headers={mappedHeaders} onApply={applyNLEdit} />
-              <ValidationSpreadsheet
-                headers={mappedHeaders}
-                rows={mappedRows}
-                cellErrors={cellErrors}
-                allFields={allFields}
-                onChange={rows => setMappedRows(rows)}
-              />
-              <div style={{ marginTop: "1.25rem", display: "flex", flexDirection: "column", gap: 10 }}>
-                {hasErrors && (
-                  <div style={{ padding: "12px 14px", background: "#fff0f0", border: "0.5px solid #f5c6cb", borderRadius: "var(--border-radius-lg)", display: "flex", alignItems: "flex-start", gap: 12 }}>
-                    <div style={{ flex: 1 }}>
-                      <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 500, color: "#c0392b" }}>There are cells with errors.</p>
-                      <p style={{ margin: 0, fontSize: 12, color: "#c0392b" }}>You can fix them above, or certify below that you want to proceed anyway.</p>
+            {/* Step 0 — Select Type */}
+            {wStep === 0 && (
+              <div>
+                <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>Suggested import order: {IMPORT_ORDER.join(" → ")}</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 10 }}>
+                  {IMPORT_ORDER.map(type => (
+                    <button key={type} className="fmx-type-card" onClick={() => handleSelectType(type)}>
+                      <span style={{ color: C.navy, fontWeight: 600 }}>{type}</span>
+                      {history.filter(h => h.type === type).length > 0 && (
+                        <Badge color="blue">{history.filter(h => h.type === type).reduce((a, b) => a + b.rows, 0)} rows exported</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 1 — Upload CSV */}
+            {wStep === 1 && (
+              <div>
+                <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>
+                  Importing into: <strong style={{ color: C.navy }}>{schemaType}</strong>
+                </p>
+                <div
+                  onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={e => { e.preventDefault(); setDragOver(false); handleFileAndMap(e.dataTransfer.files[0]); }}
+                  onClick={() => fileRef.current.click()}
+                  style={{
+                    border: `2px dashed ${dragOver ? C.blue : C.border}`,
+                    borderRadius: 8, padding: "2.5rem 2rem", textAlign: "center", cursor: "pointer",
+                    background: dragOver ? C.navyTint : C.white,
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: C.navy }}>Drag & drop CSV here</p>
+                  <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>or click to browse</p>
+                </div>
+                <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={e => handleFileAndMap(e.target.files[0])} />
+                {aiLoading && <p style={{ fontSize: 13, color: C.textMid, marginTop: 12 }}>Analyzing columns and suggesting mappings...</p>}
+              </div>
+            )}
+
+            {/* Step 2 — Map Fields */}
+            {wStep === 2 && schema && (
+              <div>
+                <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>
+                  <strong style={{ color: C.navy }}>{csv.rows.length} rows</strong> · <strong style={{ color: C.navy }}>{csv.headers.length} columns</strong> detected. Map CSV columns to FMX fields. <span style={{ color: C.orange }}>*</span> = required.
+                </p>
+
+                {(schemaType === "Building" || schemaType === "Resource") && (
+                  <div style={{ marginBottom: "1.5rem", padding: "14px 16px", background: C.white, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                    <p className="fmx-section-label">Custom fields</p>
+                    {customFields.map((cf, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                        <input
+                          className="fmx-input"
+                          value={cf}
+                          onChange={e => setCustomFields(fs => fs.map((f, j) => j === i ? e.target.value : f))}
+                          placeholder="Custom field name"
+                          style={{ flex: 1 }}
+                        />
+                        <button className="fmx-btn-destructive" onClick={() => setCustomFields(fs => fs.filter((_, j) => j !== i))}>Remove</button>
+                      </div>
+                    ))}
+                    <button className="fmx-btn-secondary" style={{ fontSize: 12, padding: "5px 14px" }} onClick={() => setCustomFields(fs => [...fs, ""])}>+ Add custom field</button>
+                  </div>
+                )}
+
+                {schemaType === "Resource" && (
+                  <div style={{ marginBottom: "1.5rem", padding: "14px 16px", background: C.white, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                    <p className="fmx-section-label">Scheduling rate buckets</p>
+                    {dynamicRates.map((_, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontSize: 13, color: C.textDark, minWidth: 60 }}>Rate {i + 1}</span>
+                        <span style={{ fontSize: 12, color: C.textMid }}>Cost + Unit</span>
+                        <button className="fmx-btn-destructive" onClick={() => setDynamicRates(r => r.filter((_, j) => j !== i))} style={{ marginLeft: "auto" }}>Remove</button>
+                      </div>
+                    ))}
+                    <button className="fmx-btn-secondary" style={{ fontSize: 12, padding: "5px 14px" }} onClick={() => setDynamicRates(r => [...r, ""])}>+ Add rate bucket</button>
+                  </div>
+                )}
+
+                {Object.entries(groupedFields).map(([group, fields]) => (
+                  <div key={group} style={{ marginBottom: "1.5rem" }}>
+                    <p className="fmx-section-label">{group}</p>
+                    <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                      {fields.map((f, i) => {
+                        const hasRule = !!transformRules[f.name], mappedCol = mapping[f.name];
+                        return (
+                          <div
+                            key={f.name}
+                            style={{
+                              display: "grid", gridTemplateColumns: "180px 16px 1fr auto auto",
+                              alignItems: "center", gap: 8, padding: "7px 12px",
+                              borderBottom: i < fields.length - 1 ? `1px solid ${C.border}` : "none",
+                              background: hasRule ? C.navyTint : i % 2 === 0 ? C.white : C.bgPage,
+                            }}
+                          >
+                            <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.textDark }}>
+                              {f.name}{f.required && <span style={{ color: C.orange }}> *</span>}
+                              {f.crossSheet && <span style={{ fontSize: 10, color: C.blue, marginLeft: 5 }}>→{f.crossSheet}</span>}
+                            </div>
+                            <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
+                            {hasRule
+                              ? <span style={{ fontSize: 12, color: C.blue, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Rule: {transformRules[f.name].instruction}</span>
+                              : <select className="fmx-select" value={mappedCol ?? ""} onChange={e => setMapping(m => ({ ...m, [f.name]: e.target.value || undefined }))}>
+                                  <option value="">— skip —</option>
+                                  {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                                </select>
+                            }
+                            {mappedCol && !hasRule && (
+                              <button className="fmx-btn-xs" onClick={() => setPreview({ header: mappedCol, values: getColPreview(mappedCol) })}>
+                                View data
+                              </button>
+                            )}
+                            <button
+                              className={`fmx-btn-xs-rule${hasRule ? " active" : ""}`}
+                              onClick={() => hasRule
+                                ? setTransformRules(r => { const n = { ...r }; delete n[f.name]; return n; })
+                                : setTransformModal(f.name)
+                              }
+                            >
+                              {hasRule ? "Clear rule" : "Add rule"}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", whiteSpace: "nowrap", fontSize: 13, color: "#c0392b", fontWeight: 500 }}>
-                      <input type="checkbox" checked={certified} onChange={e => setCertified(e.target.checked)} style={{ width: 15, height: 15 }} />
-                      Proceed anyway
-                    </label>
                   </div>
-                )}
-                {!hasErrors && (
-                  <div style={{ padding: "12px 14px", background: "var(--color-background-success)", border: "0.5px solid var(--color-border-success)", borderRadius: "var(--border-radius-lg)" }}>
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--color-text-success)" }}>No errors — all required fields are filled.</p>
+                ))}
+
+                <button className="fmx-btn-primary" onClick={goToValidate}>Validate →</button>
+              </div>
+            )}
+
+            {/* Step 3 — Validate & Edit */}
+            {wStep === 3 && (
+              <div>
+                <NLEditPanel headers={mappedHeaders} onApply={applyNLEdit} />
+                <ValidationSpreadsheet
+                  headers={mappedHeaders}
+                  rows={mappedRows}
+                  cellErrors={cellErrors}
+                  allFields={allFields}
+                  onChange={rows => setMappedRows(rows)}
+                />
+                <div style={{ marginTop: "1.25rem", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {hasErrors && (
+                    <div style={{ padding: "12px 14px", background: C.errBg, border: `1px solid ${C.errBorder}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 500, color: C.errText }}>There are cells with errors.</p>
+                        <p style={{ margin: 0, fontSize: 12, color: C.errText }}>Fix them above, or certify below to proceed anyway.</p>
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", whiteSpace: "nowrap", fontSize: 13, color: C.errText, fontWeight: 500 }}>
+                        <input type="checkbox" checked={certified} onChange={e => setCertified(e.target.checked)} style={{ width: 15, height: 15 }} />
+                        Proceed anyway
+                      </label>
+                    </div>
+                  )}
+                  {!hasErrors && (
+                    <div style={{ padding: "12px 14px", background: C.okBg, border: `1px solid ${C.okBorder}`, borderRadius: 8 }}>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.okText }}>No errors — all required fields are filled.</p>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button className="fmx-btn-primary" onClick={() => setWStep(4)} disabled={!canProceed}>Review & export →</button>
+                    <button className="fmx-btn-secondary" onClick={() => setWStep(2)}>← Back to mapping</button>
                   </div>
-                )}
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button onClick={() => setWStep(4)} disabled={!canProceed}
-                    style={{ padding: "8px 20px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: canProceed ? "var(--color-background-primary)" : "var(--color-background-secondary)", cursor: canProceed ? "pointer" : "not-allowed", fontSize: 14, color: canProceed ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}>
-                    Review & export →
-                  </button>
-                  <button onClick={() => setWStep(2)} style={{ padding: "8px 20px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", fontSize: 14, color: "var(--color-text-primary)" }}>
-                    ← Back to mapping
-                  </button>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Step 4 — Export */}
-          {wStep === 4 && (
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-                <div>
-                  <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 500, color: "var(--color-text-primary)" }}>{schemaType} — {mappedRows.length} rows ready</p>
-                  <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>Final review. Click any cell to make last edits, then download.</p>
+            {/* Step 4 — Export */}
+            {wStep === 4 && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                  <div>
+                    <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 600, color: C.navy }}>{schemaType} — {mappedRows.length} rows ready</p>
+                    <p style={{ margin: 0, fontSize: 12, color: C.textMid }}>Final review. Click any cell to make last edits, then download.</p>
+                  </div>
+                  <button className="fmx-btn-primary" onClick={handleExport}>Download CSV</button>
                 </div>
-                <button onClick={handleExport} style={{ padding: "8px 18px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-success)", background: "var(--color-background-success)", cursor: "pointer", fontSize: 13, fontWeight: 500, color: "var(--color-text-success)", whiteSpace: "nowrap" }}>
-                  Download CSV
-                </button>
+                <ValidationSpreadsheet headers={mappedHeaders} rows={mappedRows} cellErrors={{}} allFields={allFields} onChange={setMappedRows} />
+                <button className="fmx-btn-secondary" onClick={reset} style={{ marginTop: "1.5rem" }}>Import another sheet</button>
               </div>
-              <ValidationSpreadsheet headers={mappedHeaders} rows={mappedRows} cellErrors={{}} allFields={allFields} onChange={setMappedRows} />
-              <button onClick={reset} style={{ marginTop: "1.5rem", padding: "8px 18px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", background: "var(--color-background-primary)", cursor: "pointer", fontSize: 13, color: "var(--color-text-primary)" }}>
-                Import another sheet
-              </button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Sidebar */}
-        <div style={{ width: 170, flexShrink: 0 }}>
-          <p style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-secondary)", margin: "0 0 10px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Session history</p>
-          {history.length === 0 ? <p style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>No exports yet</p>
-            : history.map((h, i) => (
-              <div key={i} style={{ padding: "8px 10px", background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", marginBottom: 8, border: "0.5px solid var(--color-border-tertiary)" }}>
-                <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: "var(--color-text-primary)" }}>{h.type}</p>
-                <p style={{ margin: 0, fontSize: 11, color: "var(--color-text-secondary)" }}>{h.rows} rows · {h.time}</p>
-              </div>
-            ))}
+          {/* Session history sidebar */}
+          <div style={{ width: 180, flexShrink: 0 }}>
+            <p className="fmx-section-label">Session History</p>
+            {history.length === 0
+              ? <p style={{ fontSize: 12, color: C.textLight }}>No exports yet</p>
+              : history.map((h, i) => (
+                <div key={i} className="fmx-history-card">
+                  <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 500, color: C.navy }}>{h.type}</p>
+                  <p style={{ margin: 0, fontSize: 11, color: C.textMid }}>{h.rows} rows · {h.time}</p>
+                </div>
+              ))
+            }
+          </div>
         </div>
       </div>
     </div>
