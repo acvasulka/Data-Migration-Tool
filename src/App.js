@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { FMX_SCHEMAS } from "./schemas";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema } from "./db";
+import { syncFmxDataForProject } from "./fmxSync";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectChecklist from "./components/ProjectChecklist";
@@ -135,6 +136,7 @@ export default function App() {
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
   const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
+  const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], loading: false, fromCache: undefined });
   const fileRef = useRef();
 
   useEffect(() => {
@@ -176,6 +178,14 @@ export default function App() {
     return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   })();
 
+  const fmxCustomFieldIdMap = useMemo(() => {
+    const map = {};
+    for (const cf of fmxSyncData.customFields || []) {
+      if (cf.id && cf.name) map[cf.name] = cf.id;
+    }
+    return map;
+  }, [fmxSyncData.customFields]);
+
   const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
   const allFields = schema ? [
     ...schema.fields,
@@ -186,6 +196,9 @@ export default function App() {
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
       { name: `Rate ${i + 1} Unit`, required: false, type: "string", group: "Scheduling Rates" },
     ]),
+    ...(fmxSyncData.customFields || []).map(cf => ({
+      name: cf.name, required: false, type: "string", group: "FMX Custom Fields", fmxCustomFieldId: cf.id,
+    })),
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
@@ -201,9 +214,19 @@ export default function App() {
 
   const canProceed = !hasErrors || certified;
 
+  const handleFmxSync = async (type) => {
+    if (!selectedProject?.fmx_credentials) return;
+    setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
+    const result = await syncFmxDataForProject(selectedProject, type);
+    setFmxSyncData({ customFields: result.customFields || [], loading: false, fromCache: result.fromCache });
+  };
+
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
-    setTransformRules({}); setCertified(false); setFileInfo(null); setWStep(1);
+    setTransformRules({}); setCertified(false); setFileInfo(null);
+    setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
+    setWStep(1);
+    handleFmxSync(t);
   };
 
   const processCSV = async (csvStr, info) => {
@@ -350,6 +373,7 @@ export default function App() {
     setMappedRows([]); setCertified(false);
     setMemoryMatches({}); setMappingSources({}); setSavedRules({});
     setPersistentRefs(null);
+    setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
   };
 
   const goToProjects = () => {
@@ -525,6 +549,8 @@ export default function App() {
                 setDragOver={setDragOver}
                 fileRef={fileRef}
                 handleFileAndMap={handleFileAndMap}
+                fmxSyncLoading={fmxSyncData.loading}
+                fmxSyncFromCache={fmxSyncData.fromCache}
               />
             )}
 
@@ -548,6 +574,7 @@ export default function App() {
                 memoryMatches={memoryMatches}
                 mappingSources={mappingSources}
                 savedRules={savedRules}
+                fmxSyncData={fmxSyncData}
               />
             )}
 
@@ -583,6 +610,7 @@ export default function App() {
                 onImportComplete={handleImportComplete}
                 selectedProject={selectedProject}
                 userEmail={user?.email}
+                customFieldIdMap={fmxCustomFieldIdMap}
               />
             )}
 

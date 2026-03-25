@@ -3,6 +3,7 @@ import { C } from "../theme";
 import Modal from "./Modal";
 import { FMX_ENDPOINTS } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
+import { decodeCredentials } from "../fmxSync";
 
 const ANIM = `
   @keyframes fmx-check-draw {
@@ -38,22 +39,35 @@ export default function FMXPushModal({
   projectId,
   fmxSiteUrl,
   fmxEmail,
+  fmxCredentials,
+  customFieldIdMap,
   onClose,
   onSuccess,
 }) {
   const [phase, setPhase] = useState('setup'); // 'setup' | 'pushing' | 'done'
   const [siteUrl, setSiteUrl] = useState('');
   const [email, setEmail] = useState('');
+  const [useSaved, setUseSaved] = useState(false);
+
+  const hasSavedCreds = !!fmxCredentials;
 
   useEffect(() => {
-    console.log('FMXPushModal props:', { fmxSiteUrl, fmxEmail });
     if (fmxSiteUrl) setSiteUrl(fmxSiteUrl);
-    if (fmxEmail) setEmail(fmxEmail);
-  }, [fmxSiteUrl, fmxEmail]);
+    if (fmxCredentials) {
+      const { email: savedEmail } = decodeCredentials(fmxCredentials);
+      if (savedEmail) { setEmail(savedEmail); setUseSaved(true); }
+    } else if (fmxEmail) {
+      setEmail(fmxEmail);
+    }
+  }, [fmxSiteUrl, fmxEmail, fmxCredentials]);
   const [password, setPassword] = useState('');
   const [connStatus, setConnStatus] = useState(null); // null | 'ok' | 'fail'
   const [connMsg, setConnMsg] = useState('');
   const [connLoading, setConnLoading] = useState(false);
+
+  // Resolve effective credentials for push
+  const effectiveEmail = useSaved && fmxCredentials ? decodeCredentials(fmxCredentials).email : email;
+  const effectivePassword = useSaved && fmxCredentials ? decodeCredentials(fmxCredentials).password : password;
 
   const [progress, setProgress] = useState(0); // 0–100
   const [statusMsg, setStatusMsg] = useState('');
@@ -63,7 +77,7 @@ export default function FMXPushModal({
   const [failedRows, setFailedRows] = useState([]);
 
   const cancelledRef = useRef(false);
-  const canPush = siteUrl.trim() && email.trim() && password.trim();
+  const canPush = siteUrl.trim() && effectiveEmail.trim() && (useSaved ? !!fmxCredentials : password.trim());
 
   const testConnection = async () => {
     setConnLoading(true); setConnStatus(null);
@@ -72,7 +86,7 @@ export default function FMXPushModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          siteUrl: siteUrl.trim(), email: email.trim(), password,
+          siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword,
           endpoint: '/v1/buildings?limit=1',
           method: 'GET', payload: null,
         }),
@@ -99,8 +113,8 @@ export default function FMXPushModal({
     (async () => {
       const endpoint = FMX_ENDPOINTS[schemaType];
       const url = siteUrl.trim();
-      const em = email.trim();
-      const pw = password;
+      const em = effectiveEmail.trim();
+      const pw = effectivePassword;
       const total = mappedRows.length;
       let successCount = 0;
       let failCount = 0;
@@ -125,7 +139,7 @@ export default function FMXPushModal({
 
         let ok = false;
         try {
-          const payload = transformRowToPayload(row, schemaType, idCache);
+          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {});
           const res = await fetch('/api/fmx', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -188,28 +202,38 @@ export default function FMXPushModal({
                 placeholder="yoursite.gofmx.com"
               />
             </div>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 500, color: C.textDark, display: 'block', marginBottom: 4 }}>API user email</label>
-              <input
-                className="fmx-input"
-                style={{ width: '100%', boxSizing: 'border-box' }}
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@example.com"
-              />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 500, color: C.textDark, display: 'block', marginBottom: 4 }}>API user password</label>
-              <input
-                className="fmx-input"
-                style={{ width: '100%', boxSizing: 'border-box' }}
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-              />
-            </div>
+            {hasSavedCreds && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.textDark, cursor: 'pointer' }}>
+                <input type="checkbox" checked={useSaved} onChange={e => setUseSaved(e.target.checked)} style={{ width: 14, height: 14 }} />
+                Use saved credentials ({decodeCredentials(fmxCredentials).email})
+              </label>
+            )}
+            {!useSaved && (
+              <>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: C.textDark, display: 'block', marginBottom: 4 }}>API user email</label>
+                  <input
+                    className="fmx-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="admin@example.com"
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 500, color: C.textDark, display: 'block', marginBottom: 4 }}>API user password</label>
+                  <input
+                    className="fmx-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+              </>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>

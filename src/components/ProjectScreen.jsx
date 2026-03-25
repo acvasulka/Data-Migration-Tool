@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getProjects, createProject, deleteProject, getProjectStatus, updateProject } from '../db';
+import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials } from '../db';
+import { encodeCredentials, testFmxConnection } from '../fmxSync';
 import { IMPORT_ORDER } from '../schemas';
 
 const NAVY = '#041662';
@@ -59,9 +60,23 @@ export default function ProjectScreen({ onSelectProject }) {
   const [description, setDescription] = useState('');
   const [fmxSiteUrl, setFmxSiteUrl] = useState('');
   const [fmxApiEmail, setFmxApiEmail] = useState('');
+  const [fmxApiPassword, setFmxApiPassword] = useState('');
   const [apiExpanded, setApiExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [createConnStatus, setCreateConnStatus] = useState(null); // null | 'ok' | 'fail'
+  const [createConnMsg, setCreateConnMsg] = useState('');
+  const [createConnLoading, setCreateConnLoading] = useState(false);
+  const [createConnVerified, setCreateConnVerified] = useState(false);
+
+  // update credentials panel (for selected project detail)
+  const [showUpdateCreds, setShowUpdateCreds] = useState(false);
+  const [updateEmail, setUpdateEmail] = useState('');
+  const [updatePassword, setUpdatePassword] = useState('');
+  const [updateConnStatus, setUpdateConnStatus] = useState(null);
+  const [updateConnMsg, setUpdateConnMsg] = useState('');
+  const [updateConnLoading, setUpdateConnLoading] = useState(false);
+  const [updateSaving, setUpdateSaving] = useState(false);
 
   const loadProjects = async () => {
     setLoading(true);
@@ -91,15 +106,46 @@ export default function ProjectScreen({ onSelectProject }) {
     e.preventDefault();
     setCreateError('');
     setCreating(true);
-    console.log('Creating project with:', { name, description, fmxSiteUrl });
-    const p = await createProject(name, description, fmxSiteUrl, fmxApiEmail);
-    console.log('createProject returned:', p);
+    const encoded = fmxApiEmail && fmxApiPassword ? encodeCredentials(fmxApiEmail, fmxApiPassword) : null;
+    const p = await createProject(name, description, fmxSiteUrl, encoded, createConnVerified);
     if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
     await loadProjects();
     setMode('idle');
-    setName(''); setDescription(''); setFmxSiteUrl(''); setFmxApiEmail('');
+    setName(''); setDescription(''); setFmxSiteUrl(''); setFmxApiEmail(''); setFmxApiPassword('');
+    setCreateConnStatus(null); setCreateConnVerified(false);
     handleSelectProject(p);
     setCreating(false);
+  };
+
+  const handleTestCreateConn = async () => {
+    setCreateConnLoading(true); setCreateConnStatus(null);
+    const result = await testFmxConnection(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
+    setCreateConnStatus(result.success ? 'ok' : 'fail');
+    setCreateConnMsg(result.message);
+    setCreateConnVerified(result.success);
+    setCreateConnLoading(false);
+  };
+
+  const handleTestUpdateConn = async () => {
+    setUpdateConnLoading(true); setUpdateConnStatus(null);
+    const result = await testFmxConnection(selected.fmx_site_url, updateEmail, updatePassword);
+    setUpdateConnStatus(result.success ? 'ok' : 'fail');
+    setUpdateConnMsg(result.message);
+    setUpdateConnLoading(false);
+  };
+
+  const handleSaveUpdateCreds = async () => {
+    setUpdateSaving(true);
+    const encoded = encodeCredentials(updateEmail, updatePassword);
+    const verified = updateConnStatus === 'ok';
+    const updated = await saveProjectCredentials(selected.id, encoded, verified);
+    if (updated) {
+      setSelected(updated);
+      setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
+      setShowUpdateCreds(false);
+      setUpdateEmail(''); setUpdatePassword(''); setUpdateConnStatus(null);
+    }
+    setUpdateSaving(false);
   };
 
   const handleDelete = async () => {
@@ -265,13 +311,28 @@ export default function ProjectScreen({ onSelectProject }) {
                 <div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
-                    <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => setFmxApiEmail(e.target.value)} />
+                    <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => { setFmxApiEmail(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
                   </div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
-                    <input style={inputStyle} type="password" placeholder="••••••••" />
+                    <input style={inputStyle} type="password" placeholder="••••••••" value={fmxApiPassword} onChange={e => { setFmxApiPassword(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
                   </div>
-                  <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Stored securely for direct FMX import</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                    <button
+                      type="button"
+                      onClick={handleTestCreateConn}
+                      disabled={!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || createConnLoading}
+                      style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: '1px solid #D1D5DB', background: '#fff', whiteSpace: 'nowrap' }}
+                    >
+                      {createConnLoading ? 'Testing…' : 'Test connection'}
+                    </button>
+                    {createConnStatus && (
+                      <span style={{ fontSize: 12, color: createConnStatus === 'ok' ? '#1A7F4E' : '#DC2626', fontWeight: 500 }}>
+                        {createConnMsg}
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Credentials are stored encoded and used for direct FMX push</p>
                 </div>
               )}
 
@@ -312,9 +373,16 @@ export default function ProjectScreen({ onSelectProject }) {
                   title="Edit name"
                 >✏️</button>
               </div>
-              {selected.fmx_site_url && (
-                <p style={{ fontSize: 13, color: '#9CA3AF', margin: '0 0 20px' }}>{selected.fmx_site_url}</p>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+                {selected.fmx_site_url && (
+                  <p style={{ fontSize: 13, color: '#9CA3AF', margin: 0 }}>{selected.fmx_site_url}</p>
+                )}
+                {selected.fmx_connection_verified && (
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: '#1A7F4E', whiteSpace: 'nowrap' }}>
+                    ✓ FMX Connected
+                  </span>
+                )}
+              </div>
 
               {/* Import checklist */}
               <p style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
@@ -351,7 +419,55 @@ export default function ProjectScreen({ onSelectProject }) {
                 })}
               </div>
 
-              <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '0 0 16px' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '0 0 12px' }} />
+
+              {/* Update credentials */}
+              {selected.fmx_site_url && (
+                <div style={{ marginBottom: 16 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setShowUpdateCreds(v => !v); setUpdateConnStatus(null); }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', padding: 0, textDecoration: 'underline' }}
+                  >
+                    {showUpdateCreds ? 'Cancel' : (selected.fmx_credentials ? 'Update API credentials' : 'Add API credentials')}
+                  </button>
+                  {showUpdateCreds && (
+                    <div style={{ marginTop: 10, padding: '12px 14px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API email</label>
+                        <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="email" placeholder="admin@example.com" value={updateEmail} onChange={e => { setUpdateEmail(e.target.value); setUpdateConnStatus(null); }} />
+                      </div>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API password</label>
+                        <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="password" placeholder="••••••••" value={updatePassword} onChange={e => { setUpdatePassword(e.target.value); setUpdateConnStatus(null); }} />
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <button
+                          type="button"
+                          onClick={handleTestUpdateConn}
+                          disabled={!updateEmail || !updatePassword || updateConnLoading}
+                          style={{ fontSize: 12, padding: '5px 10px', borderRadius: 5, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        >
+                          {updateConnLoading ? 'Testing…' : 'Test'}
+                        </button>
+                        {updateConnStatus && (
+                          <span style={{ fontSize: 12, color: updateConnStatus === 'ok' ? '#1A7F4E' : '#DC2626', fontWeight: 500 }}>
+                            {updateConnMsg}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSaveUpdateCreds}
+                        disabled={!updateEmail || !updatePassword || updateSaving}
+                        style={{ fontSize: 13, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', opacity: (!updateEmail || !updatePassword) ? 0.5 : 1 }}
+                      >
+                        {updateSaving ? 'Saving…' : 'Save credentials'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={() => onSelectProject(selected)}

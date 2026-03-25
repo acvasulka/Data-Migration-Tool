@@ -1,8 +1,9 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 
 // Transform a mapped row object into the correct FMX API payload shape.
-// idCache is a pre-built map of { "Building:Main Campus": 42 } etc.
-export function transformRowToPayload(row, schemaType, idCache = {}) {
+// idCache: { "Building:Main Campus": 42 }
+// customFieldIdMap: { "Department": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}) {
   const fieldMap = FMX_FIELD_MAP[schemaType] || {};
   const payload = {};
 
@@ -23,6 +24,14 @@ export function transformRowToPayload(row, schemaType, idCache = {}) {
       payload[lookup.idField] = lookup.isArray ? [resolvedId] : resolvedId;
     }
   });
+
+  // Handle FMX custom fields
+  const customFieldEntries = Object.entries(customFieldIdMap)
+    .filter(([name]) => row[name])
+    .map(([name, id]) => ({ customFieldID: id, value: row[name] }));
+  if (customFieldEntries.length > 0) {
+    payload.customFields = customFieldEntries;
+  }
 
   return payload;
 }

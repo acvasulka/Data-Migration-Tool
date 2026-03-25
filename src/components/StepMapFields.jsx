@@ -19,6 +19,7 @@ export default function StepMapFields({
   memoryMatches,
   mappingSources,
   savedRules,
+  fmxSyncData,
 }) {
   const getColPreview = col =>
     !csv || !col ? [] : [...new Set(csv.rows.map(r => r[col]).filter(v => v !== undefined))].slice(0, 20);
@@ -219,6 +220,51 @@ export default function StepMapFields({
             </div>
           </div>
         ))}
+
+      {/* FMX Custom Fields from live sync */}
+      {fmxSyncData?.customFields?.length > 0 && (
+        <div style={{ marginBottom: "1.5rem" }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#6B21A8', margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            FMX Custom Fields
+          </p>
+          <div style={{ background: C.white, border: `1px solid #D8B4FE`, borderRadius: 8, overflow: "hidden" }}>
+            {fmxSyncData.customFields.map((cf, i) => {
+              const mappedCol = mapping[cf.name];
+              return (
+                <div key={cf.id} style={{
+                  display: "grid", gridTemplateColumns: "170px 14px 1fr auto",
+                  alignItems: "center", gap: 8, padding: "5px 10px",
+                  borderBottom: i < fmxSyncData.customFields.length - 1 ? `1px solid #EDE9FE` : "none",
+                  background: i % 2 === 0 ? C.white : '#FAF5FF',
+                }}>
+                  <div style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.textDark }}>
+                    {cf.name}
+                    <span style={{ fontSize: 10, color: '#6B21A8', marginLeft: 5 }}>custom</span>
+                  </div>
+                  <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
+                  <select
+                    className="fmx-select"
+                    style={{ fontSize: 13 }}
+                    value={mappedCol ?? ""}
+                    onChange={e => setMapping(m => ({ ...m, [cf.name]: e.target.value || undefined }))}
+                  >
+                    <option value="">— skip —</option>
+                    {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                  <span style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                    background: '#F3E8FF', color: '#6B21A8',
+                    border: '1px solid #D8B4FE',
+                    whiteSpace: 'nowrap', fontWeight: 500,
+                  }}>
+                    FMX custom
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Unmapped source columns */}
       {unmappedHeaders.length > 0 && (

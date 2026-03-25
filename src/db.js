@@ -20,7 +20,7 @@ export async function getProjects() {
   }
 }
 
-export async function createProject(name, description, fmxSiteUrl, fmxApiEmail) {
+export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false) {
   try {
     const { data, error } = await supabase
       .from('projects')
@@ -28,7 +28,8 @@ export async function createProject(name, description, fmxSiteUrl, fmxApiEmail) 
         name: name,
         description: description || null,
         fmx_site_url: fmxSiteUrl || null,
-        fmx_api_email: fmxApiEmail || null,
+        fmx_credentials: encodedCredentials || null,
+        fmx_connection_verified: connectionVerified,
       })
       .select()
       .single();
@@ -40,6 +41,66 @@ export async function createProject(name, description, fmxSiteUrl, fmxApiEmail) 
   } catch (e) {
     console.error('createProject exception:', e);
     return null;
+  }
+}
+
+export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
+  try {
+    const { data, error } = await supabase
+      .from('projects')
+      .update({
+        fmx_credentials: encodedCredentials,
+        fmx_connection_verified: connectionVerified,
+      })
+      .eq('id', projectId)
+      .select()
+      .single();
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function getFmxReferenceCache(projectId, schemaType) {
+  try {
+    const { data, error } = await supabase
+      .from('fmx_reference_cache')
+      .select('data, fetched_at')
+      .eq('project_id', projectId)
+      .eq('schema_type', schemaType)
+      .single();
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveFmxReferenceCache(projectId, schemaType, data) {
+  try {
+    const { error } = await supabase
+      .from('fmx_reference_cache')
+      .upsert({
+        project_id: projectId,
+        schema_type: schemaType,
+        data,
+        fetched_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,schema_type' });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function getCacheAge(projectId, schemaType) {
+  try {
+    const cached = await getFmxReferenceCache(projectId, schemaType);
+    if (!cached) return Infinity;
+    const ageMs = Date.now() - new Date(cached.fetched_at).getTime();
+    return ageMs / 3600000;
+  } catch {
+    return Infinity;
   }
 }
 
