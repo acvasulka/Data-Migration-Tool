@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { FMX_SCHEMAS } from "./schemas";
+import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
@@ -187,17 +188,29 @@ export default function App() {
   }, [fmxSyncData.customFields]);
 
   const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
-  const allFields = schema ? [
-    ...schema.fields,
-    ...customFields.filter(cf => cf.name).map(cf => ({
+
+  // Use API-driven field list when credentials are present and sync has completed
+  const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
+  const baseFields = schemaType
+    ? (hasApiFields && FMX_API_STANDARD_FIELDS[schemaType]
+        ? FMX_API_STANDARD_FIELDS[schemaType]
+        : (schema?.fields || []))
+    : [];
+
+  const allFields = schemaType ? [
+    ...baseFields,
+    // Manual custom fields only when not using API-driven field list
+    ...(!hasApiFields ? customFields.filter(cf => cf.name).map(cf => ({
       name: cf.name, required: cf.required || false, type: "string", group: "Custom Fields",
-    })),
+    })) : []),
     ...dynamicRates.flatMap((_, i) => [
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
       { name: `Rate ${i + 1} Unit`, required: false, type: "string", group: "Scheduling Rates" },
     ]),
+    // FMX custom fields from live sync (always appended; empty when no credentials)
     ...(fmxSyncData.customFields || []).map(cf => ({
-      name: cf.name, required: false, type: "string", group: "FMX Custom Fields", fmxCustomFieldId: cf.id,
+      name: cf.name, required: false, type: "string", group: "FMX Custom Fields",
+      isCustomField: true, customFieldId: cf.id,
     })),
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);

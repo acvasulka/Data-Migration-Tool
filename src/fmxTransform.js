@@ -2,37 +2,51 @@ import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 
 // Transform a mapped row object into the correct FMX API payload shape.
 // idCache: { "Building:Main Campus": 42 }
-// customFieldIdMap: { "Department": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
+// customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
 export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}) {
   const fieldMap = FMX_FIELD_MAP[schemaType] || {};
   const payload = {};
+  const customFields = [];
 
-  Object.entries(row).forEach(([fmxField, value]) => {
-    if (!value) return;
-    const apiKey = fieldMap[fmxField];
+  Object.entries(row).forEach(([fieldName, value]) => {
+    if (value === null || value === undefined || value === '') return;
+
+    // Match by friendly name in customFieldIdMap (e.g. "Year Built" → ID 42)
+    if (customFieldIdMap[fieldName] !== undefined) {
+      customFields.push({ customFieldID: customFieldIdMap[fieldName], value: String(value) });
+      return;
+    }
+
+    // Match by legacy key format "customField_42"
+    if (fieldName.startsWith('customField_')) {
+      const id = parseInt(fieldName.replace('customField_', ''), 10);
+      if (!isNaN(id)) {
+        customFields.push({ customFieldID: id, value: String(value) });
+      }
+      return;
+    }
+
+    // Standard field
+    const apiKey = fieldMap[fieldName];
     if (apiKey) payload[apiKey] = value;
   });
 
-  // Resolve ID lookup fields
+  if (customFields.length > 0) {
+    payload.customFields = customFields;
+  }
+
+  // Resolve ID lookup fields (Building → buildingID, etc.)
   const lookups = FMX_ID_LOOKUP_FIELDS[schemaType] || {};
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
     const value = row[fmxField];
     if (!value) return;
     const cacheKey = `${fmxField}:${value}`;
-    const resolvedId = idCache[cacheKey];
-    if (resolvedId) {
-      payload[lookup.idField] = lookup.isArray ? [resolvedId] : resolvedId;
+    if (idCache[cacheKey]) {
+      payload[lookup.idField] = lookup.isArray ? [idCache[cacheKey]] : idCache[cacheKey];
     }
   });
 
-  // Handle FMX custom fields
-  const customFieldEntries = Object.entries(customFieldIdMap)
-    .filter(([name]) => row[name])
-    .map(([name, id]) => ({ customFieldID: id, value: row[name] }));
-  if (customFieldEntries.length > 0) {
-    payload.customFields = customFieldEntries;
-  }
-
+  console.warn('Payload:', JSON.stringify(payload));
   return payload;
 }
 

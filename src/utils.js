@@ -56,6 +56,7 @@ export function computeCellErrors(rows, allFields, importedData) {
     rows.forEach((row, ri) => {
       const val = row[f.name] ?? "";
       const key = `${ri}-${f.name}`;
+      if (f.isCustomField) return; // custom fields are never required by the API
       if (f.required && !val) { cellMap[key] = "error"; return; }
       if (!val) return;
       if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { cellMap[key] = "error"; return; }
