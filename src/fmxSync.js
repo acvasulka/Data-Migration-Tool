@@ -35,34 +35,46 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-const ENTITY_MAP = {
-  'Building': 'building',
-  'Equipment': 'equipment',
-  'Equipment Type': 'equipment-type',
-  'Resource': 'resource',
-  'User': 'user',
-  'Inventory': 'inventory',
+const SCHEMA_ENDPOINTS = {
+  'Building':  '/v1/buildings',
+  'Equipment': '/v1/equipment',
+  'Inventory': '/v1/inventory',
+  'Resource':  '/v1/resources',
+  'User':      '/v1/users',
+  // Equipment Type has no custom fields — intentionally omitted
 };
 
 async function fetchCustomFields(siteUrl, email, password, schemaType) {
-  const entity = ENTITY_MAP[schemaType];
-  if (!entity) return [];
+  const endpoint = SCHEMA_ENDPOINTS[schemaType];
+  if (!endpoint) return []; // e.g. Equipment Type — not supported
+
   try {
     const res = await fetch('/api/fmx', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         siteUrl, email, password,
-        endpoint: `/v1/custom-fields?entity=${entity}`,
+        endpoint: `${endpoint}?fields=:default,customFields&limit=1`,
         method: 'GET', payload: null,
       }),
     });
     if (!res.ok) return [];
     const data = await res.json();
-    const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
-    return items
-      .map(cf => ({ id: cf.id, name: cf.name || cf.label, type: cf.type || 'text' }))
-      .filter(cf => cf.id && cf.name);
+    console.log('FMX sync response:', data);
+
+    const items = data.items || data.results || (Array.isArray(data) ? data : []);
+    if (items.length === 0 || !items[0].customFields) return [];
+
+    const customFields = items[0].customFields
+      .filter(cf => cf.customFieldID && (cf.name || cf.displayName))
+      .map(cf => ({
+        id: cf.customFieldID,
+        name: cf.name || cf.displayName,
+        fieldType: cf.fieldType || 'text',
+      }));
+
+    console.log('Custom fields found:', customFields);
+    return customFields;
   } catch {
     return [];
   }
