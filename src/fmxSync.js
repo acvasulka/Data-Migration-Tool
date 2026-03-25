@@ -95,8 +95,13 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     const age = await getCacheAge(projectId, schemaType);
     if (age < 24) {
       const cached = await getFmxReferenceCache(projectId, schemaType);
-      if (cached?.data) {
-        return { ...cached.data, fromCache: true };
+      if (cached?.extra?.customFields) {
+        const customFields = cached.extra.customFields.map(cf => ({
+          id: cf.id,
+          name: cf.name,
+          fieldType: cf.fieldType || 'text',
+        }));
+        return { customFields, fromCache: true };
       }
     }
   }
@@ -106,13 +111,12 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
 
   try {
     const customFields = await fetchCustomFields(siteUrl, email, password, schemaType);
-    const result = { customFields, fromCache: false };
 
     if (projectId) {
-      await saveFmxReferenceCache(projectId, schemaType, result);
+      await saveFmxReferenceCache(projectId, schemaType, customFields);
     }
 
-    return result;
+    return { customFields, fromCache: false };
   } catch {
     return { customFields: [], fromCache: false };
   }

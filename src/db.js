@@ -63,13 +63,19 @@ export async function saveProjectCredentials(projectId, encodedCredentials, conn
   }
 }
 
+// Cache uses a single sentinel row per (project_id, schema_type):
+//   record_type = 'custom_fields_cache', fmx_name = '__cache__'
+//   extra = { customFields: [...] }
+
 export async function getFmxReferenceCache(projectId, schemaType) {
   try {
     const { data, error } = await supabase
       .from('fmx_reference_cache')
-      .select('data, fetched_at')
+      .select('fmx_name, fmx_id, extra, record_type, cached_at')
       .eq('project_id', projectId)
       .eq('schema_type', schemaType)
+      .eq('record_type', 'custom_fields_cache')
+      .eq('fmx_name', '__cache__')
       .single();
     if (error) return null;
     return data;
@@ -78,16 +84,19 @@ export async function getFmxReferenceCache(projectId, schemaType) {
   }
 }
 
-export async function saveFmxReferenceCache(projectId, schemaType, data) {
+export async function saveFmxReferenceCache(projectId, schemaType, customFields) {
   try {
     const { error } = await supabase
       .from('fmx_reference_cache')
       .upsert({
         project_id: projectId,
         schema_type: schemaType,
-        data,
-        fetched_at: new Date().toISOString(),
-      }, { onConflict: 'project_id,schema_type' });
+        record_type: 'custom_fields_cache',
+        fmx_name: '__cache__',
+        fmx_id: null,
+        extra: { customFields },
+        cached_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,schema_type,record_type,fmx_name' });
     return !error;
   } catch {
     return false;
@@ -98,7 +107,7 @@ export async function getCacheAge(projectId, schemaType) {
   try {
     const cached = await getFmxReferenceCache(projectId, schemaType);
     if (!cached) return Infinity;
-    const ageMs = Date.now() - new Date(cached.fetched_at).getTime();
+    const ageMs = Date.now() - new Date(cached.cached_at).getTime();
     return ageMs / 3600000;
   } catch {
     return Infinity;
