@@ -134,6 +134,7 @@ export default function App() {
   const [memoryMatches, setMemoryMatches] = useState({});
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
+  const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
   const fileRef = useRef();
 
   useEffect(() => {
@@ -188,7 +189,7 @@ export default function App() {
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
-  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, importedData) : {};
+  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, persistentRefs ?? importedData) : {};
   const hasErrors = Object.values(cellErrors).some(v => v === "error");
 
   const groupedFields = {};
@@ -326,11 +327,29 @@ export default function App() {
     setTransformModal({ field: fieldName, savedRule });
   };
 
+  const handleRefsLoaded = (merged) => {
+    setPersistentRefs(merged);
+  };
+
+  const handleImportComplete = ({ schemaType: st, referenceValues }) => {
+    const refField = FMX_SCHEMAS[st]?.crossRef;
+    if (refField) {
+      const vals = referenceValues
+        .filter(r => r.fieldName === refField)
+        .map(r => r.value);
+      setImportedData(prev => ({
+        ...prev,
+        [st]: [...new Set([...(prev[st] || []), ...vals])],
+      }));
+    }
+  };
+
   const reset = () => {
     setWStep(0); setSchemaType(""); setCsv(null); setFileInfo(null); setMapping({});
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
     setMemoryMatches({}); setMappingSources({}); setSavedRules({});
+    setPersistentRefs(null);
   };
 
   const goToProjects = () => {
@@ -543,6 +562,9 @@ export default function App() {
                 certified={certified}
                 setCertified={setCertified}
                 applyNLEdit={applyNLEdit}
+                projectId={selectedProject?.id}
+                importedData={importedData}
+                onRefsLoaded={handleRefsLoaded}
               />
             )}
 
@@ -556,6 +578,8 @@ export default function App() {
                 handleExport={handleExport}
                 mapping={mapping}
                 transformRules={transformRules}
+                projectId={selectedProject?.id}
+                onImportComplete={handleImportComplete}
               />
             )}
 

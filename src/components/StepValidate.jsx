@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { C } from "../theme";
 import NLEditPanel from "./NLEditPanel";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
+import { getReferenceValues } from "../db";
 
 export default function StepValidate({
   mappedHeaders,
@@ -13,10 +14,43 @@ export default function StepValidate({
   certified,
   setCertified,
   applyNLEdit,
+  projectId,
+  importedData,
+  onRefsLoaded,
 }) {
   const [jumpIdx, setJumpIdx] = useState(-1);
   const [noMoreMsg, setNoMoreMsg] = useState(false);
   const [focusCell, setFocusCell] = useState(null);
+  const [refCounts, setRefCounts] = useState(null); // { building, equipType }
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    (async () => {
+      const [buildingRefs, equipTypeRefs] = await Promise.all([
+        getReferenceValues(projectId, 'Building'),
+        getReferenceValues(projectId, 'Equipment Type'),
+      ]);
+      if (cancelled) return;
+
+      const buildingNames = buildingRefs?.Name ?? [];
+      const equipTypeNames = equipTypeRefs?.Name ?? [];
+
+      // Merge into the shape computeCellErrors expects: { [schemaType]: [values] }
+      const merged = {
+        ...(buildingNames.length ? { 'Building': buildingNames } : {}),
+        ...(equipTypeNames.length ? { 'Equipment Type': equipTypeNames } : {}),
+        ...importedData, // in-session data overrides
+      };
+
+      if (buildingNames.length > 0 || equipTypeNames.length > 0) {
+        setRefCounts({ building: buildingNames.length, equipType: equipTypeNames.length });
+      }
+
+      onRefsLoaded(merged);
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]); // intentionally only re-runs when projectId changes
 
   // Sorted list of all error cells: [{ri, header}]
   const errorCells = useMemo(() => {
@@ -77,6 +111,14 @@ export default function StepValidate({
         focusCell={focusCell}
         onChange={rows => setMappedRows(rows)}
       />
+
+      {refCounts && (
+        <p style={{ fontSize: 12, color: C.textLight, fontStyle: "italic", margin: "8px 0 0" }}>
+          Cross-sheet validation loaded{refCounts.building > 0 ? ` ${refCounts.building} building name${refCounts.building !== 1 ? 's' : ''}` : ''}
+          {refCounts.building > 0 && refCounts.equipType > 0 ? ' and' : ''}
+          {refCounts.equipType > 0 ? ` ${refCounts.equipType} equipment type${refCounts.equipType !== 1 ? 's' : ''}` : ''} from project history
+        </p>
+      )}
 
       <div style={{ marginTop: "1rem" }}>
         {hasErrors && (

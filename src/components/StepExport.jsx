@@ -1,18 +1,42 @@
 import { useState } from "react";
 import { C } from "../theme";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
-import { saveMappings, saveRule, saveDataPatterns } from "../db";
+import { saveMappings, saveRule, saveDataPatterns, completeImport } from "../db";
 
-export default function StepExport({ schemaType, mappedRows, setMappedRows, mappedHeaders, allFields, handleExport, mapping, transformRules }) {
+export default function StepExport({
+  schemaType,
+  mappedRows,
+  setMappedRows,
+  mappedHeaders,
+  allFields,
+  handleExport,
+  mapping,
+  transformRules,
+  projectId,
+  onImportComplete,
+}) {
   const [exportFormat, setExportFormat] = useState("csv");
 
   const handleDownload = () => {
     // Trigger file download immediately — don't block on saves
     handleExport(exportFormat);
 
-    // Save mappings, rules, and data patterns in the background
+    // Save everything in the background
     (async () => {
       try {
+        // Build reference values for cross-sheet validation
+        let referenceValues = [];
+        if (schemaType === 'Building' || schemaType === 'Equipment Type') {
+          const uniqueNames = [...new Set(mappedRows.map(r => r['Name']).filter(Boolean))];
+          referenceValues = uniqueNames.map(v => ({ fieldName: 'Name', value: v }));
+        } else {
+          const crossSheetFields = allFields.filter(f => f.crossSheet);
+          for (const field of crossSheetFields) {
+            const uniqueVals = [...new Set(mappedRows.map(r => r[field.name]).filter(Boolean))];
+            uniqueVals.forEach(v => referenceValues.push({ fieldName: field.name, value: v }));
+          }
+        }
+
         // Build field samples for pattern analysis
         const fieldSamples = {};
         for (const field of allFields) {
@@ -62,7 +86,16 @@ export default function StepExport({ schemaType, mappedRows, setMappedRows, mapp
           saves.push(saveDataPatterns(schemaType, fieldPatterns));
         }
 
+        if (projectId) {
+          saves.push(completeImport(projectId, schemaType, mappedRows.length, mapping, referenceValues));
+        }
+
         await Promise.all(saves);
+
+        // Notify App.js so in-session cross-sheet validation is updated
+        if (onImportComplete) {
+          onImportComplete({ schemaType, referenceValues });
+        }
       } catch {}
     })();
   };
