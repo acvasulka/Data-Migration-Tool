@@ -90,7 +90,9 @@ export default function ProjectScreen({ onSelectProject }) {
     e.preventDefault();
     setCreateError('');
     setCreating(true);
+    console.log('Creating project with:', { name, description, fmxSiteUrl });
     const p = await createProject(name, description, fmxSiteUrl);
+    console.log('createProject returned:', p);
     if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
     await loadProjects();
     setMode('idle');

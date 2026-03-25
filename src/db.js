@@ -9,9 +9,13 @@ export async function getProjects() {
       .from('projects')
       .select('*')
       .order('updated_at', { ascending: false });
-    if (error) return [];
-    return data ?? [];
-  } catch {
+    if (error) {
+      console.error('getProjects error:', error);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    console.error('getProjects exception:', e);
     return [];
   }
 }
@@ -20,12 +24,20 @@ export async function createProject(name, description, fmxSiteUrl) {
   try {
     const { data, error } = await supabase
       .from('projects')
-      .insert({ name, description, fmx_site_url: fmxSiteUrl })
+      .insert({
+        name: name,
+        description: description || null,
+        fmx_site_url: fmxSiteUrl || null,
+      })
       .select()
       .single();
-    if (error) return null;
+    if (error) {
+      console.error('createProject error:', error);
+      return null;
+    }
     return data;
-  } catch {
+  } catch (e) {
+    console.error('createProject exception:', e);
     return null;
   }
 }
