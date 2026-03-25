@@ -39,7 +39,7 @@ export default function AuthScreen() {
     e.preventDefault();
     clearMessages();
     setLoading(true);
-    const { error: err } = await supabase.auth.signUp({
+    const { data: authData, error: err } = await supabase.auth.signUp({
       email: signupEmail,
       password: signupPassword,
       options: { data: { full_name: fullName } },
@@ -49,11 +49,19 @@ export default function AuthScreen() {
       setLoading(false);
       return;
     }
-    // Insert org
-    await supabase.from('organizations').insert({
-      name: orgName,
-      slug: orgName.toLowerCase().replace(/\s+/g, '-'),
-    });
+    // Create org and capture its id
+    const { data: org } = await supabase
+      .from('organizations')
+      .insert({ name: orgName, slug: orgName.toLowerCase().replace(/\s+/g, '-') })
+      .select()
+      .single();
+    // Link profile → org immediately so orgId is available after email confirmation
+    if (org?.id && authData?.user?.id) {
+      await supabase
+        .from('profiles')
+        .update({ org_id: org.id })
+        .eq('id', authData.user.id);
+    }
     setSuccess('Check your email to confirm your account, then sign in.');
     setMode('signin');
     setLoading(false);

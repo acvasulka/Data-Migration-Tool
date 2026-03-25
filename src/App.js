@@ -108,6 +108,7 @@ export default function App() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
   const [showProjectScreen, setShowProjectScreen] = useState(true);
+  const [orgIdRetryCount, setOrgIdRetryCount] = useState(0);
   const [passwordReset, setPasswordReset] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -134,12 +135,19 @@ export default function App() {
   const fileRef = useRef();
 
   const fetchOrgId = async (uid) => {
-    const { data } = await supabase
+    const { data: profile } = await supabase
       .from('profiles')
       .select('org_id')
       .eq('id', uid)
       .single();
-    setOrgId(data?.org_id ?? null);
+
+    if (profile?.org_id) {
+      setOrgId(profile.org_id);
+      return;
+    }
+
+    // org_id is null — may be a race condition on first login
+    setOrgId(null);
   };
 
   useEffect(() => {
@@ -159,15 +167,27 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setUser(session.user);
+        setOrgIdRetryCount(0);
         fetchOrgId(session.user.id);
       } else {
         setUser(null);
         setOrgId(null);
+        setOrgIdRetryCount(0);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Retry fetching orgId every 2s (up to 5 times) if user is logged in but orgId is still null
+  useEffect(() => {
+    if (!user || orgId || orgIdRetryCount >= 5) return;
+    const timer = setTimeout(() => {
+      fetchOrgId(user.id);
+      setOrgIdRetryCount(c => c + 1);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [user, orgId, orgIdRetryCount]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -356,6 +376,24 @@ export default function App() {
 
   // Not signed in
   if (!user) return <AuthScreen />;
+
+  // User is logged in but orgId not yet resolved
+  if (!orgId) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, -apple-system, sans-serif', background: C.bgPage }}>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ width: 36, height: 36, border: `4px solid ${C.border}`, borderTopColor: C.orange, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <p style={{ marginTop: 14, color: C.textMid, fontSize: 14 }}>
+          {orgIdRetryCount >= 5 ? 'Unable to load your organization. Please sign out and try again.' : 'Setting up your account…'}
+        </p>
+        {orgIdRetryCount >= 5 && (
+          <button onClick={handleSignOut} style={{ marginTop: 12, background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 16px', fontSize: 13, cursor: 'pointer', color: C.textMid }}>
+            Sign out
+          </button>
+        )}
+      </div>
+    );
+  }
 
   // Project management screen
   if (showProjectScreen) {
