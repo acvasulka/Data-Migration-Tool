@@ -145,6 +145,8 @@ export default function FMXPushModal({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ siteUrl: url, email: em, password: pw, endpoint, payload }),
           });
+          const responseText = await res.clone().text();
+          console.warn('FMX API raw response:', res.status, responseText);
           ok = res.ok || res.status === 200 || res.status === 201;
         } catch {}
 
