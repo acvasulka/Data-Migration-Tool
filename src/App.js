@@ -5,7 +5,8 @@ import { C } from "./theme";
 import { supabase } from "./supabase";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
-import SessionHistory from "./components/SessionHistory";
+import ProjectChecklist from "./components/ProjectChecklist";
+import ProjectScreen from "./components/ProjectScreen";
 import StepSelectType from "./components/StepSelectType";
 import StepUpload from "./components/StepUpload";
 import StepMapFields from "./components/StepMapFields";
@@ -105,6 +106,8 @@ export default function App() {
   const [orgId, setOrgId] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [showProjectScreen, setShowProjectScreen] = useState(true);
   const [passwordReset, setPasswordReset] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -301,6 +304,11 @@ export default function App() {
     setMappedRows([]); setCertified(false);
   };
 
+  const goToProjects = () => {
+    reset();
+    setShowProjectScreen(true);
+  };
+
   const handleBack = () => {
     if (wStep > 0) setWStep(wStep - 1);
   };
@@ -349,6 +357,19 @@ export default function App() {
   // Not signed in
   if (!user) return <AuthScreen />;
 
+  // Project management screen
+  if (showProjectScreen) {
+    return (
+      <ProjectScreen
+        orgId={orgId}
+        onSelectProject={(project) => {
+          setSelectedProject(project);
+          setShowProjectScreen(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: C.bgPage, minHeight: "100vh", color: C.textDark }}>
       <style>{GLOBAL_STYLES}</style>
@@ -366,7 +387,21 @@ export default function App() {
 
       {/* Header */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, height: 52, background: C.navy, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ color: C.white, fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          <span style={{ color: C.white, fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
+          {selectedProject && (
+            <>
+              <span style={{ color: 'rgba(255,255,255,0.4)', margin: '0 10px', fontSize: 15 }}>|</span>
+              <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: 400 }}>{selectedProject.name}</span>
+              <button
+                onClick={goToProjects}
+                style={{ background: 'none', border: 'none', color: C.blue, fontSize: 12, cursor: 'pointer', marginLeft: 14, padding: '2px 0' }}
+              >
+                ← Projects
+              </button>
+            </>
+          )}
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <span style={{ color: C.blue, fontSize: 13 }}>Step {wStep + 1} — {WIZARD_STEPS[wStep]}</span>
           {/* User avatar */}
@@ -516,7 +551,7 @@ export default function App() {
             )}
           </div>
 
-          <SessionHistory history={history} />
+          <ProjectChecklist history={history} projectId={selectedProject?.id} />
         </div>
       </div>
     </div>
