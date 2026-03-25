@@ -581,6 +581,7 @@ export default function App() {
                 projectId={selectedProject?.id}
                 onImportComplete={handleImportComplete}
                 selectedProject={selectedProject}
+                userEmail={user?.email}
               />
             )}
 

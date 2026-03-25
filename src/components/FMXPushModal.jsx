@@ -41,6 +41,10 @@ export default function FMXPushModal({
   onClose,
   onSuccess,
 }) {
+  useEffect(() => {
+    console.log('FMXPushModal props:', { fmxSiteUrl, fmxEmail });
+  }, []);
+
   const [phase, setPhase] = useState('setup'); // 'setup' | 'pushing' | 'done'
   const [siteUrl, setSiteUrl] = useState(fmxSiteUrl || '');
   const [email, setEmail] = useState(fmxEmail || '');

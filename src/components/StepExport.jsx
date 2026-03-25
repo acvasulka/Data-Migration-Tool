@@ -16,6 +16,7 @@ export default function StepExport({
   projectId,
   onImportComplete,
   selectedProject,
+  userEmail,
 }) {
   const [exportFormat, setExportFormat] = useState("csv");
   const [showFMXModal, setShowFMXModal] = useState(false);
@@ -102,7 +103,7 @@ export default function StepExport({
           mappedRows={mappedRows}
           projectId={projectId}
           fmxSiteUrl={selectedProject?.fmx_site_url || ''}
-          fmxEmail={''}
+          fmxEmail={userEmail || ''}
           onClose={() => setShowFMXModal(false)}
           onSuccess={() => { setShowFMXModal(false); runPersistence(); }}
         />
