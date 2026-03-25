@@ -14,6 +14,7 @@ export default function StepValidate({
   certified,
   setCertified,
   applyNLEdit,
+  onRowsUpdated,
   projectId,
   importedData,
   onRefsLoaded,
@@ -109,7 +110,7 @@ export default function StepValidate({
         cellErrors={cellErrors}
         allFields={allFields}
         focusCell={focusCell}
-        onChange={rows => setMappedRows(rows)}
+        onChange={rows => { setMappedRows(rows); if (onRowsUpdated) onRowsUpdated(rows); }}
       />
 
       {refCounts && (

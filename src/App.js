@@ -562,6 +562,7 @@ export default function App() {
                 certified={certified}
                 setCertified={setCertified}
                 applyNLEdit={applyNLEdit}
+                onRowsUpdated={(rows) => setMappedRows(rows)}
                 projectId={selectedProject?.id}
                 importedData={importedData}
                 onRefsLoaded={handleRefsLoaded}
