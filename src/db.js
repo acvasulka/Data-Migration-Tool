@@ -1,31 +1,13 @@
 import { supabase } from './supabase';
 import { IMPORT_ORDER } from './schemas';
 
-// --- ORGANIZATIONS ---
-
-export async function getOrgBySlug(slug) {
-  try {
-    const { data, error } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('slug', slug)
-      .limit(1)
-      .single();
-    if (error) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
 // --- PROJECTS ---
 
-export async function getProjects(orgId) {
+export async function getProjects() {
   try {
     const { data, error } = await supabase
       .from('projects')
       .select('*')
-      .eq('org_id', orgId)
       .order('updated_at', { ascending: false });
     if (error) return [];
     return data ?? [];
@@ -34,15 +16,11 @@ export async function getProjects(orgId) {
   }
 }
 
-export async function createProject(orgId, name, description, fmxSiteUrl) {
-  if (!orgId) {
-    console.error('createProject called with null orgId');
-    return null;
-  }
+export async function createProject(name, description, fmxSiteUrl) {
   try {
     const { data, error } = await supabase
       .from('projects')
-      .insert({ org_id: orgId, name, description, fmx_site_url: fmxSiteUrl })
+      .insert({ name, description, fmx_site_url: fmxSiteUrl })
       .select()
       .single();
     if (error) return null;
@@ -113,12 +91,11 @@ export async function getProjectStatus(projectId) {
 
 // --- MAPPING MEMORY ---
 
-export async function getMappingSuggestions(orgId, schemaType, headers) {
+export async function getMappingSuggestions(schemaType, headers) {
   try {
     const { data, error } = await supabase
       .from('mapping_memory')
       .select('source_header, fmx_field, confidence')
-      .eq('org_id', orgId)
       .eq('schema_type', schemaType)
       .in('source_header', headers);
     if (error) return {};
@@ -136,10 +113,9 @@ export async function getMappingSuggestions(orgId, schemaType, headers) {
   }
 }
 
-export async function saveMappings(orgId, schemaType, mappings) {
+export async function saveMappings(schemaType, mappings) {
   try {
     const rows = Object.entries(mappings).map(([fmxField, sourceHeader]) => ({
-      org_id: orgId,
       schema_type: schemaType,
       source_header: sourceHeader,
       fmx_field: fmxField,
@@ -152,7 +128,7 @@ export async function saveMappings(orgId, schemaType, mappings) {
     const { error } = await supabase
       .from('mapping_memory')
       .upsert(rows, {
-        onConflict: 'org_id,schema_type,source_header',
+        onConflict: 'schema_type,source_header',
         ignoreDuplicates: false,
       });
     return !error;
@@ -163,12 +139,11 @@ export async function saveMappings(orgId, schemaType, mappings) {
 
 // --- RULE MEMORY ---
 
-export async function getSavedRule(orgId, schemaType, fmxField) {
+export async function getSavedRule(schemaType, fmxField) {
   try {
     const { data, error } = await supabase
       .from('rule_memory')
       .select('*')
-      .eq('org_id', orgId)
       .eq('schema_type', schemaType)
       .eq('fmx_field', fmxField)
       .limit(1)
@@ -180,13 +155,12 @@ export async function getSavedRule(orgId, schemaType, fmxField) {
   }
 }
 
-export async function saveRule(orgId, schemaType, fmxField, instruction, code) {
+export async function saveRule(schemaType, fmxField, instruction, code) {
   try {
     const { error } = await supabase
       .from('rule_memory')
       .upsert(
         {
-          org_id: orgId,
           schema_type: schemaType,
           fmx_field: fmxField,
           instruction,
@@ -194,7 +168,7 @@ export async function saveRule(orgId, schemaType, fmxField, instruction, code) {
           use_count: 1,
           last_used_at: new Date().toISOString(),
         },
-        { onConflict: 'org_id,schema_type,fmx_field' }
+        { onConflict: 'schema_type,fmx_field' }
       );
     return !error;
   } catch {
@@ -204,12 +178,11 @@ export async function saveRule(orgId, schemaType, fmxField, instruction, code) {
 
 // --- DATA PATTERNS ---
 
-export async function getDataPatterns(orgId, schemaType, fmxField) {
+export async function getDataPatterns(schemaType, fmxField) {
   try {
     const { data, error } = await supabase
       .from('data_pattern_memory')
       .select('sample_values, pattern_hint')
-      .eq('org_id', orgId)
       .eq('schema_type', schemaType)
       .eq('fmx_field', fmxField)
       .limit(1)
@@ -221,10 +194,9 @@ export async function getDataPatterns(orgId, schemaType, fmxField) {
   }
 }
 
-export async function saveDataPatterns(orgId, schemaType, fieldPatterns) {
+export async function saveDataPatterns(schemaType, fieldPatterns) {
   try {
     const rows = fieldPatterns.map(({ fmxField, sampleValues, patternHint }) => ({
-      org_id: orgId,
       schema_type: schemaType,
       fmx_field: fmxField,
       sample_values: sampleValues,
@@ -237,7 +209,7 @@ export async function saveDataPatterns(orgId, schemaType, fieldPatterns) {
 
     const { error } = await supabase
       .from('data_pattern_memory')
-      .upsert(rows, { onConflict: 'org_id,schema_type,fmx_field' });
+      .upsert(rows, { onConflict: 'schema_type,fmx_field' });
     return !error;
   } catch {
     return false;

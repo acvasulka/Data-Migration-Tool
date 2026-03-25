@@ -43,7 +43,7 @@ function DocumentPlusIcon() {
   );
 }
 
-export default function ProjectScreen({ orgId, onSelectProject }) {
+export default function ProjectScreen({ onSelectProject }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -64,12 +64,12 @@ export default function ProjectScreen({ orgId, onSelectProject }) {
 
   const loadProjects = async () => {
     setLoading(true);
-    const data = await getProjects(orgId);
+    const data = await getProjects();
     setProjects(data);
     setLoading(false);
   };
 
-  useEffect(() => { if (orgId) loadProjects(); }, [orgId]);
+  useEffect(() => { loadProjects(); }, []);
 
   const loadStatus = async (projectId) => {
     setStatusLoading(true);
@@ -90,8 +90,8 @@ export default function ProjectScreen({ orgId, onSelectProject }) {
     e.preventDefault();
     setCreateError('');
     setCreating(true);
-    const p = await createProject(orgId, name, description, fmxSiteUrl);
-    if (!p) { setCreateError('Unable to create project — your account is not linked to an organization. Please sign out and sign back in.'); setCreating(false); return; }
+    const p = await createProject(name, description, fmxSiteUrl);
+    if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
     await loadProjects();
     setMode('idle');
     setName(''); setDescription(''); setFmxSiteUrl('');

@@ -15,7 +15,6 @@ export default function AuthScreen() {
   const [fullName, setFullName] = useState('');
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
-  const [orgName, setOrgName] = useState('');
 
   // forgot fields
   const [forgotEmail, setForgotEmail] = useState('');
@@ -39,7 +38,7 @@ export default function AuthScreen() {
     e.preventDefault();
     clearMessages();
     setLoading(true);
-    const { data: authData, error: err } = await supabase.auth.signUp({
+    const { error: err } = await supabase.auth.signUp({
       email: signupEmail,
       password: signupPassword,
       options: { data: { full_name: fullName } },
@@ -48,19 +47,6 @@ export default function AuthScreen() {
       setError(err.message);
       setLoading(false);
       return;
-    }
-    // Create org and capture its id
-    const { data: org } = await supabase
-      .from('organizations')
-      .insert({ name: orgName, slug: orgName.toLowerCase().replace(/\s+/g, '-') })
-      .select()
-      .single();
-    // Link profile → org immediately so orgId is available after email confirmation
-    if (org?.id && authData?.user?.id) {
-      await supabase
-        .from('profiles')
-        .update({ org_id: org.id })
-        .eq('id', authData.user.id);
     }
     setSuccess('Check your email to confirm your account, then sign in.');
     setMode('signin');
@@ -235,14 +221,6 @@ export default function AuthScreen() {
                       style={inputStyle} type="password" required minLength={8}
                       value={signupPassword} onChange={e => setSignupPassword(e.target.value)}
                       placeholder="Minimum 8 characters"
-                    />
-                  </div>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Organization name</label>
-                    <input
-                      style={inputStyle} type="text" required
-                      value={orgName} onChange={e => setOrgName(e.target.value)}
-                      placeholder="Acme University"
                     />
                   </div>
                   {error && <p style={{ color: '#DC2626', fontSize: 13, margin: '0 0 12px' }}>{error}</p>}
