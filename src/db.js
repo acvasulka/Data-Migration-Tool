@@ -35,6 +35,10 @@ export async function getProjects(orgId) {
 }
 
 export async function createProject(orgId, name, description, fmxSiteUrl) {
+  if (!orgId) {
+    console.error('createProject called with null orgId');
+    return null;
+  }
   try {
     const { data, error } = await supabase
       .from('projects')

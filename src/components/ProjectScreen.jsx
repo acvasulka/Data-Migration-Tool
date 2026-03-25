@@ -91,7 +91,7 @@ export default function ProjectScreen({ orgId, onSelectProject }) {
     setCreateError('');
     setCreating(true);
     const p = await createProject(orgId, name, description, fmxSiteUrl);
-    if (!p) { setCreateError('Failed to create project. Please try again.'); setCreating(false); return; }
+    if (!p) { setCreateError('Unable to create project — your account is not linked to an organization. Please sign out and sign back in.'); setCreating(false); return; }
     await loadProjects();
     setMode('idle');
     setName(''); setDescription(''); setFmxSiteUrl('');

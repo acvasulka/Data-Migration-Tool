@@ -141,6 +141,7 @@ export default function App() {
       .eq('id', uid)
       .single();
 
+    console.log('Auth state: user=', uid, 'profile=', profile, 'orgId=', profile?.org_id ?? null);
     if (profile?.org_id) {
       setOrgId(profile.org_id);
       return;
