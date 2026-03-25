@@ -3,6 +3,7 @@ import { FMX_SCHEMAS } from "./schemas";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
+import { getMappingSuggestions, getSavedRulesForSchema } from "./db";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectChecklist from "./components/ProjectChecklist";
@@ -129,7 +130,10 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [transformModal, setTransformModal] = useState(null);
+  const [transformModal, setTransformModal] = useState(null); // { field, savedRule } | null
+  const [memoryMatches, setMemoryMatches] = useState({});
+  const [mappingSources, setMappingSources] = useState({});
+  const [savedRules, setSavedRules] = useState({});
   const fileRef = useRef();
 
   useEffect(() => {
@@ -208,16 +212,54 @@ export default function App() {
     setAiLoading(true);
     const suggested = suggestMapping(parsed.headers, FMX_SCHEMAS[schemaType].fields);
     try {
-      const res = await fetch("/api/claude", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-        })
+      const [aiRes, memMatches, rules] = await Promise.all([
+        fetch("/api/claude", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 1000,
+            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+          })
+        }).then(r => r.json()).catch(() => null),
+        getMappingSuggestions(orgId, schemaType, parsed.headers),
+        getSavedRulesForSchema(orgId, schemaType),
+      ]);
+
+      // Parse AI result
+      let aiResult = {};
+      if (aiRes) {
+        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        try { aiResult = JSON.parse(clean); } catch {}
+      }
+
+      // Build final mapping: heuristic < AI < memory (confidence >= 2 wins)
+      const finalMapping = { ...suggested, ...aiResult };
+      const aiSuggestedFields = new Set(
+        Object.entries(aiResult).filter(([, v]) => v).map(([k]) => k)
+      );
+
+      // Apply memory overrides
+      Object.entries(memMatches).forEach(([sourceHeader, match]) => {
+        if (match.confidence >= 2) finalMapping[match.fmxField] = sourceHeader;
       });
-      const data = await res.json();
-      const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
-      setMapping({ ...suggested, ...JSON.parse(clean) });
+
+      // Build source attribution for badge display
+      const sources = {};
+      Object.entries(finalMapping).forEach(([fmxField, sourceHeader]) => {
+        if (!sourceHeader) return;
+        const memMatch = memMatches[sourceHeader];
+        if (memMatch?.fmxField === fmxField && memMatch?.confidence >= 2) {
+          sources[fmxField] = 'memory';
+        } else if (aiSuggestedFields.has(fmxField)) {
+          sources[fmxField] = 'ai';
+        } else {
+          sources[fmxField] = 'auto';
+        }
+      });
+
+      setMemoryMatches(memMatches);
+      setMappingSources(sources);
+      setSavedRules(rules);
+      setMapping(finalMapping);
     } catch { setMapping(suggested); }
     setAiLoading(false);
     setWStep(2);
@@ -280,10 +322,15 @@ export default function App() {
     }
   };
 
+  const openTransformModal = (fieldName, savedRule = null) => {
+    setTransformModal({ field: fieldName, savedRule });
+  };
+
   const reset = () => {
     setWStep(0); setSchemaType(""); setCsv(null); setFileInfo(null); setMapping({});
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
+    setMemoryMatches({}); setMappingSources({}); setSavedRules({});
   };
 
   const goToProjects = () => {
@@ -358,10 +405,11 @@ export default function App() {
       {preview && <DataPreviewModal header={preview.header} values={preview.values} onClose={() => setPreview(null)} />}
       {transformModal && (
         <TransformModal
-          fieldName={transformModal}
+          fieldName={transformModal.field}
           csvHeaders={csv?.headers || []}
-          currentRule={transformRules[transformModal]}
-          onSave={rule => { setTransformRules(r => ({ ...r, [transformModal]: { ...rule, type: "formula" } })); setTransformModal(null); }}
+          currentRule={transformRules[transformModal.field]}
+          savedRule={transformModal.savedRule}
+          onSave={rule => { setTransformRules(r => ({ ...r, [transformModal.field]: { ...rule, type: "formula" } })); setTransformModal(null); }}
           onClose={() => setTransformModal(null)}
         />
       )}
@@ -477,7 +525,10 @@ export default function App() {
                 setDynamicRates={setDynamicRates}
                 fileInfo={fileInfo}
                 setPreview={setPreview}
-                setTransformModal={setTransformModal}
+                openTransformModal={openTransformModal}
+                memoryMatches={memoryMatches}
+                mappingSources={mappingSources}
+                savedRules={savedRules}
               />
             )}
 
@@ -503,6 +554,9 @@ export default function App() {
                 mappedHeaders={mappedHeaders}
                 allFields={allFields}
                 handleExport={handleExport}
+                orgId={orgId}
+                mapping={mapping}
+                transformRules={transformRules}
               />
             )}
 

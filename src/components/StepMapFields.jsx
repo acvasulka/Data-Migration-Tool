@@ -15,14 +15,16 @@ export default function StepMapFields({
   setDynamicRates,
   fileInfo,
   setPreview,
-  setTransformModal,
+  openTransformModal,
+  memoryMatches,
+  mappingSources,
+  savedRules,
 }) {
   const getColPreview = col =>
     !csv || !col ? [] : [...new Set(csv.rows.map(r => r[col]).filter(v => v !== undefined))].slice(0, 20);
 
   const supportsCustomFields = schemaType === "Building" || schemaType === "Resource";
 
-  // Columns not mapped to any FMX field
   const mappedCols = new Set(Object.values(mapping).filter(Boolean));
   const unmappedHeaders = csv.headers.filter(h => !mappedCols.has(h));
   const getSampleValue = col => {
@@ -32,15 +34,31 @@ export default function StepMapFields({
     return null;
   };
 
+  const getBadge = (fmxField, sourceHeader) => {
+    if (!sourceHeader) return null;
+    const source = mappingSources?.[fmxField];
+    if (source === 'memory') {
+      const conf = memoryMatches?.[sourceHeader]?.confidence ?? 2;
+      return { label: `Remembered ×${conf}`, bg: '#E1F5EE', color: '#0F6E56', border: '#5DCAA5' };
+    }
+    if (source === 'ai') {
+      return { label: 'AI suggested', bg: '#E6F1FB', color: '#185FA5', border: '#85B7EB' };
+    }
+    if (source === 'auto') {
+      return { label: 'Auto-matched', bg: '#F1EFE8', color: '#5F5E5A', border: '#B4B2A9' };
+    }
+    return null;
+  };
+
   const ROW_STYLE = (hasRule, i) => ({
-    display: "grid", gridTemplateColumns: "170px 14px 1fr auto auto",
+    display: "grid", gridTemplateColumns: "170px 14px 1fr auto auto auto",
     alignItems: "center", gap: 8, padding: "5px 10px",
     borderBottom: `1px solid ${C.border}`,
     background: hasRule ? C.navyTint : i % 2 === 0 ? C.white : C.bgPage,
   });
 
   return (
-    <div style={{ maxWidth: 680 }}>
+    <div style={{ maxWidth: 760 }}>
       <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>
         <strong style={{ color: C.navy }}>{csv.rows.length} rows</strong>
         {" · "}
@@ -76,6 +94,8 @@ export default function StepMapFields({
               {fields.map((f, i) => {
                 const hasRule = !!transformRules[f.name];
                 const mappedCol = mapping[f.name];
+                const badge = getBadge(f.name, mappedCol);
+                const hasSavedRule = !!savedRules?.[f.name] && !hasRule;
                 return (
                   <div key={f.name} style={ROW_STYLE(hasRule, i)}>
                     <div style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.textDark }}>
@@ -83,26 +103,52 @@ export default function StepMapFields({
                       {f.crossSheet && <span style={{ fontSize: 10, color: C.blue, marginLeft: 5 }}>→{f.crossSheet}</span>}
                     </div>
                     <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
-                    {hasRule
-                      ? <span style={{ fontSize: 13, color: C.blue, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          Rule: {transformRules[f.name].instruction}
-                        </span>
-                      : <select className="fmx-select" style={{ fontSize: 13 }} value={mappedCol ?? ""} onChange={e => setMapping(m => ({ ...m, [f.name]: e.target.value || undefined }))}>
-                          <option value="">— skip —</option>
-                          {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                    }
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+                      {hasRule
+                        ? <span style={{ fontSize: 13, color: C.blue, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            Rule: {transformRules[f.name].instruction}
+                          </span>
+                        : <select className="fmx-select" style={{ fontSize: 13 }} value={mappedCol ?? ""} onChange={e => setMapping(m => ({ ...m, [f.name]: e.target.value || undefined }))}>
+                            <option value="">— skip —</option>
+                            {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
+                          </select>
+                      }
+                      {hasSavedRule && (
+                        <button
+                          onClick={() => openTransformModal(f.name, savedRules[f.name])}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 11, color: '#0F6E56', padding: '0',
+                            textDecoration: 'underline', textAlign: 'left',
+                            fontFamily: 'inherit', lineHeight: 1.4,
+                          }}
+                        >
+                          Saved rule — apply?
+                        </button>
+                      )}
+                    </div>
+                    {badge ? (
+                      <span style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        background: badge.bg, color: badge.color,
+                        border: `1px solid ${badge.border}`,
+                        whiteSpace: 'nowrap', fontWeight: 500,
+                      }}>
+                        {badge.label}
+                      </span>
+                    ) : <span />}
                     {mappedCol && !hasRule && (
                       <button className="fmx-btn-xs" style={{ fontSize: 11, padding: "2px 7px" }} onClick={() => setPreview({ header: mappedCol, values: getColPreview(mappedCol) })}>
                         View data
                       </button>
                     )}
+                    {!mappedCol && !hasRule && <span />}
                     <button
                       className={`fmx-btn-xs-rule${hasRule ? " active" : ""}`}
                       style={{ fontSize: 11, padding: "2px 7px" }}
                       onClick={() => hasRule
                         ? setTransformRules(r => { const n = { ...r }; delete n[f.name]; return n; })
-                        : setTransformModal(f.name)
+                        : openTransformModal(f.name)
                       }
                     >
                       {hasRule ? "Clear rule" : "Add rule"}
@@ -143,6 +189,7 @@ export default function StepMapFields({
                         <option value="">— skip —</option>
                         {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
+                      <span />
                       <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.textMid, whiteSpace: "nowrap", cursor: "pointer" }}>
                         <input
                           type="checkbox"

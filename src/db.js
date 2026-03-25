@@ -228,6 +228,24 @@ export async function saveDataPatterns(schemaType, fieldPatterns) {
   }
 }
 
+export async function getSavedRulesForSchema(orgId, schemaType) {
+  try {
+    const { data, error } = await supabase
+      .from('rule_memory')
+      .select('fmx_field, instruction, generated_code')
+      .eq('org_id', orgId)
+      .eq('schema_type', schemaType);
+    if (error) return {};
+    const result = {};
+    for (const row of data ?? []) {
+      result[row.fmx_field] = { instruction: row.instruction, code: row.generated_code };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 // --- REFERENCE VALUES ---
 
 export async function getReferenceValues(projectId, schemaType) {
