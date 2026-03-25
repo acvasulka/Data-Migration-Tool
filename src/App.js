@@ -215,6 +215,7 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   const handleFmxSync = async (type) => {
+    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
     if (!selectedProject?.fmx_credentials) return;
     setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);

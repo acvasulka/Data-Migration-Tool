@@ -82,6 +82,8 @@ async function fetchCustomFields(siteUrl, email, password, schemaType) {
 
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
+  console.log('FMX sync triggered for:', schemaType);
+  console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
     return { customFields: [], fromCache: false };
   }

@@ -55,9 +55,10 @@ export async function saveProjectCredentials(projectId, encodedCredentials, conn
       .eq('id', projectId)
       .select()
       .single();
-    if (error) return null;
+    if (error) { console.error('saveProjectCredentials error:', error); return null; }
     return data;
-  } catch {
+  } catch (e) {
+    console.error('saveProjectCredentials exception:', e);
     return null;
   }
 }

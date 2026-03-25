@@ -138,6 +138,7 @@ export default function ProjectScreen({ onSelectProject }) {
     setUpdateSaving(true);
     const encoded = encodeCredentials(updateEmail, updatePassword);
     const verified = updateConnStatus === 'ok';
+    console.log('Saving credentials for project:', selected.id, 'encoded:', !!encoded, 'verified:', verified);
     const updated = await saveProjectCredentials(selected.id, encoded, verified);
     if (updated) {
       setSelected(updated);
