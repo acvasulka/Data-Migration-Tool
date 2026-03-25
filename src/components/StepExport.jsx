@@ -103,7 +103,7 @@ export default function StepExport({
           mappedRows={mappedRows}
           projectId={projectId}
           fmxSiteUrl={selectedProject?.fmx_site_url || ''}
-          fmxEmail={userEmail || ''}
+          fmxEmail={selectedProject?.fmx_api_email || ''}
           onClose={() => setShowFMXModal(false)}
           onSuccess={() => { setShowFMXModal(false); runPersistence(); }}
         />

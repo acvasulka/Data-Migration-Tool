@@ -20,7 +20,7 @@ export async function getProjects() {
   }
 }
 
-export async function createProject(name, description, fmxSiteUrl) {
+export async function createProject(name, description, fmxSiteUrl, fmxApiEmail) {
   try {
     const { data, error } = await supabase
       .from('projects')
@@ -28,6 +28,7 @@ export async function createProject(name, description, fmxSiteUrl) {
         name: name,
         description: description || null,
         fmx_site_url: fmxSiteUrl || null,
+        fmx_api_email: fmxApiEmail || null,
       })
       .select()
       .single();

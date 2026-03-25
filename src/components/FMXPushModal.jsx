@@ -41,13 +41,15 @@ export default function FMXPushModal({
   onClose,
   onSuccess,
 }) {
+  const [phase, setPhase] = useState('setup'); // 'setup' | 'pushing' | 'done'
+  const [siteUrl, setSiteUrl] = useState('');
+  const [email, setEmail] = useState('');
+
   useEffect(() => {
     console.log('FMXPushModal props:', { fmxSiteUrl, fmxEmail });
-  }, []);
-
-  const [phase, setPhase] = useState('setup'); // 'setup' | 'pushing' | 'done'
-  const [siteUrl, setSiteUrl] = useState(fmxSiteUrl || '');
-  const [email, setEmail] = useState(fmxEmail || '');
+    if (fmxSiteUrl) setSiteUrl(fmxSiteUrl);
+    if (fmxEmail) setEmail(fmxEmail);
+  }, [fmxSiteUrl, fmxEmail]);
   const [password, setPassword] = useState('');
   const [connStatus, setConnStatus] = useState(null); // null | 'ok' | 'fail'
   const [connMsg, setConnMsg] = useState('');

@@ -58,6 +58,7 @@ export default function ProjectScreen({ onSelectProject }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [fmxSiteUrl, setFmxSiteUrl] = useState('');
+  const [fmxApiEmail, setFmxApiEmail] = useState('');
   const [apiExpanded, setApiExpanded] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -91,12 +92,12 @@ export default function ProjectScreen({ onSelectProject }) {
     setCreateError('');
     setCreating(true);
     console.log('Creating project with:', { name, description, fmxSiteUrl });
-    const p = await createProject(name, description, fmxSiteUrl);
+    const p = await createProject(name, description, fmxSiteUrl, fmxApiEmail);
     console.log('createProject returned:', p);
     if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
     await loadProjects();
     setMode('idle');
-    setName(''); setDescription(''); setFmxSiteUrl('');
+    setName(''); setDescription(''); setFmxSiteUrl(''); setFmxApiEmail('');
     handleSelectProject(p);
     setCreating(false);
   };
@@ -264,7 +265,7 @@ export default function ProjectScreen({ onSelectProject }) {
                 <div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
-                    <input style={inputStyle} type="email" placeholder="admin@example.com" />
+                    <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => setFmxApiEmail(e.target.value)} />
                   </div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
