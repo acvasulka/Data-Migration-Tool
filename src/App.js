@@ -220,8 +220,8 @@ export default function App() {
             messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
           })
         }).then(r => r.json()).catch(() => null),
-        getMappingSuggestions(orgId, schemaType, parsed.headers),
-        getSavedRulesForSchema(orgId, schemaType),
+        getMappingSuggestions(schemaType, parsed.headers),
+        getSavedRulesForSchema(schemaType),
       ]);
 
       // Parse AI result
@@ -554,7 +554,6 @@ export default function App() {
                 mappedHeaders={mappedHeaders}
                 allFields={allFields}
                 handleExport={handleExport}
-                orgId={orgId}
                 mapping={mapping}
                 transformRules={transformRules}
               />

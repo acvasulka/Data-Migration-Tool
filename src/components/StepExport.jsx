@@ -3,7 +3,7 @@ import { C } from "../theme";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
 import { saveMappings, saveRule, saveDataPatterns } from "../db";
 
-export default function StepExport({ schemaType, mappedRows, setMappedRows, mappedHeaders, allFields, handleExport, orgId, mapping, transformRules }) {
+export default function StepExport({ schemaType, mappedRows, setMappedRows, mappedHeaders, allFields, handleExport, mapping, transformRules }) {
   const [exportFormat, setExportFormat] = useState("csv");
 
   const handleDownload = () => {
@@ -50,16 +50,16 @@ export default function StepExport({ schemaType, mappedRows, setMappedRows, mapp
         }
 
         // Build all save promises
-        const saves = [saveMappings(orgId, schemaType, mapping)];
+        const saves = [saveMappings(schemaType, mapping)];
 
         Object.entries(transformRules || {}).forEach(([fieldName, rule]) => {
           if (rule?.instruction && rule?.code) {
-            saves.push(saveRule(orgId, schemaType, fieldName, rule.instruction, rule.code));
+            saves.push(saveRule(schemaType, fieldName, rule.instruction, rule.code));
           }
         });
 
         if (fieldPatterns.length > 0) {
-          saves.push(saveDataPatterns(orgId, schemaType, fieldPatterns));
+          saves.push(saveDataPatterns(schemaType, fieldPatterns));
         }
 
         await Promise.all(saves);
