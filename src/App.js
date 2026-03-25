@@ -580,6 +580,7 @@ export default function App() {
                 transformRules={transformRules}
                 projectId={selectedProject?.id}
                 onImportComplete={handleImportComplete}
+                selectedProject={selectedProject}
               />
             )}
 
