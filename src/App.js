@@ -1,7 +1,8 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FMX_SCHEMAS } from "./schemas";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
+import { supabase } from "./supabase";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import SessionHistory from "./components/SessionHistory";
@@ -10,6 +11,7 @@ import StepUpload from "./components/StepUpload";
 import StepMapFields from "./components/StepMapFields";
 import StepValidate from "./components/StepValidate";
 import StepExport from "./components/StepExport";
+import AuthScreen from "./components/AuthScreen";
 
 const WIZARD_STEPS = ["Select Type", "Upload CSV", "Map Fields", "Validate & Edit", "Export"];
 
@@ -98,6 +100,17 @@ const GLOBAL_STYLES = `
 `;
 
 export default function App() {
+  // --- Auth state ---
+  const [user, setUser] = useState(null);
+  const [orgId, setOrgId] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [passwordReset, setPasswordReset] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetMsg, setResetMsg] = useState('');
+
+  // --- Wizard state ---
   const [importedData, setImportedData] = useState({});
   const [history, setHistory] = useState([]);
   const [wStep, setWStep] = useState(0);
@@ -116,6 +129,62 @@ export default function App() {
   const [preview, setPreview] = useState(null);
   const [transformModal, setTransformModal] = useState(null);
   const fileRef = useRef();
+
+  const fetchOrgId = async (uid) => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('org_id')
+      .eq('id', uid)
+      .single();
+    setOrgId(data?.org_id ?? null);
+  };
+
+  useEffect(() => {
+    // Check for password reset in URL hash
+    if (window.location.hash.includes('type=recovery')) {
+      setPasswordReset(true);
+    }
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchOrgId(session.user.id);
+      }
+      setLoadingAuth(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchOrgId(session.user.id);
+      } else {
+        setUser(null);
+        setOrgId(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUserMenuOpen(false);
+  };
+
+  const handlePasswordUpdate = async e => {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) { setResetMsg('Passwords do not match.'); return; }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) { setResetMsg(error.message); return; }
+    window.location.hash = '';
+    setPasswordReset(false);
+    setResetMsg('Password updated — please sign in.');
+  };
+
+  const initials = (() => {
+    const name = user?.user_metadata?.full_name || user?.email || '';
+    return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  })();
 
   const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
   const allFields = schema ? [
@@ -236,6 +305,50 @@ export default function App() {
     if (wStep > 0) setWStep(wStep - 1);
   };
 
+  // Loading spinner
+  if (loadingAuth) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, -apple-system, sans-serif', background: C.bgPage }}>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ width: 36, height: 36, border: `4px solid ${C.border}`, borderTopColor: C.orange, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <p style={{ marginTop: 14, color: C.textMid, fontSize: 14 }}>Loading…</p>
+      </div>
+    );
+  }
+
+  // Password reset modal (after clicking email link)
+  if (passwordReset) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F5F5F5', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+        <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 4px 24px rgba(0,0,0,0.10)', overflow: 'hidden', width: '100%', maxWidth: 400 }}>
+          <div style={{ height: 52, background: C.navy, display: 'flex', alignItems: 'center', paddingLeft: 20 }}>
+            <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
+          </div>
+          <form onSubmit={handlePasswordUpdate} style={{ padding: '24px 28px' }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, marginTop: 0, marginBottom: 18 }}>Set new password</h2>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>New password</label>
+              <input type="password" required minLength={8} value={newPassword} onChange={e => setNewPassword(e.target.value)}
+                style={{ width: '100%', padding: '9px 12px', fontSize: 14, borderRadius: 6, border: '1px solid #D1D5DB', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Confirm password</label>
+              <input type="password" required minLength={8} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                style={{ width: '100%', padding: '9px 12px', fontSize: 14, borderRadius: 6, border: '1px solid #D1D5DB', boxSizing: 'border-box' }} />
+            </div>
+            {resetMsg && <p style={{ color: resetMsg.startsWith('Password updated') ? '#16A34A' : '#DC2626', fontSize: 13, margin: '0 0 12px' }}>{resetMsg}</p>}
+            <button type="submit" style={{ width: '100%', padding: 10, fontSize: 14, fontWeight: 500, background: C.orange, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+              Update password
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Not signed in
+  if (!user) return <AuthScreen />;
+
   return (
     <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: C.bgPage, minHeight: "100vh", color: C.textDark }}>
       <style>{GLOBAL_STYLES}</style>
@@ -254,7 +367,48 @@ export default function App() {
       {/* Header */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, height: 52, background: C.navy, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ color: C.white, fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
-        <span style={{ color: C.blue, fontSize: 13 }}>Step {wStep + 1} — {WIZARD_STEPS[wStep]}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ color: C.blue, fontSize: 13 }}>Step {wStep + 1} — {WIZARD_STEPS[wStep]}</span>
+          {/* User avatar */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setUserMenuOpen(o => !o)}
+              style={{
+                width: 32, height: 32, borderRadius: '50%', background: C.navy,
+                border: '2px solid rgba(255,255,255,0.4)', color: '#fff',
+                fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {initials}
+            </button>
+            {userMenuOpen && (
+              <div style={{
+                position: 'absolute', top: 44, right: 0, background: '#fff',
+                border: '1px solid #E5E7EB', borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 200,
+              }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid #F3F4F6' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.textDark }}>
+                    {user.user_metadata?.full_name || 'User'}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{user.email}</div>
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  style={{
+                    width: '100%', textAlign: 'left', padding: '10px 14px',
+                    fontSize: 13, background: 'none', border: 'none',
+                    cursor: 'pointer', color: '#DC2626',
+                    fontFamily: 'system-ui, -apple-system, sans-serif',
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Page content */}
