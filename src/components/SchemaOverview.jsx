@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { IMPORT_ORDER, FMX_SCHEMAS } from "../schemas";
+import { FMX_SCHEMAS, getImportOrder, getBaseSchemaType, getSchemaDisplayName } from "../schemas";
+import { normalizeModules } from "../fmxSync";
 import { getImportRows } from "../db";
 import { downloadCSV } from "../utils";
 
@@ -8,7 +9,8 @@ const NAVY = C.navy;
 const ORANGE = C.orange;
 const GREEN = '#1A7F4E';
 
-const DEPS = {
+// Dependency text keyed by base schema type
+const BASE_DEPS = {
   Building:                 "No dependencies",
   Resource:                 "Requires: Building",
   User:                     "Requires: Building",
@@ -21,6 +23,10 @@ const DEPS = {
   "Transportation Request": "Requires: Building (Resource optional)",
   "Accounting Account":     "No dependencies",
 };
+
+function getDeps(schemaType) {
+  return BASE_DEPS[getBaseSchemaType(schemaType)] || '';
+}
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -46,8 +52,12 @@ function Dot() {
   return <span style={{ color: '#D1D5DB', fontSize: 11, userSelect: 'none' }}>·</span>;
 }
 
-export default function SchemaOverview({ imports = [], hasCreds, onSelectType, onResume, onRepush, onViewImport, history = [] }) {
+export default function SchemaOverview({ imports = [], hasCreds, onSelectType, onResume, onRepush, onViewImport, history = [], fmxModules }) {
   const [downloadingId, setDownloadingId] = useState(null);
+
+  // Normalise and build the dynamic import order for this project
+  const mods = normalizeModules(fmxModules);
+  const importOrder = getImportOrder(mods);
 
   // Group imports by schema
   const bySchema = {};
@@ -76,10 +86,10 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
         gridTemplateColumns: 'repeat(3, 1fr)',
         gap: 20,
       }}>
-        {IMPORT_ORDER.map((schema, idx) => {
+        {importOrder.map((schema, idx) => {
           const schemaImports = bySchema[schema] || [];
           const hasImports = schemaImports.length > 0;
-          const fieldCount = FMX_SCHEMAS[schema]?.fields?.length || 0;
+          const fieldCount = FMX_SCHEMAS[getBaseSchemaType(schema)]?.fields?.length || 0;
           const inSession = !!sessionByType[schema];
 
           return (
@@ -108,8 +118,10 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
                     {hasImports ? '✓' : idx + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: NAVY, lineHeight: 1.3 }}>{schema}</div>
-                    <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>{DEPS[schema]}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: NAVY, lineHeight: 1.3 }}>
+                      {getSchemaDisplayName(schema)}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>{getDeps(schema)}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, color: C.textLight }}>{fieldCount} fields</span>

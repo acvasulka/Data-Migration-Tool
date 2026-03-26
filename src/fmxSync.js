@@ -35,11 +35,33 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-// Resolve post-options endpoint — handles both static strings and module-based functions
+// Resolve post-options endpoint — handles static strings, module functions, and
+// module-qualified schema types like "Work Request:maintenance".
 function resolvePostOptionsEndpoint(schemaType, modules) {
+  // Module-qualified types carry the slug in the key itself
+  if (schemaType.startsWith('Work Request:'))
+    return `/v1/${schemaType.split(':')[1]}-requests/post-options`;
+  if (schemaType.startsWith('Schedule Request:'))
+    return `/v1/${schemaType.split(':')[1]}/requests/post-options`;
+  if (schemaType.startsWith('Work Task:'))
+    return `/v1/${schemaType.split(':')[1]}/tasks/post-options`;
   const ep = POST_OPTIONS_ENDPOINTS[schemaType];
   if (!ep) return null;
   return typeof ep === 'function' ? ep(modules) : ep;
+}
+
+// Convert old flat fmx_modules shape { workRequest, scheduling, workTask } to the new
+// array-based shape { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }.
+// Pass-through if already in new format, returns null for falsy input.
+export function normalizeModules(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw.workRequestModules)) return raw; // already new format
+  // Old flat format
+  const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
+  return {
+    workRequestModules:    [{ slug: raw.workRequest || 'maintenance', label: cap(raw.workRequest || 'maintenance') }],
+    scheduleRequestModules: [{ slug: raw.scheduling  || 'scheduling',  label: cap(raw.scheduling  || 'scheduling')  }],
+  };
 }
 
 const POST_OPTIONS_ENDPOINTS = {
@@ -98,11 +120,14 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   }
 }
 
-// Auto-fetch module names from the FMX organization endpoint.
-// Returns { workRequest, scheduling, workTask } slug strings.
-// Falls back to defaults if the org endpoint doesn't expose module info.
+// Auto-fetch module arrays from the FMX organization endpoint.
+// Returns { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }.
+// Falls back to single-entry defaults if the org endpoint fails or returns no data.
 export async function fetchFmxModules(siteUrl, email, password) {
-  const defaults = { workRequest: 'maintenance', scheduling: 'scheduling', workTask: 'maintenance' };
+  const defaults = {
+    workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
+    scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
+  };
   try {
     const res = await fetch('/api/fmx', {
       method: 'POST',
@@ -117,24 +142,39 @@ export async function fetchFmxModules(siteUrl, email, password) {
     const data = await res.json();
     console.log('FMX organization response:', data);
 
-    // Parse work request modules — FMX returns an array of module configs
     const modules = { ...defaults };
 
-    // Try workRequestModules or similar keys
-    const wrModules = data.workRequestModules || data.modules || [];
-    if (Array.isArray(wrModules) && wrModules.length > 0) {
-      // Use the first enabled work request module's URL slug/name
-      const firstEnabled = wrModules.find(m => m.isEnabled !== false) || wrModules[0];
-      if (firstEnabled?.urlSlug || firstEnabled?.name) {
-        modules.workRequest = (firstEnabled.urlSlug || firstEnabled.name).toLowerCase();
-        modules.workTask = modules.workRequest; // work tasks share the same module
+    // Work request modules — FMX returns an array of module configs
+    const wrMods = data.workRequestModules || data.modules || [];
+    if (Array.isArray(wrMods) && wrMods.length > 0) {
+      const enabled = wrMods.filter(m => m.isEnabled !== false);
+      if (enabled.length > 0) {
+        modules.workRequestModules = enabled.map(m => ({
+          slug:  (m.urlSlug || m.name || 'maintenance').toLowerCase().replace(/\s+/g, '-'),
+          label: m.name || m.urlSlug || 'Maintenance',
+        }));
       }
     }
 
-    // Try scheduling module name
-    const schedModule = data.schedulingModule || data.scheduleRequestModule;
-    if (schedModule?.urlSlug || schedModule?.name) {
-      modules.scheduling = (schedModule.urlSlug || schedModule.name).toLowerCase();
+    // Scheduling / schedule-request modules
+    const srMods = data.scheduleRequestModules || data.schedulingModules || [];
+    if (Array.isArray(srMods) && srMods.length > 0) {
+      const enabled = srMods.filter(m => m.isEnabled !== false);
+      if (enabled.length > 0) {
+        modules.scheduleRequestModules = enabled.map(m => ({
+          slug:  (m.urlSlug || m.name || 'scheduling').toLowerCase().replace(/\s+/g, '-'),
+          label: m.name || m.urlSlug || 'Scheduling',
+        }));
+      }
+    } else {
+      // Fall back to single schedulingModule object
+      const schedMod = data.schedulingModule || data.scheduleRequestModule;
+      if (schedMod?.urlSlug || schedMod?.name) {
+        modules.scheduleRequestModules = [{
+          slug:  (schedMod.urlSlug || schedMod.name || 'scheduling').toLowerCase().replace(/\s+/g, '-'),
+          label: schedMod.name || schedMod.urlSlug || 'Scheduling',
+        }];
+      }
     }
 
     return modules;

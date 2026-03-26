@@ -4,6 +4,51 @@ export const IMPORT_ORDER = [
   "Transportation Request", "Accounting Account",
 ];
 
+// ── Module-aware schema type helpers ────────────────────────────────────────
+
+/** Strips the ":slug" suffix from a module-qualified schema type.
+ *  e.g. "Work Request:maintenance" → "Work Request" */
+export function getBaseSchemaType(schemaType) {
+  if (!schemaType) return schemaType;
+  const idx = schemaType.indexOf(':');
+  return idx === -1 ? schemaType : schemaType.slice(0, idx);
+}
+
+/** Returns the module slug portion, or null for static types.
+ *  e.g. "Work Request:maintenance" → "maintenance" */
+export function getSchemaModuleSlug(schemaType) {
+  if (!schemaType) return null;
+  const idx = schemaType.indexOf(':');
+  return idx === -1 ? null : schemaType.slice(idx + 1);
+}
+
+/** Human-readable card title for module-qualified types.
+ *  e.g. "Work Request:maintenance" → "Work Request — Maintenance" */
+export function getSchemaDisplayName(schemaType) {
+  const base = getBaseSchemaType(schemaType);
+  const slug = getSchemaModuleSlug(schemaType);
+  if (!slug) return schemaType;
+  return `${base} — ${slug.charAt(0).toUpperCase() + slug.slice(1)}`;
+}
+
+/** Builds a dynamic import order from fmxModules.
+ *  Each work-request module becomes its own "Work Request:<slug>" entry (and a matching
+ *  "Work Task:<slug>" entry), and each scheduling module becomes "Schedule Request:<slug>".
+ *  Falls back to default single-module behaviour when fmxModules is null/undefined. */
+export function getImportOrder(fmxModules) {
+  const base = ["Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory"];
+  const wrMods = fmxModules?.workRequestModules  || [{ slug: 'maintenance', label: 'Maintenance' }];
+  const srMods = fmxModules?.scheduleRequestModules || [{ slug: 'scheduling',  label: 'Scheduling'  }];
+  return [
+    ...base,
+    ...wrMods.map(m => `Work Request:${m.slug}`),
+    ...srMods.map(m => `Schedule Request:${m.slug}`),
+    ...wrMods.map(m => `Work Task:${m.slug}`),   // work tasks mirror work-request modules
+    "Transportation Request",
+    "Accounting Account",
+  ];
+}
+
 export const FMX_SCHEMAS = {
   Building: {
     fields: [

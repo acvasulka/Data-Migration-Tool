@@ -13,8 +13,18 @@ const FMX_ENDPOINTS = {
   'Accounting Account':     '/v1/accounting-accounts',
 };
 
-// Resolves the endpoint for a schema type, handling both static strings and module-based functions.
+// Resolves the endpoint for a schema type.
+// Handles module-qualified types like "Work Request:maintenance" (slug embedded in key),
+// legacy module-function entries, and static string endpoints.
 export function resolveEndpoint(schemaType, modules) {
+  // Module-qualified types — slug is embedded in the key after ":"
+  if (schemaType.startsWith('Work Request:'))
+    return `/v1/${schemaType.split(':')[1]}-requests`;
+  if (schemaType.startsWith('Schedule Request:'))
+    return `/v1/${schemaType.split(':')[1]}/requests`;
+  if (schemaType.startsWith('Work Task:'))
+    return `/v1/${schemaType.split(':')[1]}/tasks`;
+  // Static / legacy function-based entries
   const ep = FMX_ENDPOINTS[schemaType];
   if (!ep) return null;
   return typeof ep === 'function' ? ep(modules) : ep;
