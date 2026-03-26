@@ -16,13 +16,13 @@ function formatDate(isoStr) {
   return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
 }
 
-export default function ProjectChecklist({ history, projectId }) {
+export default function ProjectChecklist({ history, projectId, refreshKey }) {
   const [dbStatus, setDbStatus] = useState({});
 
   useEffect(() => {
     if (!projectId) return;
     getProjectStatus(projectId).then(s => setDbStatus(s || {}));
-  }, [projectId]);
+  }, [projectId, refreshKey]);
 
   if (!projectId) {
     return (

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials } from '../db';
+import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials, getProjectImports, getImportRows, renameImport } from '../db';
 import { encodeCredentials, testFmxConnection } from '../fmxSync';
+import { downloadCSV } from '../utils';
 import { IMPORT_ORDER } from '../schemas';
 
 const NAVY = '#041662';
@@ -44,7 +45,7 @@ function DocumentPlusIcon() {
   );
 }
 
-export default function ProjectScreen({ onSelectProject }) {
+export default function ProjectScreen({ onSelectProject, onResumeImport }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -71,6 +72,14 @@ export default function ProjectScreen({ onSelectProject }) {
   const [createConnLoading, setCreateConnLoading] = useState(false);
   const [createConnVerified, setCreateConnVerified] = useState(false);
 
+  // import history
+  const [imports, setImports] = useState([]);
+  const [expandedSchema, setExpandedSchema] = useState(null);
+  const [viewModal, setViewModal] = useState(null); // { rec, rows } | null
+  const [viewLoading, setViewLoading] = useState(false);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameVal, setRenameVal] = useState('');
+
   // update credentials panel (for selected project detail)
   const [showUpdateCreds, setShowUpdateCreds] = useState(false);
   const [updateEmail, setUpdateEmail] = useState('');
@@ -96,12 +105,55 @@ export default function ProjectScreen({ onSelectProject }) {
     setStatusLoading(false);
   };
 
+  const loadImports = async (projectId) => {
+    const data = await getProjectImports(projectId);
+    setImports(data);
+  };
+
   const handleSelectProject = (p) => {
     setSelected(p);
     setMode('idle');
     setDeleteConfirm(false);
     setEditingName(false);
+    setExpandedSchema(null);
+    setRenamingId(null);
     loadStatus(p.id);
+    loadImports(p.id);
+  };
+
+  const handleDownloadImport = async (rec) => {
+    const rows = await getImportRows(rec.id);
+    if (!rows || rows.length === 0) return;
+    const headers = Object.keys(rows[0]);
+    const filename = `${rec.import_name || rec.schema_type}.csv`;
+    downloadCSV(filename, headers, rows);
+  };
+
+  const handleViewImport = async (rec) => {
+    setViewLoading(true);
+    setViewModal({ rec, rows: [] });
+    const rows = await getImportRows(rec.id);
+    setViewModal({ rec, rows: rows || [] });
+    setViewLoading(false);
+  };
+
+  const handleResumeImport = async (rec, step = 3) => {
+    const rows = await getImportRows(rec.id);
+    if (onResumeImport) {
+      onResumeImport({
+        schemaType: rec.schema_type,
+        mappedRows: rows || [],
+        mapping: rec.mapping_snapshot || {},
+        wStep: step,
+      });
+    }
+  };
+
+  const handleRenameSubmit = async (id) => {
+    if (renameVal.trim()) await renameImport(id, renameVal.trim());
+    setRenamingId(null);
+    setRenameVal('');
+    if (selected) loadImports(selected.id);
   };
 
   const handleCreate = async (e) => {
@@ -199,6 +251,55 @@ export default function ProjectScreen({ onSelectProject }) {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .proj-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
       `}</style>
+
+      {/* View modal */}
+      {viewModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div style={{ background: '#fff', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', width: '100%', maxWidth: 900, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <span style={{ fontWeight: 700, fontSize: 15, color: NAVY }}>{viewModal.rec.import_name || viewModal.rec.schema_type}</span>
+                <span style={{ marginLeft: 10, fontSize: 12, color: '#9CA3AF' }}>{viewModal.rec.schema_type} · {(viewModal.rec.row_count_stored ?? viewModal.rec.row_count) || 0} rows</span>
+              </div>
+              <button onClick={() => setViewModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ overflow: 'auto', flex: 1, padding: '0' }}>
+              {viewLoading
+                ? <div style={{ padding: 32, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Loading…</div>
+                : viewModal.rows.length === 0
+                  ? <div style={{ padding: 32, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>No row data stored for this import.</div>
+                  : <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: '#F9FAFB', position: 'sticky', top: 0 }}>
+                          {Object.keys(viewModal.rows[0]).map(h => (
+                            <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, color: NAVY, borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {viewModal.rows.map((row, i) => (
+                          <tr key={i} style={{ borderBottom: '1px solid #F3F4F6', background: i % 2 === 0 ? '#fff' : '#FAFAFA' }}>
+                            {Object.keys(viewModal.rows[0]).map(h => (
+                              <td key={h} style={{ padding: '6px 10px', color: '#374151', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row[h] ?? ''}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+              }
+            </div>
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => { if (viewModal.rows.length > 0) { const h = Object.keys(viewModal.rows[0]); downloadCSV(`${viewModal.rec.import_name || viewModal.rec.schema_type}.csv`, h, viewModal.rows); } }}
+                style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, background: NAVY, color: '#fff', border: 'none', cursor: 'pointer' }}
+              >
+                Download CSV
+              </button>
+              <button onClick={() => setViewModal(null)} style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer' }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <div style={{ height: 52, background: NAVY, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
@@ -421,6 +522,76 @@ export default function ProjectScreen({ onSelectProject }) {
                   );
                 })}
               </div>
+
+              {/* Saved imports history */}
+              {imports.length > 0 && (() => {
+                const bySchema = {};
+                for (const imp of imports) {
+                  if (!bySchema[imp.schema_type]) bySchema[imp.schema_type] = [];
+                  bySchema[imp.schema_type].push(imp);
+                }
+                const hasCreds = !!selected.fmx_credentials;
+                const btnStyle = (color = NAVY) => ({
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  fontSize: 11, color, padding: '2px 4px', fontFamily: 'system-ui, -apple-system, sans-serif',
+                });
+                return (
+                  <div style={{ marginBottom: 20 }}>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+                      Saved imports · {imports.length}
+                    </p>
+                    {Object.entries(bySchema).map(([schema, recs]) => (
+                      <div key={schema} style={{ marginBottom: 6 }}>
+                        <button
+                          onClick={() => setExpandedSchema(expandedSchema === schema ? null : schema)}
+                          style={{ ...btnStyle(), fontWeight: 600, fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, width: '100%', textAlign: 'left', marginBottom: 4 }}
+                        >
+                          <span style={{ fontSize: 10, display: 'inline-block', transform: expandedSchema === schema ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                          {schema} <span style={{ fontWeight: 400, color: '#9CA3AF' }}>({recs.length})</span>
+                        </button>
+                        {expandedSchema === schema && recs.map(rec => (
+                          <div key={rec.id} style={{ marginLeft: 14, marginBottom: 8, padding: '8px 10px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                            {renamingId === rec.id
+                              ? <input
+                                  autoFocus
+                                  value={renameVal}
+                                  onChange={e => setRenameVal(e.target.value)}
+                                  onBlur={() => handleRenameSubmit(rec.id)}
+                                  onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenamingId(null); } }}
+                                  style={{ fontSize: 12, fontWeight: 600, border: 'none', borderBottom: `1px solid ${ORANGE}`, outline: 'none', background: 'transparent', width: '100%', marginBottom: 2 }}
+                                />
+                              : <div
+                                  onClick={() => { setRenamingId(rec.id); setRenameVal(rec.import_name || rec.schema_type); }}
+                                  style={{ fontSize: 12, fontWeight: 600, color: NAVY, cursor: 'text', marginBottom: 2 }}
+                                  title="Click to rename"
+                                >
+                                  {rec.import_name || rec.schema_type}
+                                </div>
+                            }
+                            <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 6 }}>
+                              {(rec.row_count_stored ?? rec.row_count) || 0} rows
+                              {rec.truncated ? ' (capped at 5,000)' : ''}
+                              {' · '}{new Date(rec.completed_at).toLocaleDateString()}
+                              {rec.source_filename ? ` · ${rec.source_filename}` : ''}
+                            </div>
+                            <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                              <button onClick={() => handleDownloadImport(rec)} style={btnStyle(NAVY)}>↓ Download</button>
+                              <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
+                              <button onClick={() => handleViewImport(rec)} style={btnStyle(NAVY)}>👁 View</button>
+                              <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
+                              <button onClick={() => handleResumeImport(rec, 3)} style={btnStyle(ORANGE)}>▶ Resume</button>
+                              {hasCreds && (<>
+                                <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
+                                <button onClick={() => handleResumeImport(rec, 4)} style={btnStyle('#1A7F4E')}>⬆ Re-push</button>
+                              </>)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '0 0 12px' }} />
 

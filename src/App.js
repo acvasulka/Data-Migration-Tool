@@ -139,6 +139,8 @@ export default function App() {
   const [savedRules, setSavedRules] = useState({});
   const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
+  const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
+  const [activeImportId, setActiveImportId] = useState(null);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -380,6 +382,25 @@ export default function App() {
         [st]: [...new Set([...(prev[st] || []), ...vals])],
       }));
     }
+    setChecklistRefreshKey(k => k + 1);
+  };
+
+  const handleResumeImport = ({ schemaType: st, mappedRows: rows, mapping: m, wStep: step = 3 }) => {
+    // Derive any extra columns from saved rows that aren't in the static schema
+    const schemaFieldNames = new Set((FMX_SCHEMAS[st]?.fields || []).map(f => f.name));
+    const rowKeys = Object.keys((rows && rows[0]) || {});
+    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
+    setSchemaType(st);
+    setMapping(m || {});
+    setMappedRows(rows || []);
+    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
+    setDynamicRates([]);
+    setTransformRules({});
+    setCertified(false);
+    setPersistentRefs(null);
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
+    setShowProjectScreen(false);
+    setWStep(step);
   };
 
   const reset = () => {
@@ -452,6 +473,7 @@ export default function App() {
           setSelectedProject(project);
           setShowProjectScreen(false);
         }}
+        onResumeImport={handleResumeImport}
       />
     );
   }
@@ -627,6 +649,7 @@ export default function App() {
                 userEmail={user?.email}
                 customFieldIdMap={fmxCustomFieldIdMap}
                 customFieldMetadata={fmxSyncData?.customFields || []}
+                fileInfo={fileInfo}
               />
             )}
 
@@ -656,7 +679,7 @@ export default function App() {
             )}
           </div>
 
-          <ProjectChecklist history={history} projectId={selectedProject?.id} />
+          <ProjectChecklist history={history} projectId={selectedProject?.id} refreshKey={checklistRefreshKey} />
         </div>
       </div>
     </div>

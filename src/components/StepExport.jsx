@@ -19,6 +19,7 @@ export default function StepExport({
   userEmail,
   customFieldIdMap,
   customFieldMetadata,
+  fileInfo,
 }) {
   const [exportFormat, setExportFormat] = useState("csv");
   const [showFMXModal, setShowFMXModal] = useState(false);
@@ -83,7 +84,10 @@ export default function StepExport({
         });
 
         if (fieldPatterns.length > 0) saves.push(saveDataPatterns(schemaType, fieldPatterns));
-        if (projectId) saves.push(completeImport(projectId, schemaType, mappedRows.length, mapping, referenceValues));
+        if (projectId) saves.push(completeImport(
+          projectId, schemaType, mappedRows.length, mapping, referenceValues,
+          mappedRows, null, fileInfo?.name || null
+        ));
 
         await Promise.all(saves);
 
