@@ -111,6 +111,7 @@ export default function StepExport({
           fmxSiteUrl={selectedProject?.fmx_site_url || ''}
           fmxEmail={selectedProject?.fmx_api_email || ''}
           fmxCredentials={selectedProject?.fmx_credentials || ''}
+          fmxModules={selectedProject?.fmx_modules || {}}
           customFieldIdMap={customFieldIdMap || {}}
           customFieldMetadata={customFieldMetadata || []}
           onClose={() => setShowFMXModal(false)}

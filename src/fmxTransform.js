@@ -1,6 +1,11 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 import { getFieldTypeCategory } from './fmxFieldTypes';
 
+// Equipment assetCondition is an integer enum in the FMX API
+const ASSET_CONDITION_MAP = {
+  'unknown': 0, 'excellent': 1, 'good': 2, 'fair': 3, 'poor': 4, 'retired': 5,
+};
+
 function coerceCustomFieldValue(value, fieldType) {
   if (value === null || value === undefined || value === '') return null;
   const category = getFieldTypeCategory(fieldType);
@@ -49,6 +54,19 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
       const id = parseInt(fieldName.replace('customField_', ''), 10);
       if (!isNaN(id)) {
         customFields.push({ customFieldID: id, value: String(value) });
+      }
+      return;
+    }
+
+    // Special handling: Equipment Asset Condition → integer enum
+    if (schemaType === 'Equipment' && fieldName === 'Asset Condition') {
+      const normalized = String(value).toLowerCase().trim();
+      const enumVal = ASSET_CONDITION_MAP[normalized];
+      if (enumVal !== undefined) {
+        payload['assetCondition'] = enumVal;
+      } else {
+        const parsed = parseInt(value, 10);
+        payload['assetCondition'] = isNaN(parsed) ? 0 : parsed;
       }
       return;
     }

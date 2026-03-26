@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { updateProject, saveProjectCredentials } from "../db";
-import { encodeCredentials, testFmxConnection } from "../fmxSync";
+import { updateProject, saveProjectCredentials, updateProjectModules } from "../db";
+import { encodeCredentials, testFmxConnection, fetchFmxModules } from "../fmxSync";
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -12,6 +12,12 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   const [editingUrl, setEditingUrl] = useState(false);
   const [urlVal, setUrlVal] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Modules
+  const [modulesDetecting, setModulesDetecting] = useState(false);
+  const [modulesMsg, setModulesMsg] = useState('');
+  const [editingModules, setEditingModules] = useState(false);
+  const [modulesVal, setModulesVal] = useState({});
 
   // Credentials
   const [showCredForm, setShowCredForm] = useState(false);
@@ -69,6 +75,39 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
     setShowCredForm(false);
     setCredEmail(''); setCredPassword(''); setCredConnStatus(null);
     setCredSaving(false);
+  };
+
+  const handleAutoDetectModules = async () => {
+    const { email, password } = (() => {
+      try {
+        if (!selectedProject?.fmx_credentials) return { email: '', password: '' };
+        const decoded = atob(selectedProject.fmx_credentials);
+        const idx = decoded.indexOf(':');
+        return idx === -1
+          ? { email: '', password: '' }
+          : { email: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
+      } catch { return { email: '', password: '' }; }
+    })();
+    const url = selectedProject?.fmx_site_url;
+    if (!url || !email) { setModulesMsg('Site URL and credentials are required.'); return; }
+    setModulesDetecting(true);
+    setModulesMsg('');
+    try {
+      const modules = await fetchFmxModules(url, email, password);
+      const updated = await updateProjectModules(selectedProject.id, modules);
+      if (updated && onProjectUpdated) onProjectUpdated(updated);
+      setModulesMsg(`✓ Detected: work requests → "${modules.workRequest}", scheduling → "${modules.scheduling}", work tasks → "${modules.workTask}"`);
+    } catch {
+      setModulesMsg('✕ Could not auto-detect modules.');
+    }
+    setModulesDetecting(false);
+  };
+
+  const handleSaveModules = async () => {
+    const updated = await updateProjectModules(selectedProject.id, modulesVal);
+    if (updated && onProjectUpdated) onProjectUpdated(updated);
+    setEditingModules(false);
+    setModulesMsg('');
   };
 
   return (
@@ -150,7 +189,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
       </div>
 
       {/* API Credentials */}
-      <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '20px 24px' }}>
+      <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '20px 24px', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <label style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             API Credentials
@@ -204,6 +243,87 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
           </div>
         )}
       </div>
+      {/* FMX Modules — only show when credentials are saved */}
+      {selectedProject?.fmx_credentials && (
+        <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '20px 24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              FMX Module Names
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {!editingModules && (
+                <button
+                  onClick={() => { setEditingModules(true); setModulesVal({ ...(selectedProject?.fmx_modules || { workRequest: 'maintenance', scheduling: 'scheduling', workTask: 'maintenance' }) }); setModulesMsg(''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}
+                >
+                  Edit
+                </button>
+              )}
+              <button
+                onClick={handleAutoDetectModules}
+                disabled={modulesDetecting}
+                style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {modulesDetecting ? 'Detecting…' : 'Auto-detect'}
+              </button>
+            </div>
+          </div>
+          <p style={{ margin: '0 0 12px', fontSize: 12, color: '#6B7280' }}>
+            FMX uses org-specific URL slugs for Work Requests, Schedule Requests, and Work Tasks. Auto-detect fetches these from your organization's API, or override them manually.
+          </p>
+
+          {editingModules ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[
+                { key: 'workRequest', label: 'Work Request module' },
+                { key: 'scheduling', label: 'Scheduling module' },
+                { key: 'workTask', label: 'Work Task module' },
+              ].map(({ key, label }) => (
+                <div key={key}>
+                  <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>{label}</label>
+                  <input
+                    style={{ ...inputStyle, fontSize: 13 }}
+                    value={modulesVal[key] || ''}
+                    onChange={e => setModulesVal(v => ({ ...v, [key]: e.target.value }))}
+                    placeholder={key === 'scheduling' ? 'scheduling' : 'maintenance'}
+                  />
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button onClick={handleSaveModules}
+                  style={{ padding: '8px 16px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
+                  Save
+                </button>
+                <button onClick={() => { setEditingModules(false); setModulesMsg(''); }}
+                  style={{ padding: '8px 14px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 10 }}>
+              {[
+                { label: 'Work Requests', key: 'workRequest' },
+                { label: 'Scheduling', key: 'scheduling' },
+                { label: 'Work Tasks', key: 'workTask' },
+              ].map(({ label, key }) => (
+                <div key={key} style={{ flex: 1, background: '#F3F4F6', borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 11, color: '#6B7280', fontWeight: 600, marginBottom: 2 }}>{label}</div>
+                  <div style={{ fontSize: 13, color: NAVY, fontWeight: 600 }}>
+                    {selectedProject?.fmx_modules?.[key] || <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>default</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {modulesMsg && (
+            <p style={{ margin: '10px 0 0', fontSize: 12, color: modulesMsg.startsWith('✓') ? GREEN : '#DC2626' }}>
+              {modulesMsg}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

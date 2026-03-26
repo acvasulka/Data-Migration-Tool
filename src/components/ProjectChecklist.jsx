@@ -16,8 +16,9 @@ const PULSE_STYLE = `
 `;
 
 const DEPENDENCY_CHAINS = [
-  { provider: 'Building',       consumers: ['Resource', 'User', 'Equipment', 'Inventory'] },
+  { provider: 'Building',       consumers: ['Resource', 'User', 'Equipment', 'Inventory', 'Work Request', 'Schedule Request', 'Work Task', 'Transportation Request'] },
   { provider: 'Equipment Type', consumers: ['Equipment'] },
+  { provider: 'Resource',       consumers: ['Schedule Request', 'Transportation Request'] },
 ];
 
 function formatDate(isoStr) {
