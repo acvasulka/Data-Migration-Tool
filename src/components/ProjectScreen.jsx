@@ -62,6 +62,8 @@ export default function ProjectScreen({ onSelectProject }) {
   const [fmxApiEmail, setFmxApiEmail] = useState('');
   const [fmxApiPassword, setFmxApiPassword] = useState('');
   const [apiExpanded, setApiExpanded] = useState(false);
+  const [apiEmail, setApiEmail] = useState('');
+  const [apiPassword, setApiPassword] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [createConnStatus, setCreateConnStatus] = useState(null); // null | 'ok' | 'fail'
