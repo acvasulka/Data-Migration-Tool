@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { FMX_SCHEMAS } from "./schemas";
+import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { fetchPostOptions } from "./fmxApi";
+import { getMappingSuggestions, getSavedRulesForSchema } from "./db";
+import { syncFmxDataForProject } from "./fmxSync";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectChecklist from "./components/ProjectChecklist";
@@ -130,7 +132,12 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [transformModal, setTransformModal] = useState(null);
+  const [transformModal, setTransformModal] = useState(null); // { field, savedRule } | null
+  const [memoryMatches, setMemoryMatches] = useState({});
+  const [mappingSources, setMappingSources] = useState({});
+  const [savedRules, setSavedRules] = useState({});
+  const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
+  const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const fileRef = useRef();
 
   useEffect(() => {
@@ -172,20 +179,43 @@ export default function App() {
     return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   })();
 
+  const fmxCustomFieldIdMap = useMemo(() => {
+    const map = {};
+    for (const cf of fmxSyncData.customFields || []) {
+      if (cf.id && cf.name) map[cf.name] = cf.id;
+    }
+    return map;
+  }, [fmxSyncData.customFields]);
+
   const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
-  const allFields = schema ? [
-    ...schema.fields,
-    ...customFields.filter(cf => cf.name).map(cf => ({
-      name: cf.name, required: cf.required || false, type: cf.type || "string", group: "Custom Fields",
-    })),
+
+  // Use API-driven field list when credentials are present and sync has completed
+  const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
+  const baseFields = schemaType
+    ? (hasApiFields && FMX_API_STANDARD_FIELDS[schemaType]
+        ? FMX_API_STANDARD_FIELDS[schemaType]
+        : (schema?.fields || []))
+    : [];
+
+  const allFields = schemaType ? [
+    ...baseFields,
+    // Manual custom fields only when not using API-driven field list
+    ...(!hasApiFields ? customFields.filter(cf => cf.name).map(cf => ({
+      name: cf.name, required: cf.required || false, type: "string", group: "Custom Fields",
+    })) : []),
     ...dynamicRates.flatMap((_, i) => [
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
       { name: `Rate ${i + 1} Unit`, required: false, type: "string", group: "Scheduling Rates" },
     ]),
+    // FMX custom fields from live sync (always appended; empty when no credentials)
+    ...(fmxSyncData.customFields || []).map(cf => ({
+      name: cf.name, required: false, type: "string", group: "FMX Custom Fields",
+      isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
+    })),
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
-  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, importedData) : {};
+  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, persistentRefs ?? importedData) : {};
   const hasErrors = Object.values(cellErrors).some(v => v === "error");
 
   const groupedFields = {};
@@ -197,18 +227,20 @@ export default function App() {
 
   const canProceed = !hasErrors || certified;
 
-  const handleSelectType = async t => {
+  const handleFmxSync = async (type) => {
+    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
+    if (!selectedProject?.fmx_credentials) return;
+    setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
+    const result = await syncFmxDataForProject(selectedProject, type);
+    setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
+  };
+
+  const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
-    setTransformRules({}); setCertified(false); setFileInfo(null); setWStep(1);
-    if (selectedProject?.fmx_site_url) {
-      const fields = await fetchPostOptions(
-        selectedProject.fmx_site_url,
-        selectedProject.fmx_api_email,
-        selectedProject.fmx_api_password,
-        t
-      );
-      if (fields) setCustomFields(fields);
-    }
+    setTransformRules({}); setCertified(false); setFileInfo(null);
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
+    setWStep(1);
+    handleFmxSync(t);
   };
 
   const processCSV = async (csvStr, info) => {
@@ -218,16 +250,54 @@ export default function App() {
     setAiLoading(true);
     const suggested = suggestMapping(parsed.headers, FMX_SCHEMAS[schemaType].fields);
     try {
-      const res = await fetch("/api/claude", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-        })
+      const [aiRes, memMatches, rules] = await Promise.all([
+        fetch("/api/claude", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 1000,
+            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+          })
+        }).then(r => r.json()).catch(() => null),
+        getMappingSuggestions(schemaType, parsed.headers),
+        getSavedRulesForSchema(schemaType),
+      ]);
+
+      // Parse AI result
+      let aiResult = {};
+      if (aiRes) {
+        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        try { aiResult = JSON.parse(clean); } catch {}
+      }
+
+      // Build final mapping: heuristic < AI < memory (confidence >= 2 wins)
+      const finalMapping = { ...suggested, ...aiResult };
+      const aiSuggestedFields = new Set(
+        Object.entries(aiResult).filter(([, v]) => v).map(([k]) => k)
+      );
+
+      // Apply memory overrides
+      Object.entries(memMatches).forEach(([sourceHeader, match]) => {
+        if (match.confidence >= 2) finalMapping[match.fmxField] = sourceHeader;
       });
-      const data = await res.json();
-      const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
-      setMapping({ ...suggested, ...JSON.parse(clean) });
+
+      // Build source attribution for badge display
+      const sources = {};
+      Object.entries(finalMapping).forEach(([fmxField, sourceHeader]) => {
+        if (!sourceHeader) return;
+        const memMatch = memMatches[sourceHeader];
+        if (memMatch?.fmxField === fmxField && memMatch?.confidence >= 2) {
+          sources[fmxField] = 'memory';
+        } else if (aiSuggestedFields.has(fmxField)) {
+          sources[fmxField] = 'ai';
+        } else {
+          sources[fmxField] = 'auto';
+        }
+      });
+
+      setMemoryMatches(memMatches);
+      setMappingSources(sources);
+      setSavedRules(rules);
+      setMapping(finalMapping);
     } catch { setMapping(suggested); }
     setAiLoading(false);
     setWStep(2);
@@ -290,10 +360,34 @@ export default function App() {
     }
   };
 
+  const openTransformModal = (fieldName, savedRule = null) => {
+    setTransformModal({ field: fieldName, savedRule });
+  };
+
+  const handleRefsLoaded = (merged) => {
+    setPersistentRefs(merged);
+  };
+
+  const handleImportComplete = ({ schemaType: st, referenceValues }) => {
+    const refField = FMX_SCHEMAS[st]?.crossRef;
+    if (refField) {
+      const vals = referenceValues
+        .filter(r => r.fieldName === refField)
+        .map(r => r.value);
+      setImportedData(prev => ({
+        ...prev,
+        [st]: [...new Set([...(prev[st] || []), ...vals])],
+      }));
+    }
+  };
+
   const reset = () => {
     setWStep(0); setSchemaType(""); setCsv(null); setFileInfo(null); setMapping({});
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
+    setMemoryMatches({}); setMappingSources({}); setSavedRules({});
+    setPersistentRefs(null);
+    setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
   };
 
   const goToProjects = () => {
@@ -368,10 +462,11 @@ export default function App() {
       {preview && <DataPreviewModal header={preview.header} values={preview.values} onClose={() => setPreview(null)} />}
       {transformModal && (
         <TransformModal
-          fieldName={transformModal}
+          fieldName={transformModal.field}
           csvHeaders={csv?.headers || []}
-          currentRule={transformRules[transformModal]}
-          onSave={rule => { setTransformRules(r => ({ ...r, [transformModal]: { ...rule, type: "formula" } })); setTransformModal(null); }}
+          currentRule={transformRules[transformModal.field]}
+          savedRule={transformModal.savedRule}
+          onSave={rule => { setTransformRules(r => ({ ...r, [transformModal.field]: { ...rule, type: "formula" } })); setTransformModal(null); }}
           onClose={() => setTransformModal(null)}
         />
       )}
@@ -468,6 +563,8 @@ export default function App() {
                 setDragOver={setDragOver}
                 fileRef={fileRef}
                 handleFileAndMap={handleFileAndMap}
+                fmxSyncLoading={fmxSyncData.loading}
+                fmxSyncFromCache={fmxSyncData.fromCache}
               />
             )}
 
@@ -487,7 +584,11 @@ export default function App() {
                 setDynamicRates={setDynamicRates}
                 fileInfo={fileInfo}
                 setPreview={setPreview}
-                setTransformModal={setTransformModal}
+                openTransformModal={openTransformModal}
+                memoryMatches={memoryMatches}
+                mappingSources={mappingSources}
+                savedRules={savedRules}
+                fmxSyncData={fmxSyncData}
               />
             )}
 
@@ -502,6 +603,10 @@ export default function App() {
                 certified={certified}
                 setCertified={setCertified}
                 applyNLEdit={applyNLEdit}
+                onRowsUpdated={(rows) => setMappedRows(rows)}
+                projectId={selectedProject?.id}
+                importedData={importedData}
+                onRefsLoaded={handleRefsLoaded}
               />
             )}
 
@@ -513,6 +618,14 @@ export default function App() {
                 mappedHeaders={mappedHeaders}
                 allFields={allFields}
                 handleExport={handleExport}
+                mapping={mapping}
+                transformRules={transformRules}
+                projectId={selectedProject?.id}
+                onImportComplete={handleImportComplete}
+                selectedProject={selectedProject}
+                userEmail={user?.email}
+                customFieldIdMap={fmxCustomFieldIdMap}
+                customFieldMetadata={fmxSyncData?.customFields || []}
               />
             )}
 

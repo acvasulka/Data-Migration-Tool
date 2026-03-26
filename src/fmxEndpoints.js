@@ -1,0 +1,118 @@
+const FMX_ENDPOINTS = {
+  'Building':       '/v1/buildings',
+  'Resource':       '/v1/resources',
+  'User':           '/v1/users',
+  'Equipment Type': '/v1/equipment-types',
+  'Equipment':      '/v1/equipment',
+  'Inventory':      '/v1/inventory',
+};
+
+// Maps FMX import schema field names → FMX API property names
+const FMX_FIELD_MAP = {
+  'Building': {
+    'Name':                       'name',
+    'Address':                    'address',
+    'Latitude':                   'latitude',
+    'Longitude':                  'longitude',
+    'Phone':                      'phone',
+    'Tax rate':                   'taxRate',
+    'Sunday From':                'sundayOperatingHoursStartTime',
+    'Sunday To':                  'sundayOperatingHoursEndTime',
+    'Monday From':                'mondayOperatingHoursStartTime',
+    'Monday To':                  'mondayOperatingHoursEndTime',
+    'Tuesday From':               'tuesdayOperatingHoursStartTime',
+    'Tuesday To':                 'tuesdayOperatingHoursEndTime',
+    'Wednesday From':             'wednesdayOperatingHoursStartTime',
+    'Wednesday To':               'wednesdayOperatingHoursEndTime',
+    'Thursday From':              'thursdayOperatingHoursStartTime',
+    'Thursday To':                'thursdayOperatingHoursEndTime',
+    'Friday From':                'fridayOperatingHoursStartTime',
+    'Friday To':                  'fridayOperatingHoursEndTime',
+    'Saturday From':              'saturdayOperatingHoursStartTime',
+    'Saturday To':                'saturdayOperatingHoursEndTime',
+  },
+  'Equipment Type': {
+    'Name':                       'name',
+    'Track meters':               'trackMeters',
+    'Track downtime':             'trackDowntime',
+    'Track asset lifespan':       'trackAssetLifespan',
+  },
+  'Equipment': {
+    'Tag':                        'tag',
+    'Location':                   'locationName',
+    'Barcode ID':                 'barcodeID',
+    'Cooling Capacity':           'coolingCapacity',
+    'Date of Manufacture':        'dateOfManufacture',
+    'Expected Replacement Cost':  'expectedReplacementCost',
+    'Expected Replacement Date':  'expectedReplacementDate',
+    'Filter size':                'filterSize',
+    'Heating Capacity':           'heatingCapacity',
+    'Installed Cost':             'installedCost',
+    'Installed Date':             'installedDate',
+    'Manufacturer':               'manufacturer',
+    'Model number':               'modelNumber',
+    'Serial number':              'serialNumber',
+    'Asset Condition':            'assetCondition',
+    'Budget Category':            'budgetCategory',
+  },
+  'Inventory': {
+    'Name':                       'name',
+    'Location':                   'locationName',
+    'SKU':                        'sku',
+    'Current quantity':           'currentQuantity',
+    'Minimum quantity':           'minimumQuantity',
+    'Unit price':                 'unitPrice',
+    'Barcode Number':             'barcodeNumber',
+  },
+  'Resource': {
+    'Name':                       'name',
+    'Address':                    'address',
+    'Latitude':                   'latitude',
+    'Longitude':                  'longitude',
+    'Location':                   'locationName',
+    'Resource type':              'resourceType',
+    'Capacity':                   'capacity',
+    'Quantity':                   'quantity',
+    'Sunday From':                'sundayAvailabilityStartTime',
+    'Sunday To':                  'sundayAvailabilityEndTime',
+    'Monday From':                'mondayAvailabilityStartTime',
+    'Monday To':                  'mondayAvailabilityEndTime',
+    'Tuesday From':               'tuesdayAvailabilityStartTime',
+    'Tuesday To':                 'tuesdayAvailabilityEndTime',
+    'Wednesday From':             'wednesdayAvailabilityStartTime',
+    'Wednesday To':               'wednesdayAvailabilityEndTime',
+    'Thursday From':              'thursdayAvailabilityStartTime',
+    'Thursday To':                'thursdayAvailabilityEndTime',
+    'Friday From':                'fridayAvailabilityStartTime',
+    'Friday To':                  'fridayAvailabilityEndTime',
+    'Saturday From':              'saturdayAvailabilityStartTime',
+    'Saturday To':                'saturdayAvailabilityEndTime',
+  },
+  'User': {
+    'Name':                       'name',
+    'Email':                      'email',
+    'Phone':                      'phone',
+    'Labor rate':                 'laborRate',
+    'Is contact':                 'isContact',
+    'Is supplier':                'isSupplier',
+  },
+};
+
+// Fields requiring an ID lookup before pushing
+const FMX_ID_LOOKUP_FIELDS = {
+  'Equipment': {
+    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
+    'Type':     { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID', searchParam: 'search' },
+  },
+  'Inventory': {
+    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
+  },
+  'Resource': {
+    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
+  },
+  'User': {
+    'Building access': { endpoint: '/v1/buildings', idField: 'buildingIDs', searchParam: 'search', isArray: true },
+  },
+};
+
+export { FMX_ENDPOINTS, FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS };

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
+import { getTooltipText } from "../fmxFieldTypes";
 
 export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell }) {
   const [editCell, setEditCell] = useState(null);
@@ -95,11 +96,13 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
             <tr style={{ background: C.navy }}>
               <th style={{ width: 32, minWidth: 32, padding: "7px 8px", borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)" }}></th>
               {headers.map(h => {
-                const f = allFields.find(f => f.name === h);
+                const f = allFields?.find(f => f.name === h);
                 const w = widths[h] || 130;
+                const tooltip = getTooltipText(f);
                 return (
-                  <th key={h} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: w, minWidth: w, overflow: "hidden", textOverflow: "ellipsis", color: C.white, position: "relative", userSelect: "none" }}>
+                  <th key={h} title={tooltip || undefined} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: w, minWidth: w, overflow: "hidden", textOverflow: "ellipsis", color: C.white, position: "relative", userSelect: "none", cursor: tooltip ? 'help' : undefined }}>
                     {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
+                    {f?.isCustomField && <span style={{ fontSize: 8, color: '#C4B5FD', marginLeft: 4, verticalAlign: 'super' }}>CF</span>}
                     {/* Resize handle */}
                     <div
                       onMouseDown={e => startResize(e, h)}

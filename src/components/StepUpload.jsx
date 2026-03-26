@@ -1,6 +1,6 @@
 import { C } from "../theme";
 
-export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, setDragOver, fileRef, handleFileAndMap }) {
+export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, setDragOver, fileRef, handleFileAndMap, fmxSyncLoading, fmxSyncFromCache }) {
   return (
     <div>
       <p style={{ fontSize: 13, color: C.textMid, marginBottom: "1rem" }}>
@@ -39,6 +39,21 @@ export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, 
           )}
           <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>Analyzing columns and suggesting mappings...</p>
         </div>
+      )}
+      {fmxSyncLoading && (
+        <p style={{ marginTop: 8, fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          Syncing FMX custom fields…
+        </p>
+      )}
+      {!fmxSyncLoading && fmxSyncFromCache === false && fmxSyncFromCache !== undefined && (
+        <p style={{ marginTop: 8, fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          FMX custom fields loaded
+        </p>
+      )}
+      {fmxSyncFromCache === true && (
+        <p style={{ marginTop: 8, fontSize: 12, color: C.textLight, fontStyle: "italic" }}>
+          FMX custom fields loaded (cached)
+        </p>
       )}
     </div>
   );

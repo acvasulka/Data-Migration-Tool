@@ -2,10 +2,10 @@ import { useState } from "react";
 import { C } from "../theme";
 import Modal from "./Modal";
 
-export default function TransformModal({ fieldName, csvHeaders, currentRule, onSave, onClose }) {
-  const [instruction, setInstruction] = useState(currentRule?.instruction || "");
+export default function TransformModal({ fieldName, csvHeaders, currentRule, savedRule, onSave, onClose }) {
+  const [instruction, setInstruction] = useState(currentRule?.instruction || savedRule?.instruction || "");
   const [loading, setLoading] = useState(false);
-  const [code, setCode] = useState(currentRule?.code || "");
+  const [code, setCode] = useState(currentRule?.code || savedRule?.code || "");
   const [err, setErr] = useState("");
 
   const generate = async () => {
@@ -31,6 +31,11 @@ export default function TransformModal({ fieldName, csvHeaders, currentRule, onS
         <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.navy }}>Transform rule — "{fieldName}"</p>
         <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMid, lineHeight: 1, padding: "0 4px" }}>×</button>
       </div>
+      {savedRule && (
+        <p style={{ fontSize: 12, color: '#0F6E56', background: '#E1F5EE', border: '1px solid #5DCAA5', borderRadius: 6, padding: '6px 10px', margin: '0 0 10px' }}>
+          Saved rule from previous import — review and apply
+        </p>
+      )}
       <p style={{ fontSize: 12, color: C.textMid, margin: "0 0 8px" }}>Describe what this field should contain in plain language:</p>
       <textarea
         className="fmx-textarea"

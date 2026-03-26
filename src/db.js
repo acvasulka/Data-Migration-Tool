@@ -20,7 +20,7 @@ export async function getProjects() {
   }
 }
 
-export async function createProject(name, description, fmxSiteUrl, apiEmail, apiPassword) {
+export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false) {
   try {
     const { data, error } = await supabase
       .from('projects')
@@ -28,8 +28,8 @@ export async function createProject(name, description, fmxSiteUrl, apiEmail, api
         name: name,
         description: description || null,
         fmx_site_url: fmxSiteUrl || null,
-        fmx_api_email: apiEmail || null,
-        fmx_api_password: apiPassword || null,
+        fmx_credentials: encodedCredentials || null,
+        fmx_connection_verified: connectionVerified,
       })
       .select()
       .single();
@@ -41,6 +41,76 @@ export async function createProject(name, description, fmxSiteUrl, apiEmail, api
   } catch (e) {
     console.error('createProject exception:', e);
     return null;
+  }
+}
+
+export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
+  try {
+    const { data, error } = await supabase
+      .from('projects')
+      .update({
+        fmx_credentials: encodedCredentials,
+        fmx_connection_verified: connectionVerified,
+      })
+      .eq('id', projectId)
+      .select()
+      .single();
+    if (error) { console.error('saveProjectCredentials error:', error); return null; }
+    return data;
+  } catch (e) {
+    console.error('saveProjectCredentials exception:', e);
+    return null;
+  }
+}
+
+// Cache uses a single sentinel row per (project_id, schema_type):
+//   record_type = 'custom_fields_cache', fmx_name = '__cache__'
+//   extra = { customFields: [...] }
+
+export async function getFmxReferenceCache(projectId, schemaType) {
+  try {
+    const { data, error } = await supabase
+      .from('fmx_reference_cache')
+      .select('fmx_name, fmx_id, extra, record_type, cached_at')
+      .eq('project_id', projectId)
+      .eq('schema_type', schemaType)
+      .eq('record_type', 'custom_fields_cache')
+      .eq('fmx_name', '__cache__')
+      .single();
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveFmxReferenceCache(projectId, schemaType, customFields, systemFields = []) {
+  try {
+    const { error } = await supabase
+      .from('fmx_reference_cache')
+      .upsert({
+        project_id: projectId,
+        schema_type: schemaType,
+        record_type: 'custom_fields_cache',
+        fmx_name: '__cache__',
+        fmx_id: null,
+        extra: { customFields, systemFields },
+        cached_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,schema_type,record_type,fmx_name' });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function getCacheAge(projectId, schemaType) {
+  try {
+    const cached = await getFmxReferenceCache(projectId, schemaType);
+    if (!cached) return Infinity;
+    const ageMs = Date.now() - new Date(cached.cached_at).getTime();
+    return ageMs / 3600000;
+  } catch {
+    return Infinity;
   }
 }
 
@@ -227,6 +297,23 @@ export async function saveDataPatterns(schemaType, fieldPatterns) {
     return !error;
   } catch {
     return false;
+  }
+}
+
+export async function getSavedRulesForSchema(schemaType) {
+  try {
+    const { data, error } = await supabase
+      .from('rule_memory')
+      .select('fmx_field, instruction, generated_code')
+      .eq('schema_type', schemaType);
+    if (error) return {};
+    const result = {};
+    for (const row of data ?? []) {
+      result[row.fmx_field] = { instruction: row.instruction, code: row.generated_code };
+    }
+    return result;
+  } catch {
+    return {};
   }
 }
 
