@@ -4,14 +4,15 @@ import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows } from "./db";
 import { syncFmxDataForProject } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
-import ProjectChecklist from "./components/ProjectChecklist";
 import ProjectScreen from "./components/ProjectScreen";
-import StepSelectType from "./components/StepSelectType";
+import SchemaOverview from "./components/SchemaOverview";
+import DependenciesView from "./components/DependenciesView";
+import ProjectSettingsView from "./components/ProjectSettingsView";
 import StepUpload from "./components/StepUpload";
 import StepMapFields from "./components/StepMapFields";
 import StepValidate from "./components/StepValidate";
@@ -141,6 +142,13 @@ export default function App() {
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
   const [activeImportId, setActiveImportId] = useState(null);
+
+  // Overview / tab routing
+  const [mainTab, setMainTab] = useState('overview'); // 'overview' | 'dependencies' | 'settings' | 'wizard'
+  const [wizardImports, setWizardImports] = useState([]);
+  const [wizardViewModal, setWizardViewModal] = useState(null); // { rec, rows } | null
+  const [wizardViewLoading, setWizardViewLoading] = useState(false);
+
   const fileRef = useRef();
 
   useEffect(() => {
@@ -243,6 +251,7 @@ export default function App() {
     setTransformRules({}); setCertified(false); setFileInfo(null);
     setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(1);
+    setMainTab('wizard');
     handleFmxSync(t);
   };
 
@@ -383,6 +392,35 @@ export default function App() {
       }));
     }
     setChecklistRefreshKey(k => k + 1);
+    if (selectedProject?.id) {
+      getProjectImports(selectedProject.id).then(d => setWizardImports(d || []));
+    }
+  };
+
+  const handleResumeFromWizard = async (rec, step = 3) => {
+    const rows = await getImportRows(rec.id);
+    const schemaFieldNames = new Set((FMX_SCHEMAS[rec.schema_type]?.fields || []).map(f => f.name));
+    const rowKeys = Object.keys((rows && rows[0]) || {});
+    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
+    setSchemaType(rec.schema_type);
+    setMapping(rec.mapping_snapshot || {});
+    setMappedRows(rows || []);
+    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
+    setDynamicRates([]);
+    setTransformRules({});
+    setCertified(false);
+    setPersistentRefs(null);
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
+    setWStep(step);
+    setMainTab('wizard');
+  };
+
+  const handleViewFromWizard = async (rec) => {
+    setWizardViewLoading(true);
+    setWizardViewModal({ rec, rows: [] });
+    const rows = await getImportRows(rec.id);
+    setWizardViewModal({ rec, rows: rows || [] });
+    setWizardViewLoading(false);
   };
 
   const handleResumeImport = ({ schemaType: st, mappedRows: rows, mapping: m, wStep: step = 3 }) => {
@@ -410,6 +448,7 @@ export default function App() {
     setMemoryMatches({}); setMappingSources({}); setSavedRules({});
     setPersistentRefs(null);
     setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
+    setMainTab('overview');
   };
 
   const goToProjects = () => {
@@ -418,7 +457,8 @@ export default function App() {
   };
 
   const handleBack = () => {
-    if (wStep > 0) setWStep(wStep - 1);
+    if (wStep <= 1) { setMainTab('overview'); setWStep(0); }
+    else setWStep(wStep - 1);
   };
 
   // Loading spinner
@@ -472,6 +512,8 @@ export default function App() {
         onSelectProject={(project) => {
           setSelectedProject(project);
           setShowProjectScreen(false);
+          setMainTab('overview');
+          getProjectImports(project.id).then(d => setWizardImports(d || []));
         }}
         onResumeImport={handleResumeImport}
       />
@@ -512,7 +554,6 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: C.blue, fontSize: 13 }}>Step {wStep + 1} — {WIZARD_STEPS[wStep]}</span>
           {/* User avatar */}
           <div style={{ position: 'relative' }}>
             <button
@@ -555,27 +596,92 @@ export default function App() {
         </div>
       </div>
 
+      {/* Tab bar — only when project is open */}
+      {selectedProject && (
+        <div style={{
+          background: '#fff', borderBottom: '1px solid #E5E7EB',
+          padding: '0 24px', display: 'flex', alignItems: 'center',
+          position: 'sticky', top: 52, zIndex: 90,
+        }}>
+          {['overview', 'dependencies', 'settings'].map(tab => {
+            const isActive = mainTab === tab || (tab === 'overview' && mainTab === 'wizard');
+            return (
+              <button
+                key={tab}
+                onClick={() => setMainTab(tab)}
+                style={{
+                  padding: '10px 18px', fontSize: 13,
+                  fontWeight: isActive ? 600 : 400,
+                  color: isActive ? C.orange : '#6B7280',
+                  background: 'none', border: 'none',
+                  borderBottom: isActive ? `2px solid ${C.orange}` : '2px solid transparent',
+                  cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
+                  transition: 'color 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab === 'overview' && mainTab === 'wizard' ? '← Overview' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </button>
+            );
+          })}
+          {mainTab === 'wizard' && (
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9CA3AF', paddingRight: 4 }}>
+              {schemaType} — step {wStep} of 4
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Page content */}
-      <div style={{ padding: "1.5rem 24px 0" }}>
-        <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+      <div style={{ padding: '1.5rem 24px 2rem' }}>
 
-          {/* Main wizard area */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Overview tab */}
+        {mainTab === 'overview' && (
+          <SchemaOverview
+            imports={wizardImports}
+            hasCreds={!!selectedProject?.fmx_credentials}
+            onSelectType={handleSelectType}
+            onResume={(rec) => handleResumeFromWizard(rec, 3)}
+            onRepush={(rec) => handleResumeFromWizard(rec, 4)}
+            onViewImport={handleViewFromWizard}
+            history={history}
+          />
+        )}
 
-            {/* Step tabs */}
-            <div style={{ display: "flex", gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: "1.5rem", overflowX: "auto" }}>
-              {WIZARD_STEPS.map((label, i) => (
-                <div
-                  key={i}
-                  className={`fmx-tab ${i === wStep ? "fmx-tab-active" : i < wStep ? "fmx-tab-completed" : "fmx-tab-inactive"}`}
-                  onClick={() => i < wStep && setWStep(i)}
-                >
-                  {i + 1}. {label}
-                </div>
-              ))}
+        {/* Dependencies tab */}
+        {mainTab === 'dependencies' && (
+          <DependenciesView
+            projectId={selectedProject?.id}
+            refreshKey={checklistRefreshKey}
+          />
+        )}
+
+        {/* Settings tab */}
+        {mainTab === 'settings' && (
+          <ProjectSettingsView
+            selectedProject={selectedProject}
+            onProjectUpdated={(u) => setSelectedProject(u)}
+          />
+        )}
+
+        {/* Wizard */}
+        {mainTab === 'wizard' && (
+          <div>
+            {/* Wizard step tabs */}
+            <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: '1.5rem', overflowX: 'auto' }}>
+              {WIZARD_STEPS.slice(1).map((label, i) => {
+                const stepIdx = i + 1;
+                return (
+                  <div
+                    key={stepIdx}
+                    className={`fmx-tab ${stepIdx === wStep ? 'fmx-tab-active' : stepIdx < wStep ? 'fmx-tab-completed' : 'fmx-tab-inactive'}`}
+                    onClick={() => stepIdx < wStep && setWStep(stepIdx)}
+                  >
+                    {i + 1}. {label}
+                  </div>
+                );
+              })}
             </div>
-
-            {wStep === 0 && <StepSelectType history={history} onSelectType={handleSelectType} />}
 
             {wStep === 1 && (
               <StepUpload
@@ -654,40 +760,92 @@ export default function App() {
             )}
 
             {/* Sticky footer nav */}
-            {wStep > 0 && (
-              <div style={{
-                position: "sticky", bottom: 0, background: C.white,
-                borderTop: `1px solid ${C.border}`, padding: "12px 0",
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-                marginTop: 24, zIndex: 50,
-              }}>
-                <button className="fmx-btn-nav-back" onClick={handleBack}>← Back</button>
-                <div>
-                  {wStep === 2 && (
-                    <button className="fmx-btn-primary" onClick={goToValidate}>Validate →</button>
-                  )}
-                  {wStep === 3 && (
-                    <button className="fmx-btn-primary" onClick={() => setWStep(4)} disabled={!canProceed}>
-                      Review & export →
-                    </button>
-                  )}
-                  {wStep === 4 && (
-                    <button className="fmx-btn-secondary" onClick={reset}>Import another sheet</button>
-                  )}
-                </div>
+            <div style={{
+              position: 'sticky', bottom: 0, background: C.white,
+              borderTop: `1px solid ${C.border}`, padding: '12px 0',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginTop: 24, zIndex: 50,
+            }}>
+              <button className="fmx-btn-nav-back" onClick={handleBack}>← Back</button>
+              <div>
+                {wStep === 2 && (
+                  <button className="fmx-btn-primary" onClick={goToValidate}>Validate →</button>
+                )}
+                {wStep === 3 && (
+                  <button className="fmx-btn-primary" onClick={() => setWStep(4)} disabled={!canProceed}>
+                    Review & export →
+                  </button>
+                )}
+                {wStep === 4 && (
+                  <button className="fmx-btn-secondary" onClick={reset}>Import another sheet</button>
+                )}
               </div>
-            )}
+            </div>
           </div>
-
-          <ProjectChecklist
-            history={history}
-            projectId={selectedProject?.id}
-            refreshKey={checklistRefreshKey}
-            selectedProject={selectedProject}
-            onCredentialsSaved={(updated) => setSelectedProject(updated)}
-          />
-        </div>
+        )}
       </div>
+
+      {/* Import row viewer modal */}
+      {wizardViewModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+          zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 12,
+            width: '90vw', maxWidth: 1100, maxHeight: '85vh',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+          }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+              <div>
+                <span style={{ fontWeight: 600, fontSize: 15, color: C.navy }}>
+                  {wizardViewModal.rec.import_name || wizardViewModal.rec.schema_type}
+                </span>
+                <span style={{ fontSize: 13, color: '#6B7280', marginLeft: 12 }}>
+                  {wizardViewLoading ? 'Loading…' : `${wizardViewModal.rows.length} rows`}
+                </span>
+              </div>
+              <button
+                onClick={() => setWizardViewModal(null)}
+                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#9CA3AF', lineHeight: 1, padding: '0 4px' }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, padding: '0 0 8px' }}>
+              {wizardViewLoading ? (
+                <p style={{ padding: '24px', color: '#9CA3AF', fontSize: 13 }}>Loading rows…</p>
+              ) : wizardViewModal.rows.length === 0 ? (
+                <p style={{ padding: '24px', color: '#9CA3AF', fontSize: 13 }}>No rows saved for this import.</p>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#F9FAFB', position: 'sticky', top: 0 }}>
+                      {Object.keys(wizardViewModal.rows[0]).map(col => (
+                        <th key={col} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, color: C.navy, borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' }}>
+                          {col}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {wizardViewModal.rows.map((row, ri) => (
+                      <tr key={ri} style={{ borderBottom: '1px solid #F3F4F6', background: ri % 2 === 0 ? '#fff' : '#FAFAFA' }}>
+                        {Object.values(row).map((val, ci) => (
+                          <td key={ci} style={{ padding: '6px 12px', color: C.textDark, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {val ?? ''}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
