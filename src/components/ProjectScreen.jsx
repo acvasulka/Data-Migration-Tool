@@ -59,6 +59,8 @@ export default function ProjectScreen({ onSelectProject }) {
   const [description, setDescription] = useState('');
   const [fmxSiteUrl, setFmxSiteUrl] = useState('');
   const [apiExpanded, setApiExpanded] = useState(false);
+  const [apiEmail, setApiEmail] = useState('');
+  const [apiPassword, setApiPassword] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
 
@@ -91,7 +93,7 @@ export default function ProjectScreen({ onSelectProject }) {
     setCreateError('');
     setCreating(true);
     console.log('Creating project with:', { name, description, fmxSiteUrl });
-    const p = await createProject(name, description, fmxSiteUrl);
+    const p = await createProject(name, description, fmxSiteUrl, apiEmail, apiPassword);
     console.log('createProject returned:', p);
     if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
     await loadProjects();
@@ -264,11 +266,11 @@ export default function ProjectScreen({ onSelectProject }) {
                 <div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
-                    <input style={inputStyle} type="email" placeholder="admin@example.com" />
+                    <input style={inputStyle} type="email" placeholder="admin@example.com" value={apiEmail} onChange={e => setApiEmail(e.target.value)} />
                   </div>
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
-                    <input style={inputStyle} type="password" placeholder="••••••••" />
+                    <input style={inputStyle} type="password" placeholder="••••••••" value={apiPassword} onChange={e => setApiPassword(e.target.value)} />
                   </div>
                   <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Stored securely for direct FMX import</p>
                 </div>

@@ -3,6 +3,7 @@ import { FMX_SCHEMAS } from "./schemas";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
+import { fetchPostOptions } from "./fmxApi";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectChecklist from "./components/ProjectChecklist";
@@ -175,7 +176,7 @@ export default function App() {
   const allFields = schema ? [
     ...schema.fields,
     ...customFields.filter(cf => cf.name).map(cf => ({
-      name: cf.name, required: cf.required || false, type: "string", group: "Custom Fields",
+      name: cf.name, required: cf.required || false, type: cf.type || "string", group: "Custom Fields",
     })),
     ...dynamicRates.flatMap((_, i) => [
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
@@ -196,9 +197,18 @@ export default function App() {
 
   const canProceed = !hasErrors || certified;
 
-  const handleSelectType = t => {
+  const handleSelectType = async t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
     setTransformRules({}); setCertified(false); setFileInfo(null); setWStep(1);
+    if (selectedProject?.fmx_site_url) {
+      const fields = await fetchPostOptions(
+        selectedProject.fmx_site_url,
+        selectedProject.fmx_api_email,
+        selectedProject.fmx_api_password,
+        t
+      );
+      if (fields) setCustomFields(fields);
+    }
   };
 
   const processCSV = async (csvStr, info) => {
