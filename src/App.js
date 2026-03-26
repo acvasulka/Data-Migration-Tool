@@ -137,7 +137,7 @@ export default function App() {
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
   const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
-  const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], loading: false, fromCache: undefined });
+  const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const fileRef = useRef();
 
   useEffect(() => {
@@ -232,13 +232,13 @@ export default function App() {
     if (!selectedProject?.fmx_credentials) return;
     setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);
-    setFmxSyncData({ customFields: result.customFields || [], loading: false, fromCache: result.fromCache });
+    setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
   };
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
     setTransformRules({}); setCertified(false); setFileInfo(null);
-    setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(1);
     handleFmxSync(t);
   };

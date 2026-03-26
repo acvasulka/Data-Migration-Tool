@@ -84,7 +84,7 @@ export async function getFmxReferenceCache(projectId, schemaType) {
   }
 }
 
-export async function saveFmxReferenceCache(projectId, schemaType, customFields) {
+export async function saveFmxReferenceCache(projectId, schemaType, customFields, systemFields = []) {
   try {
     const { error } = await supabase
       .from('fmx_reference_cache')
@@ -94,7 +94,7 @@ export async function saveFmxReferenceCache(projectId, schemaType, customFields)
         record_type: 'custom_fields_cache',
         fmx_name: '__cache__',
         fmx_id: null,
-        extra: { customFields },
+        extra: { customFields, systemFields },
         cached_at: new Date().toISOString(),
       }, { onConflict: 'project_id,schema_type,record_type,fmx_name' });
     return !error;

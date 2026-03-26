@@ -35,18 +35,18 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-const SCHEMA_ENDPOINTS = {
-  'Building':  '/v1/buildings',
-  'Equipment': '/v1/equipment',
-  'Inventory': '/v1/inventory',
-  'Resource':  '/v1/resources',
-  'User':      '/v1/users',
-  // Equipment Type has no custom fields — intentionally omitted
+const POST_OPTIONS_ENDPOINTS = {
+  'Building':       '/v1/buildings/post-options',
+  'Equipment':      '/v1/equipment/post-options',
+  'Inventory':      '/v1/inventory/post-options',
+  'Resource':       '/v1/resources/post-options',
+  'User':           '/v1/users/post-options',
+  'Equipment Type': '/v1/equipment-types/post-options',
 };
 
-async function fetchCustomFields(siteUrl, email, password, schemaType) {
-  const endpoint = SCHEMA_ENDPOINTS[schemaType];
-  if (!endpoint) return []; // e.g. Equipment Type — not supported
+async function fetchPostOptions(siteUrl, email, password, schemaType) {
+  const endpoint = POST_OPTIONS_ENDPOINTS[schemaType];
+  if (!endpoint) return { customFields: [], systemFields: [] };
 
   try {
     const res = await fetch('/api/fmx', {
@@ -54,31 +54,37 @@ async function fetchCustomFields(siteUrl, email, password, schemaType) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         siteUrl, email, password,
-        endpoint: `${endpoint}?fields=:default,customFields&limit=1`,
+        endpoint,
         method: 'GET', payload: null,
       }),
     });
-    if (!res.ok) return [];
+    if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
-    console.log('FMX sync response:', data);
+    console.log('FMX post-options response:', data);
 
-    const items = data.items || data.results || (Array.isArray(data) ? data : []);
-    if (items.length === 0 || !items[0].customFields) return [];
+    console.warn('Raw custom field data:', JSON.stringify(data.customFields?.slice(0, 3)));
 
-    console.warn('Raw custom field data:', JSON.stringify(items[0]?.customFields?.slice(0, 3)));
-
-    const customFields = items[0].customFields
-      .filter(cf => cf.customFieldID && (cf.name || cf.displayName))
+    const customFields = (data.customFields || [])
+      .filter(cf => cf.key && cf.label)
       .map(cf => ({
-        id: cf.customFieldID,
-        name: cf.name || cf.displayName,
-        fieldType: cf.fieldType || 'text',
+        id: cf.key,
+        name: cf.label,
+        fieldType: cf.fieldTypeName,
+        isRequired: cf.isRequired || false,
       }));
 
+    const systemFields = (data.systemFields || []).map(sf => ({
+      key: sf.key,
+      label: sf.label,
+      isRequired: sf.isRequired || false,
+      isPermitted: sf.isPermitted !== false,
+      maximumLength: sf.maximumLength || null,
+    }));
+
     console.log('Custom fields found:', customFields);
-    return customFields;
+    return { customFields, systemFields };
   } catch {
-    return [];
+    return { customFields: [], systemFields: [] };
   }
 }
 
@@ -87,7 +93,7 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   console.log('FMX sync triggered for:', schemaType);
   console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
-    return { customFields: [], fromCache: false };
+    return { customFields: [], systemFields: [], fromCache: false };
   }
 
   const projectId = project.id;
@@ -101,9 +107,11 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
         const customFields = cached.extra.customFields.map(cf => ({
           id: cf.id,
           name: cf.name,
-          fieldType: cf.fieldType || 'text',
+          fieldType: cf.fieldType,
+          isRequired: cf.isRequired || false,
         }));
-        return { customFields, fromCache: true };
+        const systemFields = cached.extra.systemFields || [];
+        return { customFields, systemFields, fromCache: true };
       }
     }
   }
@@ -112,14 +120,14 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   const siteUrl = project.fmx_site_url;
 
   try {
-    const customFields = await fetchCustomFields(siteUrl, email, password, schemaType);
+    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType);
 
     if (projectId) {
-      await saveFmxReferenceCache(projectId, schemaType, customFields);
+      await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
     }
 
-    return { customFields, fromCache: false };
+    return { customFields, systemFields, fromCache: false };
   } catch {
-    return { customFields: [], fromCache: false };
+    return { customFields: [], systemFields: [], fromCache: false };
   }
 }
