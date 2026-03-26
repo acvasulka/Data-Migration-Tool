@@ -1,9 +1,31 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 
+function coerceCustomFieldValue(value, fieldType) {
+  if (value === null || value === undefined || value === '') return null;
+  switch (fieldType) {
+    case 'Numeric':
+    case 'Currency': {
+      const num = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+      return isNaN(num) ? null : num;
+    }
+    case 'Date':
+      return String(value); // FMX handles date string parsing
+    case 'Checkbox':
+      return value === true || value === 'true' || value === '1' || value === 'yes' || value === 'Yes';
+    case 'Text':
+    case 'LongText':
+    case 'Dropdown':
+    case 'MultiSelect':
+    default:
+      return String(value);
+  }
+}
+
 // Transform a mapped row object into the correct FMX API payload shape.
 // idCache: { "Building:Main Campus": 42 }
 // customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
-export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}) {
+// customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = []) {
   const fieldMap = FMX_FIELD_MAP[schemaType] || {};
   const payload = {};
   const customFields = [];
@@ -13,7 +35,12 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
 
     // Match by friendly name in customFieldIdMap (e.g. "Year Built" → ID 42)
     if (customFieldIdMap[fieldName] !== undefined) {
-      customFields.push({ customFieldID: customFieldIdMap[fieldName], value: String(value) });
+      const cfId = customFieldIdMap[fieldName];
+      const cfMeta = customFieldMetadata.find(cf => cf.id === cfId);
+      const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
+      if (coerced !== null) {
+        customFields.push({ customFieldID: cfId, value: coerced });
+      }
       return;
     }
 

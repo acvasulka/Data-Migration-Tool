@@ -35,6 +35,22 @@ export default function StepMapFields({
     return null;
   };
 
+  const TYPE_LABEL_STYLE = {
+    fontSize: 10, color: '#9CA3AF', background: '#F9FAFB',
+    border: '0.5px solid #E5E7EB', borderRadius: 3,
+    padding: '1px 5px', marginLeft: 6, fontWeight: 400,
+  };
+
+  const getTypeLabel = (f) => {
+    if (f.isCustomField) {
+      const ft = f.fieldType || 'Text';
+      const map = { Numeric: 'Number', Currency: 'Currency', Date: 'Date', Checkbox: 'Yes/No', Text: 'Text', LongText: 'Text', Dropdown: 'Dropdown', MultiSelect: 'MultiSelect' };
+      return map[ft] || ft;
+    }
+    const map = { string: 'Text', number: 'Number', date: 'Date', email: 'Email' };
+    return map[f.type] || null;
+  };
+
   const getBadge = (f, sourceHeader) => {
     if (f.isCustomField) {
       return { label: 'FMX custom', bg: '#F3E8FF', color: '#6B21A8', border: '#D8B4FE' };
@@ -105,6 +121,7 @@ export default function StepMapFields({
                     <div style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.textDark }}>
                       {f.name}{f.required && <span style={{ color: C.orange }}> *</span>}
                       {f.crossSheet && <span style={{ fontSize: 10, color: C.blue, marginLeft: 5 }}>→{f.crossSheet}</span>}
+                      {getTypeLabel(f) && <span style={TYPE_LABEL_STYLE}>{getTypeLabel(f)}</span>}
                     </div>
                     <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>

@@ -210,7 +210,7 @@ export default function App() {
     // FMX custom fields from live sync (always appended; empty when no credentials)
     ...(fmxSyncData.customFields || []).map(cf => ({
       name: cf.name, required: false, type: "string", group: "FMX Custom Fields",
-      isCustomField: true, customFieldId: cf.id,
+      isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
     })),
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
@@ -625,6 +625,7 @@ export default function App() {
                 selectedProject={selectedProject}
                 userEmail={user?.email}
                 customFieldIdMap={fmxCustomFieldIdMap}
+                customFieldMetadata={fmxSyncData?.customFields || []}
               />
             )}
 

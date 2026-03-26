@@ -41,6 +41,7 @@ export default function FMXPushModal({
   fmxEmail,
   fmxCredentials,
   customFieldIdMap,
+  customFieldMetadata,
   onClose,
   onSuccess,
 }) {
@@ -139,7 +140,7 @@ export default function FMXPushModal({
 
         let ok = false;
         try {
-          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {});
+          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || []);
           const res = await fetch('/api/fmx', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
