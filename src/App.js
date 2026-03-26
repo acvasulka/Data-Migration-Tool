@@ -679,7 +679,13 @@ export default function App() {
             )}
           </div>
 
-          <ProjectChecklist history={history} projectId={selectedProject?.id} refreshKey={checklistRefreshKey} />
+          <ProjectChecklist
+            history={history}
+            projectId={selectedProject?.id}
+            refreshKey={checklistRefreshKey}
+            selectedProject={selectedProject}
+            onCredentialsSaved={(updated) => setSelectedProject(updated)}
+          />
         </div>
       </div>
     </div>
