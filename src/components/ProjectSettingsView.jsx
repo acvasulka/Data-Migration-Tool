@@ -76,6 +76,24 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
     setShowCredForm(false);
     setCredEmail(''); setCredPassword(''); setCredConnStatus(null);
     setCredSaving(false);
+
+    // Auto-detect modules immediately after a verified credential save.
+    // Uses the in-scope credEmail/credPassword so we don't need to re-read
+    // from the potentially-stale selectedProject prop.
+    if (updated && verified) {
+      const url = selectedProject?.fmx_site_url;
+      if (url && credEmail && credPassword) {
+        try {
+          const fresh = await fetchFmxModules(url, credEmail, credPassword);
+          const existing = normalizeModules(updated.fmx_modules);
+          const { merged, changed } = mergeModules(existing, fresh);
+          if (changed) {
+            const withMods = await updateProjectModules(updated.id, merged);
+            if (withMods && onProjectUpdated) onProjectUpdated(withMods);
+          }
+        } catch { /* silent — manual Auto-detect in Settings always available */ }
+      }
+    }
   };
 
   const handleAutoDetectModules = async () => {
