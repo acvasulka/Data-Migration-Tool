@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react';
-import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials, getProjectImports, getImportRows, renameImport } from '../db';
+import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials, getProjectImports, getImportRows, renameImport, getAllReferenceValues } from '../db';
 import { encodeCredentials, testFmxConnection } from '../fmxSync';
 import { downloadCSV } from '../utils';
 import { IMPORT_ORDER } from '../schemas';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
+const GREEN = '#1A7F4E';
+
+// Dependency chains: which schema types provide reference values to others
+const DEPENDENCY_CHAINS = [
+  { provider: 'Building',       consumers: ['Resource', 'User', 'Equipment', 'Inventory'] },
+  { provider: 'Equipment Type', consumers: ['Equipment'] },
+];
 
 function daysSince(dateStr) {
   if (!dateStr) return null;
@@ -16,9 +23,14 @@ function daysSince(dateStr) {
   return `${days} days ago`;
 }
 
+function fmtDate(dateStr) {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 function StatusBadge({ completedCount }) {
   if (completedCount === 6)
-    return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: '#1A7F4E' }}>Complete</span>;
+    return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: GREEN }}>Complete</span>;
   if (completedCount > 0)
     return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#FFF3CD', color: '#856404' }}>In progress</span>;
   return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#F3F4F6', color: '#6B7280' }}>Not started</span>;
@@ -45,6 +57,92 @@ function DocumentPlusIcon() {
   );
 }
 
+// Schema status icon
+function SchemaIcon({ done, isCurrent }) {
+  if (done) return (
+    <div style={{ width: 20, height: 20, borderRadius: '50%', background: GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: 1 }}>✓</span>
+    </div>
+  );
+  if (isCurrent) return (
+    <div style={{ width: 20, height: 20, borderRadius: '50%', background: ORANGE, flexShrink: 0, animation: 'pulse 1.5s ease-in-out infinite' }} />
+  );
+  return <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2px solid #D1D5DB', flexShrink: 0 }} />;
+}
+
+// Single import card component
+function ImportCard({ rec, hasCreds, renamingId, renameVal, setRenamingId, setRenameVal, onRenameSubmit, onDownload, onView, onResume, onRepush }) {
+  const isRenaming = renamingId === rec.id;
+  return (
+    <div style={{
+      background: '#fff',
+      border: '1px solid #E5E7EB',
+      borderLeft: `3px solid ${ORANGE}`,
+      borderRadius: 8,
+      padding: '10px 14px',
+      marginBottom: 8,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+    }}>
+      {/* Name row */}
+      <div style={{ marginBottom: 4 }}>
+        {isRenaming
+          ? <input
+              autoFocus
+              value={renameVal}
+              onChange={e => setRenameVal(e.target.value)}
+              onBlur={() => onRenameSubmit(rec.id)}
+              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setRenamingId(null); }}
+              style={{ fontSize: 13, fontWeight: 600, border: 'none', borderBottom: `1.5px solid ${ORANGE}`, outline: 'none', background: 'transparent', width: '100%', color: NAVY, fontFamily: 'system-ui, -apple-system, sans-serif' }}
+            />
+          : <span
+              onClick={() => { setRenamingId(rec.id); setRenameVal(rec.import_name || rec.schema_type); }}
+              title="Click to rename"
+              style={{ fontSize: 13, fontWeight: 600, color: NAVY, cursor: 'text', borderBottom: '1px dashed transparent' }}
+              onMouseEnter={e => e.currentTarget.style.borderBottomColor = '#D1D5DB'}
+              onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'}
+            >
+              {rec.import_name || rec.schema_type}
+            </span>
+        }
+      </div>
+      {/* Meta row */}
+      <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 8 }}>
+        {(rec.row_count_stored ?? rec.row_count) || 0} rows
+        {rec.truncated ? ' (capped at 5,000)' : ''}
+        {' · '}{fmtDate(rec.completed_at)}
+        {rec.source_filename ? ` · ${rec.source_filename}` : ''}
+      </div>
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+        <ActionBtn onClick={onDownload} label="↓ Download" />
+        <Dot />
+        <ActionBtn onClick={onView} label="👁 View" />
+        <Dot />
+        <ActionBtn onClick={onResume} label="▶ Resume" color={ORANGE} />
+        {hasCreds && (<>
+          <Dot />
+          <ActionBtn onClick={onRepush} label="⬆ Re-push" color={GREEN} />
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+function ActionBtn({ onClick, label, color = NAVY }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color, padding: '2px 4px', fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 500 }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Dot() {
+  return <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>;
+}
+
 export default function ProjectScreen({ onSelectProject, onResumeImport }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,6 +154,9 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
   const [editingName, setEditingName] = useState(false);
   const [editNameVal, setEditNameVal] = useState('');
 
+  // Tabs for project detail panel
+  const [activeTab, setActiveTab] = useState('imports'); // 'imports' | 'dependencies' | 'settings'
+
   // create form
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -63,24 +164,24 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
   const [fmxApiEmail, setFmxApiEmail] = useState('');
   const [fmxApiPassword, setFmxApiPassword] = useState('');
   const [apiExpanded, setApiExpanded] = useState(false);
-  const [apiEmail, setApiEmail] = useState('');
-  const [apiPassword, setApiPassword] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
-  const [createConnStatus, setCreateConnStatus] = useState(null); // null | 'ok' | 'fail'
+  const [createConnStatus, setCreateConnStatus] = useState(null);
   const [createConnMsg, setCreateConnMsg] = useState('');
   const [createConnLoading, setCreateConnLoading] = useState(false);
   const [createConnVerified, setCreateConnVerified] = useState(false);
 
   // import history
   const [imports, setImports] = useState([]);
-  const [expandedSchema, setExpandedSchema] = useState(null);
-  const [viewModal, setViewModal] = useState(null); // { rec, rows } | null
+  const [viewModal, setViewModal] = useState(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState('');
 
-  // update credentials panel (for selected project detail)
+  // dependencies tab
+  const [refValues, setRefValues] = useState([]); // all project_reference_values rows
+
+  // settings / update credentials
   const [showUpdateCreds, setShowUpdateCreds] = useState(false);
   const [updateEmail, setUpdateEmail] = useState('');
   const [updatePassword, setUpdatePassword] = useState('');
@@ -88,6 +189,9 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
   const [updateConnMsg, setUpdateConnMsg] = useState('');
   const [updateConnLoading, setUpdateConnLoading] = useState(false);
   const [updateSaving, setUpdateSaving] = useState(false);
+  // settings — FMX URL editing
+  const [editingUrl, setEditingUrl] = useState(false);
+  const [editUrlVal, setEditUrlVal] = useState('');
 
   const loadProjects = async () => {
     setLoading(true);
@@ -110,15 +214,22 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     setImports(data);
   };
 
+  const loadRefValues = async (projectId) => {
+    const data = await getAllReferenceValues(projectId);
+    setRefValues(data);
+  };
+
   const handleSelectProject = (p) => {
     setSelected(p);
     setMode('idle');
     setDeleteConfirm(false);
     setEditingName(false);
-    setExpandedSchema(null);
     setRenamingId(null);
+    setShowUpdateCreds(false);
+    setActiveTab('imports');
     loadStatus(p.id);
     loadImports(p.id);
+    loadRefValues(p.id);
   };
 
   const handleDownloadImport = async (rec) => {
@@ -182,7 +293,8 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
 
   const handleTestUpdateConn = async () => {
     setUpdateConnLoading(true); setUpdateConnStatus(null);
-    const result = await testFmxConnection(selected.fmx_site_url, updateEmail, updatePassword);
+    const url = editingUrl ? editUrlVal : selected.fmx_site_url;
+    const result = await testFmxConnection(url, updateEmail, updatePassword);
     setUpdateConnStatus(result.success ? 'ok' : 'fail');
     setUpdateConnMsg(result.message);
     setUpdateConnLoading(false);
@@ -192,7 +304,6 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     setUpdateSaving(true);
     const encoded = encodeCredentials(updateEmail, updatePassword);
     const verified = updateConnStatus === 'ok';
-    console.log('Saving credentials for project:', selected.id, 'encoded:', !!encoded, 'verified:', verified);
     const updated = await saveProjectCredentials(selected.id, encoded, verified);
     if (updated) {
       setSelected(updated);
@@ -203,10 +314,23 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     setUpdateSaving(false);
   };
 
+  const handleUrlBlur = async () => {
+    if (editUrlVal.trim() && editUrlVal !== selected.fmx_site_url) {
+      const updated = await updateProject(selected.id, { fmx_site_url: editUrlVal.trim() });
+      if (updated) {
+        setSelected(updated);
+        setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
+      }
+    }
+    setEditingUrl(false);
+  };
+
   const handleDelete = async () => {
     await deleteProject(selected.id);
     setSelected(null);
     setStatus({});
+    setImports([]);
+    setRefValues([]);
     setDeleteConfirm(false);
     await loadProjects();
   };
@@ -222,8 +346,7 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     setEditingName(false);
   };
 
-  const completedCount = (proj) =>
-    IMPORT_ORDER.filter(s => status[s]?.complete).length;
+  const cnt = selected ? IMPORT_ORDER.filter(s => status[s]?.complete).length : 0;
 
   const cardStyle = (p) => ({
     background: selected?.id === p.id ? '#FFF8F6' : '#fff',
@@ -242,7 +365,35 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     fontFamily: 'system-ui, -apple-system, sans-serif',
   };
 
-  const cnt = selected ? IMPORT_ORDER.filter(s => status[s]?.complete).length : 0;
+  const tabStyle = (tab) => ({
+    padding: '8px 14px',
+    fontSize: 13,
+    fontWeight: activeTab === tab ? 600 : 400,
+    color: activeTab === tab ? ORANGE : '#6B7280',
+    background: 'none',
+    border: 'none',
+    borderBottom: activeTab === tab ? `2px solid ${ORANGE}` : '2px solid transparent',
+    cursor: 'pointer',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    transition: 'color 0.15s',
+  });
+
+  // Group imports by schema type
+  const importsBySchema = {};
+  for (const imp of imports) {
+    if (!importsBySchema[imp.schema_type]) importsBySchema[imp.schema_type] = [];
+    importsBySchema[imp.schema_type].push(imp);
+  }
+
+  // Group reference values by schema type (for dependencies tab)
+  const refBySchema = {};
+  for (const row of refValues) {
+    if (!refBySchema[row.schema_type]) refBySchema[row.schema_type] = {};
+    if (!refBySchema[row.schema_type][row.field_name]) refBySchema[row.schema_type][row.field_name] = [];
+    refBySchema[row.schema_type][row.field_name].push(row.value);
+  }
+
+  const hasCreds = !!selected?.fmx_credentials;
 
   return (
     <div style={{ minHeight: '100vh', background: '#F5F5F5', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
@@ -250,6 +401,7 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
         @keyframes shimmer { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .proj-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .import-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
       `}</style>
 
       {/* View modal */}
@@ -263,7 +415,7 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
               </div>
               <button onClick={() => setViewModal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', lineHeight: 1 }}>×</button>
             </div>
-            <div style={{ overflow: 'auto', flex: 1, padding: '0' }}>
+            <div style={{ overflow: 'auto', flex: 1 }}>
               {viewLoading
                 ? <div style={{ padding: 32, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Loading…</div>
                 : viewModal.rows.length === 0
@@ -369,9 +521,9 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
         </div>
 
         {/* RIGHT — Detail panel */}
-        <div style={{ background: '#fff', borderRadius: 10, border: '0.5px solid #E0E0E0', minHeight: 400, padding: '24px 24px' }}>
+        <div style={{ background: '#fff', borderRadius: 10, border: '0.5px solid #E0E0E0', minHeight: 400, overflow: 'hidden' }}>
 
-          {/* STATE A */}
+          {/* STATE A — Nothing selected */}
           {mode === 'idle' && !selected && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 360, color: '#9CA3AF', fontSize: 14, fontStyle: 'italic', textAlign: 'center', padding: '0 2rem' }}>
               Select a project to view details, or create a new one
@@ -380,291 +532,335 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
 
           {/* STATE B — Create form */}
           {mode === 'create' && (
-            <form onSubmit={handleCreate}>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>New project</h2>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Project name *</label>
-                <input style={inputStyle} required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverside School District" />
-              </div>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Description</label>
-                <textarea
-                  rows={3} value={description} onChange={e => setDescription(e.target.value)}
-                  placeholder="Optional notes about this migration"
-                  style={{ ...inputStyle, resize: 'vertical', fontFamily: 'system-ui, -apple-system, sans-serif' }}
-                />
-              </div>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 2 }}>FMX site URL</label>
-                <span style={{ fontSize: 11, color: '#9CA3AF', display: 'block', marginBottom: 4 }}>Used for direct API push later</span>
-                <input style={inputStyle} value={fmxSiteUrl} onChange={e => setFmxSiteUrl(e.target.value)} placeholder="yoursite.gofmx.com" />
-              </div>
-
-              <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '16px 0' }} />
-
-              {/* API credentials — collapsed */}
-              <button
-                type="button"
-                onClick={() => setApiExpanded(v => !v)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', padding: 0, marginBottom: 12 }}
-              >
-                <span style={{ display: 'inline-block', transform: apiExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 11 }}>▶</span>
-                API credentials (optional)
-              </button>
-              {apiExpanded && (
-                <div>
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
-                    <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => { setFmxApiEmail(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
-                  </div>
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
-                    <input style={inputStyle} type="password" placeholder="••••••••" value={fmxApiPassword} onChange={e => { setFmxApiPassword(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                    <button
-                      type="button"
-                      onClick={handleTestCreateConn}
-                      disabled={!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || createConnLoading}
-                      style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: '1px solid #D1D5DB', background: '#fff', whiteSpace: 'nowrap' }}
-                    >
-                      {createConnLoading ? 'Testing…' : 'Test connection'}
-                    </button>
-                    {createConnStatus && (
-                      <span style={{ fontSize: 12, color: createConnStatus === 'ok' ? '#1A7F4E' : '#DC2626', fontWeight: 500 }}>
-                        {createConnMsg}
-                      </span>
-                    )}
-                  </div>
-                  <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Credentials are stored encoded and used for direct FMX push</p>
+            <div style={{ padding: '24px 24px' }}>
+              <form onSubmit={handleCreate}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>New project</h2>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Project name *</label>
+                  <input style={inputStyle} required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverside School District" />
                 </div>
-              )}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Description</label>
+                  <textarea
+                    rows={3} value={description} onChange={e => setDescription(e.target.value)}
+                    placeholder="Optional notes about this migration"
+                    style={{ ...inputStyle, resize: 'vertical', fontFamily: 'system-ui, -apple-system, sans-serif' }}
+                  />
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 2 }}>FMX site URL</label>
+                  <span style={{ fontSize: 11, color: '#9CA3AF', display: 'block', marginBottom: 4 }}>Used for direct API push later</span>
+                  <input style={inputStyle} value={fmxSiteUrl} onChange={e => setFmxSiteUrl(e.target.value)} placeholder="yoursite.gofmx.com" />
+                </div>
 
-              {createError && <p style={{ color: '#DC2626', fontSize: 13, margin: '8px 0' }}>{createError}</p>}
-              <button
-                type="submit" disabled={creating}
-                style={{ width: '100%', padding: 10, fontSize: 14, fontWeight: 500, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: creating ? 'not-allowed' : 'pointer', opacity: creating ? 0.7 : 1, marginTop: 4 }}
-              >
-                {creating ? 'Creating…' : 'Create project'}
-              </button>
-              <p style={{ textAlign: 'center', marginTop: 10 }}>
-                <button type="button" onClick={() => setMode('idle')} style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: 13, cursor: 'pointer' }}>
-                  Cancel
+                <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '16px 0' }} />
+
+                <button
+                  type="button"
+                  onClick={() => setApiExpanded(v => !v)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', padding: 0, marginBottom: 12 }}
+                >
+                  <span style={{ display: 'inline-block', transform: apiExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 11 }}>▶</span>
+                  API credentials (optional)
                 </button>
-              </p>
-            </form>
+                {apiExpanded && (
+                  <div>
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
+                      <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => { setFmxApiEmail(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
+                    </div>
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
+                      <input style={inputStyle} type="password" placeholder="••••••••" value={fmxApiPassword} onChange={e => { setFmxApiPassword(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                      <button
+                        type="button"
+                        onClick={handleTestCreateConn}
+                        disabled={!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || createConnLoading}
+                        style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: '1px solid #D1D5DB', background: '#fff', whiteSpace: 'nowrap' }}
+                      >
+                        {createConnLoading ? 'Testing…' : 'Test connection'}
+                      </button>
+                      {createConnStatus && (
+                        <span style={{ fontSize: 12, color: createConnStatus === 'ok' ? GREEN : '#DC2626', fontWeight: 500 }}>
+                          {createConnMsg}
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Credentials are stored encoded and used for direct FMX push</p>
+                  </div>
+                )}
+
+                {createError && <p style={{ color: '#DC2626', fontSize: 13, margin: '8px 0' }}>{createError}</p>}
+                <button
+                  type="submit" disabled={creating}
+                  style={{ width: '100%', padding: 10, fontSize: 14, fontWeight: 500, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: creating ? 'not-allowed' : 'pointer', opacity: creating ? 0.7 : 1, marginTop: 4 }}
+                >
+                  {creating ? 'Creating…' : 'Create project'}
+                </button>
+                <p style={{ textAlign: 'center', marginTop: 10 }}>
+                  <button type="button" onClick={() => setMode('idle')} style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: 13, cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                </p>
+              </form>
+            </div>
           )}
 
           {/* STATE C — Project detail */}
           {mode === 'idle' && selected && (
             <div>
-              {/* Name heading */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                {editingName
-                  ? <input
-                      autoFocus
-                      value={editNameVal}
-                      onChange={e => setEditNameVal(e.target.value)}
-                      onBlur={handleNameBlur}
-                      onKeyDown={e => e.key === 'Enter' && e.target.blur()}
-                      style={{ fontSize: 17, fontWeight: 700, color: NAVY, border: 'none', borderBottom: `2px solid ${ORANGE}`, outline: 'none', flex: 1, background: 'transparent' }}
-                    />
-                  : <span style={{ fontSize: 17, fontWeight: 700, color: NAVY }}>{selected.name}</span>
-                }
+              {/* Project header */}
+              <div style={{ padding: '20px 24px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  {editingName
+                    ? <input
+                        autoFocus
+                        value={editNameVal}
+                        onChange={e => setEditNameVal(e.target.value)}
+                        onBlur={handleNameBlur}
+                        onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                        style={{ fontSize: 17, fontWeight: 700, color: NAVY, border: 'none', borderBottom: `2px solid ${ORANGE}`, outline: 'none', flex: 1, background: 'transparent', fontFamily: 'system-ui, -apple-system, sans-serif' }}
+                      />
+                    : <span style={{ fontSize: 17, fontWeight: 700, color: NAVY }}>{selected.name}</span>
+                  }
+                  <button
+                    onClick={() => { setEditingName(true); setEditNameVal(selected.name); }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 14, padding: '2px 4px' }}
+                    title="Edit name"
+                  >✏️</button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  {selected.fmx_site_url && (
+                    <span style={{ fontSize: 12, color: '#9CA3AF' }}>{selected.fmx_site_url}</span>
+                  )}
+                  {selected.fmx_connection_verified && (
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: GREEN, whiteSpace: 'nowrap' }}>
+                      ✓ FMX Connected
+                    </span>
+                  )}
+                </div>
+
+                {/* Open project button */}
                 <button
-                  onClick={() => { setEditingName(true); setEditNameVal(selected.name); }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 14, padding: '2px 4px' }}
-                  title="Edit name"
-                >✏️</button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-                {selected.fmx_site_url && (
-                  <p style={{ fontSize: 13, color: '#9CA3AF', margin: 0 }}>{selected.fmx_site_url}</p>
-                )}
-                {selected.fmx_connection_verified && (
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: '#1A7F4E', whiteSpace: 'nowrap' }}>
-                    ✓ FMX Connected
-                  </span>
-                )}
+                  onClick={() => onSelectProject(selected)}
+                  style={{ width: '100%', height: 40, fontSize: 14, fontWeight: 600, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', marginTop: 12, marginBottom: 16 }}
+                >
+                  Open project →
+                </button>
               </div>
 
-              {/* Import checklist */}
-              <p style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
-                Import checklist · {statusLoading ? '…' : `${cnt} of 6 complete`}
-              </p>
-              <div style={{ marginBottom: 20 }}>
-                {IMPORT_ORDER.map((schema, i) => {
-                  const s = status[schema];
-                  const done = s?.complete;
-                  const isCurrent = !done && IMPORT_ORDER.slice(0, i).every(prev => status[prev]?.complete);
-                  return (
-                    <div key={schema} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
-                      {/* Icon */}
-                      {done
-                        ? <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#1A7F4E', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                            <span style={{ color: '#fff', fontSize: 10, fontWeight: 700 }}>✓</span>
-                          </div>
-                        : isCurrent
-                          ? <div style={{ width: 18, height: 18, borderRadius: '50%', background: ORANGE, flexShrink: 0, marginTop: 1, animation: 'pulse 1.5s ease-in-out infinite' }} />
-                          : <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #D1D5DB', flexShrink: 0, marginTop: 1 }} />
-                      }
-                      <div>
-                        <span style={{ fontSize: 13, fontWeight: done || isCurrent ? 600 : 400, color: done ? '#374151' : isCurrent ? NAVY : '#9CA3AF' }}>
-                          {schema}
-                        </span>
-                        {done && (
-                          <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 1 }}>
-                            {s.rowCount} rows · {new Date(s.completedAt).toLocaleDateString()}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+              {/* Tab bar */}
+              <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', padding: '0 24px' }}>
+                <button style={tabStyle('imports')} onClick={() => setActiveTab('imports')}>Imports</button>
+                <button style={tabStyle('dependencies')} onClick={() => setActiveTab('dependencies')}>Dependencies</button>
+                <button style={tabStyle('settings')} onClick={() => setActiveTab('settings')}>Settings</button>
               </div>
 
-              {/* Saved imports history */}
-              {imports.length > 0 && (() => {
-                const bySchema = {};
-                for (const imp of imports) {
-                  if (!bySchema[imp.schema_type]) bySchema[imp.schema_type] = [];
-                  bySchema[imp.schema_type].push(imp);
-                }
-                const hasCreds = !!selected.fmx_credentials;
-                const btnStyle = (color = NAVY) => ({
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  fontSize: 11, color, padding: '2px 4px', fontFamily: 'system-ui, -apple-system, sans-serif',
-                });
-                return (
-                  <div style={{ marginBottom: 20 }}>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
-                      Saved imports · {imports.length}
-                    </p>
-                    {Object.entries(bySchema).map(([schema, recs]) => (
-                      <div key={schema} style={{ marginBottom: 6 }}>
-                        <button
-                          onClick={() => setExpandedSchema(expandedSchema === schema ? null : schema)}
-                          style={{ ...btnStyle(), fontWeight: 600, fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, width: '100%', textAlign: 'left', marginBottom: 4 }}
-                        >
-                          <span style={{ fontSize: 10, display: 'inline-block', transform: expandedSchema === schema ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
-                          {schema} <span style={{ fontWeight: 400, color: '#9CA3AF' }}>({recs.length})</span>
-                        </button>
-                        {expandedSchema === schema && recs.map(rec => (
-                          <div key={rec.id} style={{ marginLeft: 14, marginBottom: 8, padding: '8px 10px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
-                            {renamingId === rec.id
-                              ? <input
-                                  autoFocus
-                                  value={renameVal}
-                                  onChange={e => setRenameVal(e.target.value)}
-                                  onBlur={() => handleRenameSubmit(rec.id)}
-                                  onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setRenamingId(null); } }}
-                                  style={{ fontSize: 12, fontWeight: 600, border: 'none', borderBottom: `1px solid ${ORANGE}`, outline: 'none', background: 'transparent', width: '100%', marginBottom: 2 }}
-                                />
-                              : <div
-                                  onClick={() => { setRenamingId(rec.id); setRenameVal(rec.import_name || rec.schema_type); }}
-                                  style={{ fontSize: 12, fontWeight: 600, color: NAVY, cursor: 'text', marginBottom: 2 }}
-                                  title="Click to rename"
-                                >
-                                  {rec.import_name || rec.schema_type}
-                                </div>
-                            }
-                            <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 6 }}>
-                              {(rec.row_count_stored ?? rec.row_count) || 0} rows
-                              {rec.truncated ? ' (capped at 5,000)' : ''}
-                              {' · '}{new Date(rec.completed_at).toLocaleDateString()}
-                              {rec.source_filename ? ` · ${rec.source_filename}` : ''}
-                            </div>
-                            <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                              <button onClick={() => handleDownloadImport(rec)} style={btnStyle(NAVY)}>↓ Download</button>
-                              <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
-                              <button onClick={() => handleViewImport(rec)} style={btnStyle(NAVY)}>👁 View</button>
-                              <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
-                              <button onClick={() => handleResumeImport(rec, 3)} style={btnStyle(ORANGE)}>▶ Resume</button>
-                              {hasCreds && (<>
-                                <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>
-                                <button onClick={() => handleResumeImport(rec, 4)} style={btnStyle('#1A7F4E')}>⬆ Re-push</button>
-                              </>)}
-                            </div>
-                          </div>
+              {/* ── IMPORTS TAB ── */}
+              {activeTab === 'imports' && (
+                <div style={{ padding: '16px 24px' }}>
+                  <p style={{ fontSize: 11, color: '#9CA3AF', margin: '0 0 14px' }}>
+                    {statusLoading ? 'Loading…' : `${cnt} of 6 schemas complete`}
+                  </p>
+
+                  {IMPORT_ORDER.map((schema, i) => {
+                    const s = status[schema];
+                    const done = s?.complete;
+                    const isCurrent = !done && IMPORT_ORDER.slice(0, i).every(prev => status[prev]?.complete);
+                    const schemaImports = importsBySchema[schema] || [];
+
+                    return (
+                      <div key={schema} style={{ marginBottom: 16 }}>
+                        {/* Schema header */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: schemaImports.length > 0 ? 8 : 0 }}>
+                          <SchemaIcon done={done} isCurrent={isCurrent} />
+                          <span style={{ fontSize: 13, fontWeight: 600, color: done ? '#374151' : isCurrent ? NAVY : '#9CA3AF', flex: 1 }}>
+                            {schema}
+                          </span>
+                          {schemaImports.length > 1 && (
+                            <span style={{ fontSize: 11, color: '#9CA3AF', background: '#F3F4F6', borderRadius: 10, padding: '1px 7px' }}>
+                              {schemaImports.length}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Import cards */}
+                        {schemaImports.map(rec => (
+                          <ImportCard
+                            key={rec.id}
+                            rec={rec}
+                            hasCreds={hasCreds}
+                            renamingId={renamingId}
+                            renameVal={renameVal}
+                            setRenamingId={setRenamingId}
+                            setRenameVal={setRenameVal}
+                            onRenameSubmit={handleRenameSubmit}
+                            onDownload={() => handleDownloadImport(rec)}
+                            onView={() => handleViewImport(rec)}
+                            onResume={() => handleResumeImport(rec, 3)}
+                            onRepush={() => handleResumeImport(rec, 4)}
+                          />
                         ))}
                       </div>
-                    ))}
-                  </div>
-                );
-              })()}
-
-              <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '0 0 12px' }} />
-
-              {/* Update credentials */}
-              {selected.fmx_site_url && (
-                <div style={{ marginBottom: 16 }}>
-                  <button
-                    type="button"
-                    onClick={() => { setShowUpdateCreds(v => !v); setUpdateConnStatus(null); }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', padding: 0, textDecoration: 'underline' }}
-                  >
-                    {showUpdateCreds ? 'Cancel' : (selected.fmx_credentials ? 'Update API credentials' : 'Add API credentials')}
-                  </button>
-                  {showUpdateCreds && (
-                    <div style={{ marginTop: 10, padding: '12px 14px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
-                      <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API email</label>
-                        <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="email" placeholder="admin@example.com" value={updateEmail} onChange={e => { setUpdateEmail(e.target.value); setUpdateConnStatus(null); }} />
-                      </div>
-                      <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API password</label>
-                        <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="password" placeholder="••••••••" value={updatePassword} onChange={e => { setUpdatePassword(e.target.value); setUpdateConnStatus(null); }} />
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <button
-                          type="button"
-                          onClick={handleTestUpdateConn}
-                          disabled={!updateEmail || !updatePassword || updateConnLoading}
-                          style={{ fontSize: 12, padding: '5px 10px', borderRadius: 5, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                        >
-                          {updateConnLoading ? 'Testing…' : 'Test'}
-                        </button>
-                        {updateConnStatus && (
-                          <span style={{ fontSize: 12, color: updateConnStatus === 'ok' ? '#1A7F4E' : '#DC2626', fontWeight: 500 }}>
-                            {updateConnMsg}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleSaveUpdateCreds}
-                        disabled={!updateEmail || !updatePassword || updateSaving}
-                        style={{ fontSize: 13, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', opacity: (!updateEmail || !updatePassword) ? 0.5 : 1 }}
-                      >
-                        {updateSaving ? 'Saving…' : 'Save credentials'}
-                      </button>
-                    </div>
-                  )}
+                    );
+                  })}
                 </div>
               )}
 
-              <button
-                onClick={() => onSelectProject(selected)}
-                style={{ width: '100%', height: 44, fontSize: 14, fontWeight: 600, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 16 }}
-              >
-                Open project →
-              </button>
-
-              {/* Delete */}
-              {!deleteConfirm
-                ? <p style={{ textAlign: 'center', margin: 0 }}>
-                    <button onClick={() => setDeleteConfirm(true)} style={{ background: 'none', border: 'none', color: '#DC2626', fontSize: 12, cursor: 'pointer' }}>
-                      Delete project
-                    </button>
+              {/* ── DEPENDENCIES TAB ── */}
+              {activeTab === 'dependencies' && (
+                <div style={{ padding: '16px 24px' }}>
+                  <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 16, lineHeight: 1.5 }}>
+                    Reference values saved from completed imports. Downstream schema types rely on these to resolve cross-sheet links at push time.
                   </p>
-                : <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '10px 14px', textAlign: 'center' }}>
-                    <p style={{ margin: '0 0 8px', fontSize: 13, color: '#DC2626' }}>Are you sure? This cannot be undone.</p>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                      <button onClick={handleDelete} style={{ background: '#DC2626', color: '#fff', border: 'none', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Yes, delete</button>
-                      <button onClick={() => setDeleteConfirm(false)} style={{ background: '#fff', border: '1px solid #D1D5DB', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
-                    </div>
+
+                  {DEPENDENCY_CHAINS.map(({ provider, consumers }) => {
+                    const providerRefs = refBySchema[provider] || {};
+                    const allValues = Object.values(providerRefs).flat();
+                    const uniqueValues = [...new Set(allValues)].sort();
+
+                    return (
+                      <div key={provider} style={{ marginBottom: 24 }}>
+                        {/* Chain heading */}
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{provider}</span>
+                          <span style={{ fontSize: 12, color: '#9CA3AF' }}>→</span>
+                          <span style={{ fontSize: 12, color: '#6B7280' }}>{consumers.join(', ')}</span>
+                        </div>
+                        <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: 8 }}>
+                          {uniqueValues.length === 0
+                            ? <p style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', margin: '4px 0 0' }}>
+                                No {provider} data saved yet — complete a {provider} import first.
+                              </p>
+                            : uniqueValues.map(val => (
+                                <div key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid #F9FAFB' }}>
+                                  <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#E6F4EE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <span style={{ fontSize: 9, color: GREEN, fontWeight: 700 }}>✓</span>
+                                  </div>
+                                  <span style={{ fontSize: 12, color: '#374151', flex: 1 }}>{val}</span>
+                                  <span style={{ fontSize: 10, color: '#D1D5DB', fontStyle: 'italic' }}>resolved at push</span>
+                                </div>
+                              ))
+                          }
+                        </div>
+                        {uniqueValues.length > 0 && (
+                          <p style={{ fontSize: 11, color: '#9CA3AF', margin: '6px 0 0' }}>
+                            {uniqueValues.length} value{uniqueValues.length !== 1 ? 's' : ''} saved
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ── SETTINGS TAB ── */}
+              {activeTab === 'settings' && (
+                <div style={{ padding: '16px 24px' }}>
+
+                  {/* FMX site URL */}
+                  <div style={{ marginBottom: 20 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>FMX Site URL</label>
+                    {editingUrl
+                      ? <div style={{ display: 'flex', gap: 8 }}>
+                          <input
+                            autoFocus
+                            value={editUrlVal}
+                            onChange={e => setEditUrlVal(e.target.value)}
+                            onBlur={handleUrlBlur}
+                            onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                            style={{ ...inputStyle, fontSize: 13, padding: '7px 10px', flex: 1 }}
+                            placeholder="yoursite.gofmx.com"
+                          />
+                        </div>
+                      : <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 13, color: selected.fmx_site_url ? '#374151' : '#9CA3AF', flex: 1 }}>
+                            {selected.fmx_site_url || 'Not set'}
+                          </span>
+                          <button
+                            onClick={() => { setEditingUrl(true); setEditUrlVal(selected.fmx_site_url || ''); }}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}
+                          >
+                            Edit
+                          </button>
+                        </div>
+                    }
                   </div>
-              }
+
+                  {/* API credentials */}
+                  <div style={{ marginBottom: 20 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                      API Credentials
+                      {selected.fmx_connection_verified && (
+                        <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 500, padding: '2px 7px', borderRadius: 8, background: '#E6F4EE', color: GREEN, textTransform: 'none', letterSpacing: 0 }}>✓ Verified</span>
+                      )}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => { setShowUpdateCreds(v => !v); setUpdateConnStatus(null); }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', padding: 0, textDecoration: 'underline' }}
+                    >
+                      {showUpdateCreds ? 'Cancel' : (selected.fmx_credentials ? 'Update credentials' : 'Add credentials')}
+                    </button>
+                    {showUpdateCreds && (
+                      <div style={{ marginTop: 10, padding: '12px 14px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                        <div style={{ marginBottom: 8 }}>
+                          <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API email</label>
+                          <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="email" placeholder="admin@example.com" value={updateEmail} onChange={e => { setUpdateEmail(e.target.value); setUpdateConnStatus(null); }} />
+                        </div>
+                        <div style={{ marginBottom: 8 }}>
+                          <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API password</label>
+                          <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="password" placeholder="••••••••" value={updatePassword} onChange={e => { setUpdatePassword(e.target.value); setUpdateConnStatus(null); }} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <button
+                            type="button"
+                            onClick={handleTestUpdateConn}
+                            disabled={!updateEmail || !updatePassword || updateConnLoading}
+                            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 5, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            {updateConnLoading ? 'Testing…' : 'Test'}
+                          </button>
+                          {updateConnStatus && (
+                            <span style={{ fontSize: 12, color: updateConnStatus === 'ok' ? GREEN : '#DC2626', fontWeight: 500 }}>
+                              {updateConnMsg}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveUpdateCreds}
+                          disabled={!updateEmail || !updatePassword || updateSaving}
+                          style={{ fontSize: 13, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', opacity: (!updateEmail || !updatePassword) ? 0.5 : 1 }}
+                        >
+                          {updateSaving ? 'Saving…' : 'Save credentials'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '16px 0' }} />
+
+                  {/* Danger zone */}
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>Danger Zone</label>
+                    {!deleteConfirm
+                      ? <button onClick={() => setDeleteConfirm(true)} style={{ background: 'none', border: '1px solid #FECACA', color: '#DC2626', fontSize: 12, cursor: 'pointer', borderRadius: 5, padding: '5px 12px' }}>
+                          Delete project
+                        </button>
+                      : <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '10px 14px', textAlign: 'center' }}>
+                          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#DC2626' }}>Are you sure? This cannot be undone.</p>
+                          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                            <button onClick={handleDelete} style={{ background: '#DC2626', color: '#fff', border: 'none', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Yes, delete</button>
+                            <button onClick={() => setDeleteConfirm(false)} style={{ background: '#fff', border: '1px solid #D1D5DB', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                          </div>
+                        </div>
+                    }
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

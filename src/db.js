@@ -446,3 +446,18 @@ export async function renameImport(importId, newName) {
     return false;
   }
 }
+
+export async function getAllReferenceValues(projectId) {
+  try {
+    const { data, error } = await supabase
+      .from('project_reference_values')
+      .select('schema_type, field_name, value')
+      .eq('project_id', projectId)
+      .order('schema_type');
+    if (error) { console.error('getAllReferenceValues error:', error); return []; }
+    return data || [];
+  } catch (e) {
+    console.error('getAllReferenceValues exception:', e);
+    return [];
+  }
+}
