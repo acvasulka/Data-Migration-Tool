@@ -6,6 +6,7 @@ import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema } from "./db";
 import { syncFmxDataForProject } from "./fmxSync";
+import { getFieldTypeCategory } from "./fmxFieldTypes";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectChecklist from "./components/ProjectChecklist";
@@ -209,7 +210,7 @@ export default function App() {
     ]),
     // FMX custom fields from live sync (always appended; empty when no credentials)
     ...(fmxSyncData.customFields || []).map(cf => ({
-      name: cf.name, required: false, type: "string", group: "FMX Custom Fields",
+      name: cf.name, required: false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
       isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
     })),
   ] : [];
