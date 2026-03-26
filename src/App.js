@@ -646,6 +646,9 @@ export default function App() {
             onViewImport={handleViewFromWizard}
             history={history}
             fmxModules={selectedProject?.fmx_modules}
+            cardSettings={selectedProject?.card_settings || {}}
+            projectId={selectedProject?.id}
+            onProjectUpdated={(u) => setSelectedProject(u)}
           />
         )}
 
