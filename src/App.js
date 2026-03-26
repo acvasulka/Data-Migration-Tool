@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { FMX_SCHEMAS } from "./schemas";
+import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
 import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
@@ -198,13 +198,13 @@ export default function App() {
     return map;
   }, [fmxSyncData.customFields]);
 
-  const schema = schemaType ? FMX_SCHEMAS[schemaType] : null;
+  const schema = schemaType ? FMX_SCHEMAS[getBaseSchemaType(schemaType)] : null;
 
   // Use API-driven field list when credentials are present and sync has completed
   const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
   const baseFields = schemaType
-    ? (hasApiFields && FMX_API_STANDARD_FIELDS[schemaType]
-        ? FMX_API_STANDARD_FIELDS[schemaType]
+    ? (hasApiFields && FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
+        ? FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
         : (schema?.fields || []))
     : [];
 
@@ -260,14 +260,14 @@ export default function App() {
     setCsv(parsed);
     setFileInfo({ ...info, rowCount: parsed.rows.length });
     setAiLoading(true);
-    const suggested = suggestMapping(parsed.headers, FMX_SCHEMAS[schemaType].fields);
+    const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
         fetch("/api/claude", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "claude-sonnet-4-20250514", max_tokens: 1000,
-            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(FMX_SCHEMAS[schemaType].fields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
           })
         }).then(r => r.json()).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
@@ -645,6 +645,7 @@ export default function App() {
             onRepush={(rec) => handleResumeFromWizard(rec, 4)}
             onViewImport={handleViewFromWizard}
             history={history}
+            fmxModules={selectedProject?.fmx_modules}
           />
         )}
 

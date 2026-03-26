@@ -1,5 +1,6 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 import { getFieldTypeCategory } from './fmxFieldTypes';
+import { getBaseSchemaType } from './schemas';
 
 // Equipment assetCondition is an integer enum in the FMX API
 const ASSET_CONDITION_MAP = {
@@ -31,7 +32,8 @@ function coerceCustomFieldValue(value, fieldType) {
 // customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
 export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = []) {
-  const fieldMap = FMX_FIELD_MAP[schemaType] || {};
+  const baseType = getBaseSchemaType(schemaType);
+  const fieldMap = FMX_FIELD_MAP[baseType] || {};
   const payload = {};
   const customFields = [];
 
@@ -59,7 +61,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     }
 
     // Special handling: Equipment Asset Condition → integer enum
-    if (schemaType === 'Equipment' && fieldName === 'Asset Condition') {
+    if (baseType === 'Equipment' && fieldName === 'Asset Condition') {
       const normalized = String(value).toLowerCase().trim();
       const enumVal = ASSET_CONDITION_MAP[normalized];
       if (enumVal !== undefined) {
@@ -81,7 +83,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   }
 
   // Resolve ID lookup fields (Building → buildingID, etc.)
-  const lookups = FMX_ID_LOOKUP_FIELDS[schemaType] || {};
+  const lookups = FMX_ID_LOOKUP_FIELDS[baseType] || {};
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
     const value = row[fmxField];
     if (!value) return;
@@ -98,7 +100,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
 // Pre-fetch IDs for all unique reference values in the dataset.
 // Returns an idCache map: { "Building:Main Campus": 42, ... }
 export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
-  const lookups = FMX_ID_LOOKUP_FIELDS[schemaType] || {};
+  const lookups = FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
   const idCache = {};
 
   for (const [fmxField, lookup] of Object.entries(lookups)) {

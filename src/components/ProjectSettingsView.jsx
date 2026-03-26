@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { updateProject, saveProjectCredentials, updateProjectModules } from "../db";
-import { encodeCredentials, testFmxConnection, fetchFmxModules } from "../fmxSync";
+import { encodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules } from "../fmxSync";
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -17,7 +17,8 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   const [modulesDetecting, setModulesDetecting] = useState(false);
   const [modulesMsg, setModulesMsg] = useState('');
   const [editingModules, setEditingModules] = useState(false);
-  const [modulesVal, setModulesVal] = useState({});
+  // editModulesVal: { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }
+  const [editModulesVal, setEditModulesVal] = useState({});
 
   // Credentials
   const [showCredForm, setShowCredForm] = useState(false);
@@ -96,7 +97,9 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
       const modules = await fetchFmxModules(url, email, password);
       const updated = await updateProjectModules(selectedProject.id, modules);
       if (updated && onProjectUpdated) onProjectUpdated(updated);
-      setModulesMsg(`✓ Detected: work requests → "${modules.workRequest}", scheduling → "${modules.scheduling}", work tasks → "${modules.workTask}"`);
+      const wrLabels = modules.workRequestModules.map(m => m.label).join(', ');
+      const srLabels = modules.scheduleRequestModules.map(m => m.label).join(', ');
+      setModulesMsg(`✓ Found ${modules.workRequestModules.length} work request module${modules.workRequestModules.length !== 1 ? 's' : ''}: ${wrLabels} · ${modules.scheduleRequestModules.length} schedule module${modules.scheduleRequestModules.length !== 1 ? 's' : ''}: ${srLabels}`);
     } catch {
       setModulesMsg('✕ Could not auto-detect modules.');
     }
@@ -104,10 +107,32 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   };
 
   const handleSaveModules = async () => {
-    const updated = await updateProjectModules(selectedProject.id, modulesVal);
+    const updated = await updateProjectModules(selectedProject.id, editModulesVal);
     if (updated && onProjectUpdated) onProjectUpdated(updated);
     setEditingModules(false);
     setModulesMsg('');
+  };
+
+  // Helpers for editing module arrays
+  const updateModuleEntry = (key, idx, field, value) => {
+    setEditModulesVal(prev => {
+      const arr = [...(prev[key] || [])];
+      arr[idx] = { ...arr[idx], [field]: value };
+      return { ...prev, [key]: arr };
+    });
+  };
+  const addModuleEntry = (key) => {
+    setEditModulesVal(prev => ({
+      ...prev,
+      [key]: [...(prev[key] || []), { slug: '', label: '' }],
+    }));
+  };
+  const removeModuleEntry = (key, idx) => {
+    setEditModulesVal(prev => {
+      const arr = [...(prev[key] || [])];
+      arr.splice(idx, 1);
+      return { ...prev, [key]: arr };
+    });
   };
 
   return (
@@ -253,7 +278,15 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
             <div style={{ display: 'flex', gap: 8 }}>
               {!editingModules && (
                 <button
-                  onClick={() => { setEditingModules(true); setModulesVal({ ...(selectedProject?.fmx_modules || { workRequest: 'maintenance', scheduling: 'scheduling', workTask: 'maintenance' }) }); setModulesMsg(''); }}
+                  onClick={() => {
+                    const normalized = normalizeModules(selectedProject?.fmx_modules) || {
+                      workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
+                      scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
+                    };
+                    setEditModulesVal(JSON.parse(JSON.stringify(normalized)));
+                    setEditingModules(true);
+                    setModulesMsg('');
+                  }}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}
                 >
                   Edit
@@ -269,27 +302,45 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
             </div>
           </div>
           <p style={{ margin: '0 0 12px', fontSize: 12, color: '#6B7280' }}>
-            FMX uses org-specific URL slugs for Work Requests, Schedule Requests, and Work Tasks. Auto-detect fetches these from your organization's API, or override them manually.
+            FMX uses org-specific URL slugs. Each module creates its own import card. Auto-detect reads all available modules from your org's API, or configure them manually.
           </p>
 
           {editingModules ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div>
               {[
-                { key: 'workRequest', label: 'Work Request module' },
-                { key: 'scheduling', label: 'Scheduling module' },
-                { key: 'workTask', label: 'Work Task module' },
-              ].map(({ key, label }) => (
-                <div key={key}>
-                  <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>{label}</label>
-                  <input
-                    style={{ ...inputStyle, fontSize: 13 }}
-                    value={modulesVal[key] || ''}
-                    onChange={e => setModulesVal(v => ({ ...v, [key]: e.target.value }))}
-                    placeholder={key === 'scheduling' ? 'scheduling' : 'maintenance'}
-                  />
+                { key: 'workRequestModules', label: 'Work Request Modules', placeholder: 'maintenance' },
+                { key: 'scheduleRequestModules', label: 'Schedule Request Modules', placeholder: 'scheduling' },
+              ].map(({ key, label, placeholder }) => (
+                <div key={key} style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>{label}</div>
+                  {(editModulesVal[key] || []).map((entry, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                      <input
+                        style={{ ...inputStyle, fontSize: 12, flex: 1 }}
+                        placeholder={`URL slug (e.g. ${placeholder})`}
+                        value={entry.slug || ''}
+                        onChange={e => updateModuleEntry(key, idx, 'slug', e.target.value)}
+                      />
+                      <input
+                        style={{ ...inputStyle, fontSize: 12, flex: 1 }}
+                        placeholder="Display label (e.g. Maintenance)"
+                        value={entry.label || ''}
+                        onChange={e => updateModuleEntry(key, idx, 'label', e.target.value)}
+                      />
+                      <button
+                        onClick={() => removeModuleEntry(key, idx)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#9CA3AF', padding: '0 4px', lineHeight: 1 }}
+                        title="Remove"
+                      >×</button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => addModuleEntry(key)}
+                    style={{ fontSize: 12, color: ORANGE, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500 }}
+                  >+ Add module</button>
                 </div>
               ))}
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button onClick={handleSaveModules}
                   style={{ padding: '8px 16px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
                   Save
@@ -300,22 +351,37 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
                 </button>
               </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 10 }}>
-              {[
-                { label: 'Work Requests', key: 'workRequest' },
-                { label: 'Scheduling', key: 'scheduling' },
-                { label: 'Work Tasks', key: 'workTask' },
-              ].map(({ label, key }) => (
-                <div key={key} style={{ flex: 1, background: '#F3F4F6', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ fontSize: 11, color: '#6B7280', fontWeight: 600, marginBottom: 2 }}>{label}</div>
-                  <div style={{ fontSize: 13, color: NAVY, fontWeight: 600 }}>
-                    {selectedProject?.fmx_modules?.[key] || <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>default</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          ) : (() => {
+            const mods = normalizeModules(selectedProject?.fmx_modules);
+            const sections = [
+              { key: 'workRequestModules', label: 'Work Request Modules' },
+              { key: 'scheduleRequestModules', label: 'Schedule Request Modules' },
+            ];
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {sections.map(({ key, label }) => {
+                  const entries = mods?.[key] || [];
+                  return (
+                    <div key={key}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>
+                      {entries.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {entries.map((m, i) => (
+                            <div key={i} style={{ background: '#F3F4F6', borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
+                              <span style={{ fontWeight: 600, color: NAVY }}>{m.label}</span>
+                              <span style={{ color: '#9CA3AF', marginLeft: 4 }}>({m.slug})</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic' }}>default</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {modulesMsg && (
             <p style={{ margin: '10px 0 0', fontSize: 12, color: modulesMsg.startsWith('✓') ? GREEN : '#DC2626' }}>

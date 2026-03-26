@@ -1,26 +1,38 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { IMPORT_ORDER, FMX_SCHEMAS } from "../schemas";
+import { FMX_SCHEMAS, getImportOrder, getBaseSchemaType, getSchemaDisplayName } from "../schemas";
+import { normalizeModules } from "../fmxSync";
 
-const DEPS = {
-  Building:         "No dependencies",
-  Resource:         "Requires: Building",
-  User:             "Requires: Building",
-  "Equipment Type": "No dependencies",
-  Equipment:        "Requires: Building + Equipment Type",
-  Inventory:        "Requires: Building",
+// Dependency text keyed by base schema type
+const BASE_DEPS = {
+  Building:                 "No dependencies",
+  Resource:                 "Requires: Building",
+  User:                     "Requires: Building",
+  "Equipment Type":         "No dependencies",
+  Equipment:                "Requires: Building + Equipment Type",
+  Inventory:                "Requires: Building",
+  "Work Request":           "Requires: Building (Equipment optional)",
+  "Schedule Request":       "Requires: Building (Resource optional)",
+  "Work Task":              "Requires: Building (Equipment optional)",
+  "Transportation Request": "Requires: Building (Resource optional)",
+  "Accounting Account":     "No dependencies",
 };
 
-export default function StepSelectType({ history, onSelectType }) {
+export default function StepSelectType({ history, onSelectType, fmxModules }) {
   const [hovered, setHovered] = useState(null);
+
+  const mods = normalizeModules(fmxModules);
+  const importOrder = getImportOrder(mods);
 
   return (
     <div style={{ maxWidth: 600 }}>
-      {IMPORT_ORDER.map((type, idx) => {
+      {importOrder.map((type, idx) => {
         const isHovered = hovered === type;
         const exportedRows = history.filter(h => h.type === type).reduce((a, b) => a + b.rows, 0);
         const wasExported = exportedRows > 0;
-        const fieldCount = FMX_SCHEMAS[type].fields.length;
+        const fieldCount = FMX_SCHEMAS[getBaseSchemaType(type)]?.fields?.length || 0;
+        const depText = BASE_DEPS[getBaseSchemaType(type)] || '';
+        const displayName = getSchemaDisplayName(type);
 
         return (
           <div key={type}>
@@ -48,8 +60,8 @@ export default function StepSelectType({ history, onSelectType }) {
 
               {/* Type name + dependency */}
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: C.navy, lineHeight: 1.3 }}>{type}</div>
-                <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>{DEPS[type]}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: C.navy, lineHeight: 1.3 }}>{displayName}</div>
+                <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>{depText}</div>
               </div>
 
               {/* Right: field count + export badge + arrow */}
@@ -67,7 +79,7 @@ export default function StepSelectType({ history, onSelectType }) {
                 <span style={{ color: C.textMid, fontSize: 16 }}>→</span>
               </div>
             </div>
-            {idx < IMPORT_ORDER.length - 1 && (
+            {idx < importOrder.length - 1 && (
               <div style={{ height: 1, background: C.border, marginLeft: 60 }} />
             )}
           </div>
