@@ -344,10 +344,29 @@ export async function completeImport(
   schemaType,
   rowCount,
   mappingSnapshot,
-  referenceValues
+  referenceValues,
+  rowsData = [],
+  importName = null,
+  sourceFilename = null
 ) {
   try {
-    const { error: importError } = await supabase
+    // Auto-generate import name if not provided
+    let name = importName;
+    if (!name) {
+      const { count } = await supabase
+        .from('project_imports')
+        .select('*', { count: 'exact', head: true })
+        .eq('project_id', projectId)
+        .eq('schema_type', schemaType);
+      const n = (count || 0) + 1;
+      name = `${schemaType} - ${String(n).padStart(2, '0')}`;
+    }
+
+    const ROW_CAP = 5000;
+    const capped = Array.isArray(rowsData) ? rowsData.slice(0, ROW_CAP) : [];
+    const truncated = Array.isArray(rowsData) && rowsData.length > ROW_CAP;
+
+    const { data: importRecord, error: importError } = await supabase
       .from('project_imports')
       .insert({
         project_id: projectId,
@@ -355,8 +374,15 @@ export async function completeImport(
         row_count: rowCount,
         mapping_snapshot: mappingSnapshot,
         completed_at: new Date().toISOString(),
-      });
-    if (importError) return false;
+        import_name: name,
+        rows_data: capped,
+        row_count_stored: capped.length,
+        source_filename: sourceFilename || null,
+        truncated,
+      })
+      .select('id')
+      .single();
+    if (importError) return null;
 
     if (referenceValues && referenceValues.length > 0) {
       const rows = referenceValues.map(({ fieldName, value }) => ({
@@ -372,10 +398,50 @@ export async function completeImport(
           onConflict: 'project_id,schema_type,field_name,value',
           ignoreDuplicates: true,
         });
-      if (refError) return false;
+      if (refError) return null;
     }
 
-    return true;
+    return importRecord?.id ?? true;
+  } catch {
+    return null;
+  }
+}
+
+export async function getProjectImports(projectId) {
+  try {
+    const { data, error } = await supabase
+      .from('project_imports')
+      .select('id, schema_type, import_name, row_count, row_count_stored, completed_at, source_filename, truncated, mapping_snapshot')
+      .eq('project_id', projectId)
+      .order('completed_at', { ascending: false });
+    if (error) return [];
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getImportRows(importId) {
+  try {
+    const { data, error } = await supabase
+      .from('project_imports')
+      .select('rows_data')
+      .eq('id', importId)
+      .single();
+    if (error) return [];
+    return data?.rows_data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function renameImport(importId, newName) {
+  try {
+    const { error } = await supabase
+      .from('project_imports')
+      .update({ import_name: newName })
+      .eq('id', importId);
+    return !error;
   } catch {
     return false;
   }
