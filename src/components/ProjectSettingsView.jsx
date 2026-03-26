@@ -17,7 +17,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   const [modulesDetecting, setModulesDetecting] = useState(false);
   const [modulesMsg, setModulesMsg] = useState('');
   const [editingModules, setEditingModules] = useState(false);
-  // editModulesVal: { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }
+  // editModulesVal: { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}], workTaskModules:[{slug,label}] }
   const [editModulesVal, setEditModulesVal] = useState({});
 
   // Credentials
@@ -99,7 +99,9 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
       if (updated && onProjectUpdated) onProjectUpdated(updated);
       const wrLabels = modules.workRequestModules.map(m => m.label).join(', ');
       const srLabels = modules.scheduleRequestModules.map(m => m.label).join(', ');
-      setModulesMsg(`✓ Found ${modules.workRequestModules.length} work request module${modules.workRequestModules.length !== 1 ? 's' : ''}: ${wrLabels} · ${modules.scheduleRequestModules.length} schedule module${modules.scheduleRequestModules.length !== 1 ? 's' : ''}: ${srLabels}`);
+      const wtLabels = modules.workTaskModules.map(m => m.label).join(', ');
+      const pl = (n, s) => `${n} ${s}${n !== 1 ? 's' : ''}`;
+      setModulesMsg(`✓ Found ${pl(modules.workRequestModules.length, 'work request module')}: ${wrLabels} · ${pl(modules.scheduleRequestModules.length, 'schedule module')}: ${srLabels} · ${pl(modules.workTaskModules.length, 'work task module')}: ${wtLabels}`);
     } catch {
       setModulesMsg('✕ Could not auto-detect modules.');
     }
@@ -282,6 +284,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
                     const normalized = normalizeModules(selectedProject?.fmx_modules) || {
                       workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
                       scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
+                      workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
                     };
                     setEditModulesVal(JSON.parse(JSON.stringify(normalized)));
                     setEditingModules(true);
@@ -310,6 +313,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
               {[
                 { key: 'workRequestModules', label: 'Work Request Modules', placeholder: 'maintenance' },
                 { key: 'scheduleRequestModules', label: 'Schedule Request Modules', placeholder: 'scheduling' },
+                { key: 'workTaskModules', label: 'Work Task Modules', placeholder: 'maintenance' },
               ].map(({ key, label, placeholder }) => (
                 <div key={key} style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>{label}</div>
@@ -356,6 +360,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
             const sections = [
               { key: 'workRequestModules', label: 'Work Request Modules' },
               { key: 'scheduleRequestModules', label: 'Schedule Request Modules' },
+              { key: 'workTaskModules', label: 'Work Task Modules' },
             ];
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

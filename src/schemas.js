@@ -23,27 +23,30 @@ export function getSchemaModuleSlug(schemaType) {
 }
 
 /** Human-readable card title for module-qualified types.
- *  e.g. "Work Request:maintenance" → "Work Request — Maintenance" */
+ *  Converts hyphenated slug to Title Case words.
+ *  e.g. "Work Task:fit-inspections" → "Work Task — Fit Inspections" */
 export function getSchemaDisplayName(schemaType) {
   const base = getBaseSchemaType(schemaType);
   const slug = getSchemaModuleSlug(schemaType);
   if (!slug) return schemaType;
-  return `${base} — ${slug.charAt(0).toUpperCase() + slug.slice(1)}`;
+  const title = slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  return `${base} — ${title}`;
 }
 
 /** Builds a dynamic import order from fmxModules.
- *  Each work-request module becomes its own "Work Request:<slug>" entry (and a matching
- *  "Work Task:<slug>" entry), and each scheduling module becomes "Schedule Request:<slug>".
- *  Falls back to default single-module behaviour when fmxModules is null/undefined. */
+ *  Work Requests, Schedule Requests, and Work Tasks each have their own independent
+ *  module lists — one import card is generated per module per type.
+ *  Falls back to single-module defaults when fmxModules is null/undefined/incomplete. */
 export function getImportOrder(fmxModules) {
   const base = ["Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory"];
-  const wrMods = fmxModules?.workRequestModules  || [{ slug: 'maintenance', label: 'Maintenance' }];
+  const wrMods = fmxModules?.workRequestModules    || [{ slug: 'maintenance', label: 'Maintenance' }];
   const srMods = fmxModules?.scheduleRequestModules || [{ slug: 'scheduling',  label: 'Scheduling'  }];
+  const wtMods = fmxModules?.workTaskModules       || [{ slug: 'maintenance', label: 'Maintenance' }];
   return [
     ...base,
     ...wrMods.map(m => `Work Request:${m.slug}`),
     ...srMods.map(m => `Schedule Request:${m.slug}`),
-    ...wrMods.map(m => `Work Task:${m.slug}`),   // work tasks mirror work-request modules
+    ...wtMods.map(m => `Work Task:${m.slug}`),    // independent from work requests
     "Transportation Request",
     "Accounting Account",
   ];
