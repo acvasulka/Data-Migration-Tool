@@ -78,20 +78,24 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
     setCredSaving(false);
 
     // Auto-detect modules immediately after a verified credential save.
-    // Uses the in-scope credEmail/credPassword so we don't need to re-read
-    // from the potentially-stale selectedProject prop.
+    // Read url/email/pw from the fresh DB row and local closure values
+    // (not from selectedProject which may be stale on new projects).
     if (updated && verified) {
-      const url = selectedProject?.fmx_site_url;
-      if (url && credEmail && credPassword) {
+      const url = updated.fmx_site_url;   // fresh DB row — never stale
+      const email = credEmail;             // capture before React state clears
+      const pw = credPassword;
+      if (url && email && pw) {
         try {
-          const fresh = await fetchFmxModules(url, credEmail, credPassword);
+          const fresh = await fetchFmxModules(url, email, pw);
           const existing = normalizeModules(updated.fmx_modules);
           const { merged, changed } = mergeModules(existing, fresh);
           if (changed) {
             const withMods = await updateProjectModules(updated.id, merged);
             if (withMods && onProjectUpdated) onProjectUpdated(withMods);
           }
-        } catch { /* silent — manual Auto-detect in Settings always available */ }
+        } catch (err) {
+          console.error('Auto-detect modules failed:', err);
+        }
       }
     }
   };
