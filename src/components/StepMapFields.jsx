@@ -1,4 +1,5 @@
 import { C } from "../theme";
+import { getFieldTypeLabel } from "../fmxFieldTypes";
 
 export default function StepMapFields({
   csv,
@@ -43,9 +44,7 @@ export default function StepMapFields({
 
   const getTypeLabel = (f) => {
     if (f.isCustomField) {
-      const ft = f.fieldType || 'Text';
-      const map = { Numeric: 'Number', Currency: 'Currency', Date: 'Date', Checkbox: 'Yes/No', Text: 'Text', LongText: 'Text', Dropdown: 'Dropdown', MultiSelect: 'MultiSelect' };
-      return map[ft] || ft;
+      return getFieldTypeLabel(f.fieldType);
     }
     const map = { string: 'Text', number: 'Number', date: 'Date', email: 'Email' };
     return map[f.type] || null;

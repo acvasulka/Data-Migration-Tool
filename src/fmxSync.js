@@ -65,6 +65,8 @@ async function fetchCustomFields(siteUrl, email, password, schemaType) {
     const items = data.items || data.results || (Array.isArray(data) ? data : []);
     if (items.length === 0 || !items[0].customFields) return [];
 
+    console.warn('Raw custom field data:', JSON.stringify(items[0]?.customFields?.slice(0, 3)));
+
     const customFields = items[0].customFields
       .filter(cf => cf.customFieldID && (cf.name || cf.displayName))
       .map(cf => ({

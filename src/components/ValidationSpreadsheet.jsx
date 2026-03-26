@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
+import { getFieldTypeLabel } from "../fmxFieldTypes";
 
 export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell }) {
   const [editCell, setEditCell] = useState(null);
@@ -100,9 +101,7 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
                 const tooltip = (() => {
                   if (!f) return '';
                   if (f.isCustomField) {
-                    const ft = f.fieldType || 'Text';
-                    const desc = { Numeric: 'Number', Currency: 'Currency', Date: 'Date — MM/DD/YYYY or YYYY-MM-DD', Checkbox: 'Yes/No', Text: 'Text — any characters', LongText: 'Text — long text', Dropdown: 'Dropdown selection', MultiSelect: 'Multiple selections' };
-                    return `${desc[ft] || 'Text'} (FMX Custom Field)`;
+                    return `${getFieldTypeLabel(f.fieldType)} (FMX Custom Field)`;
                   }
                   const typeDesc = { string: 'Text — any characters', number: 'Number — numeric value (e.g. 42 or 3.14)', date: 'Date — MM/DD/YYYY or YYYY-MM-DD', email: 'Email — valid email address (e.g. name@example.com)' };
                   return typeDesc[f.type] || '';

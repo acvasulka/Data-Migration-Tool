@@ -1,21 +1,18 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
+import { getFieldTypeCategory } from './fmxFieldTypes';
 
 function coerceCustomFieldValue(value, fieldType) {
   if (value === null || value === undefined || value === '') return null;
-  switch (fieldType) {
-    case 'Numeric':
-    case 'Currency': {
+  const category = getFieldTypeCategory(fieldType);
+  switch (category) {
+    case 'number': {
       const num = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
       return isNaN(num) ? null : num;
     }
-    case 'Date':
+    case 'date':
       return String(value); // FMX handles date string parsing
-    case 'Checkbox':
+    case 'boolean':
       return value === true || value === 'true' || value === '1' || value === 'yes' || value === 'Yes';
-    case 'Text':
-    case 'LongText':
-    case 'Dropdown':
-    case 'MultiSelect':
     default:
       return String(value);
   }
