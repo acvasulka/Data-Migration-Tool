@@ -74,6 +74,48 @@ export function normalizeModules(raw) {
   };
 }
 
+// Merges a freshly-fetched module list into the existing stored modules.
+// Rules:
+//   - Existing modules still in fresh → kept active (label updated if changed)
+//   - Existing modules NOT in fresh   → marked { ..., disabled: true }
+//   - Fresh modules not yet stored    → added as active
+// Returns { merged, changed } where `changed` is true only if the result differs from existing.
+export function mergeModules(existing, fresh) {
+  const mergeList = (existingList = [], freshList = []) => {
+    const freshMap  = new Map(freshList.map(m => [m.slug, m]));
+    const existingSlugs = new Set(existingList.map(m => m.slug));
+    const result = [];
+
+    // Preserve existing order; update active/disabled status
+    for (const m of existingList) {
+      if (freshMap.has(m.slug)) {
+        // Still present — ensure label is current, clear disabled flag
+        result.push({ slug: m.slug, label: freshMap.get(m.slug).label });
+      } else {
+        // Gone from org → mark disabled (keep for history)
+        result.push({ slug: m.slug, label: m.label, disabled: true });
+      }
+    }
+    // Append brand-new modules from fresh
+    for (const m of freshList) {
+      if (!existingSlugs.has(m.slug)) {
+        result.push({ slug: m.slug, label: m.label });
+      }
+    }
+    return result;
+  };
+
+  const norm = existing || {};
+  const merged = {
+    workRequestModules:    mergeList(norm.workRequestModules,    fresh.workRequestModules),
+    scheduleRequestModules: mergeList(norm.scheduleRequestModules, fresh.scheduleRequestModules),
+    workTaskModules:       mergeList(norm.workTaskModules,       fresh.workTaskModules),
+  };
+
+  const changed = JSON.stringify(merged) !== JSON.stringify(norm);
+  return { merged, changed };
+}
+
 const POST_OPTIONS_ENDPOINTS = {
   'Building':               '/v1/buildings/post-options',
   'Equipment':              '/v1/equipment/post-options',

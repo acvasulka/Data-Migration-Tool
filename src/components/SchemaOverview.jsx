@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { FMX_SCHEMAS, getImportOrder, getBaseSchemaType, getSchemaDisplayName } from "../schemas";
+import { FMX_SCHEMAS, getImportOrder, getBaseSchemaType, getSchemaDisplayName, isModuleDisabled } from "../schemas";
 import { normalizeModules } from "../fmxSync";
 import { getImportRows } from "../db";
 import { downloadCSV } from "../utils";
@@ -91,17 +91,19 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
           const hasImports = schemaImports.length > 0;
           const fieldCount = FMX_SCHEMAS[getBaseSchemaType(schema)]?.fields?.length || 0;
           const inSession = !!sessionByType[schema];
+          const disabled = isModuleDisabled(schema, mods);
 
           return (
             <div
               key={schema}
               style={{
-                background: hasImports ? '#F0FAF4' : '#fff',
-                border: hasImports ? '1px solid #BBE5CB' : '1px solid #E5E7EB',
+                background: disabled ? '#F9FAFB' : hasImports ? '#F0FAF4' : '#fff',
+                border: disabled ? '1px solid #E5E7EB' : hasImports ? '1px solid #BBE5CB' : '1px solid #E5E7EB',
                 borderRadius: 10,
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
+                opacity: disabled ? 0.75 : 1,
               }}
             >
               {/* Card header */}
@@ -110,7 +112,7 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
                   {/* Number circle */}
                   <div style={{
                     width: 28, height: 28, borderRadius: '50%',
-                    background: hasImports ? GREEN : NAVY,
+                    background: disabled ? '#9CA3AF' : hasImports ? GREEN : NAVY,
                     color: '#fff',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 13, fontWeight: 700, flexShrink: 0,
@@ -118,14 +120,22 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
                     {hasImports ? '✓' : idx + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: NAVY, lineHeight: 1.3 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: disabled ? '#9CA3AF' : NAVY, lineHeight: 1.3 }}>
                       {getSchemaDisplayName(schema)}
                     </div>
                     <div style={{ fontSize: 12, color: C.textMid, marginTop: 2 }}>{getDeps(schema)}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-                    <span style={{ fontSize: 11, color: C.textLight }}>{fieldCount} fields</span>
-                    {inSession && (
+                    {disabled ? (
+                      <span style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA',
+                        fontWeight: 600,
+                      }}>Module disabled</span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: C.textLight }}>{fieldCount} fields</span>
+                    )}
+                    {inSession && !disabled && (
                       <span style={{
                         fontSize: 10, padding: '2px 6px', borderRadius: 4,
                         background: C.okBg, color: C.okText, border: `1px solid ${C.okBorder}`,
@@ -134,20 +144,27 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
                   </div>
                 </div>
 
-                {/* Upload button */}
-                <button
-                  onClick={() => onSelectType(schema)}
-                  style={{
-                    width: '100%', padding: '8px 0', fontSize: 13, fontWeight: 600,
-                    background: ORANGE, color: '#fff', border: 'none', borderRadius: 6,
-                    cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
-                    transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.background = C.orangeHov || '#b8410f'}
-                  onMouseLeave={e => e.currentTarget.style.background = ORANGE}
-                >
-                  ↑ Upload new data
-                </button>
+                {/* Upload button — hidden for disabled modules */}
+                {!disabled && (
+                  <button
+                    onClick={() => onSelectType(schema)}
+                    style={{
+                      width: '100%', padding: '8px 0', fontSize: 13, fontWeight: 600,
+                      background: ORANGE, color: '#fff', border: 'none', borderRadius: 6,
+                      cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.orangeHov || '#b8410f'}
+                    onMouseLeave={e => e.currentTarget.style.background = ORANGE}
+                  >
+                    ↑ Upload new data
+                  </button>
+                )}
+                {disabled && (
+                  <div style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', padding: '4px 0' }}>
+                    This module is no longer active in your FMX organization.
+                  </div>
+                )}
               </div>
 
               {/* Import history (if any) */}

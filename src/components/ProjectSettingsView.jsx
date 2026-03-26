@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { updateProject, saveProjectCredentials, updateProjectModules } from "../db";
-import { encodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules } from "../fmxSync";
+import { encodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -94,14 +94,35 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
     setModulesDetecting(true);
     setModulesMsg('');
     try {
-      const modules = await fetchFmxModules(url, email, password);
-      const updated = await updateProjectModules(selectedProject.id, modules);
+      const fresh = await fetchFmxModules(url, email, password);
+      const existing = normalizeModules(selectedProject?.fmx_modules);
+      const { merged, changed } = mergeModules(existing, fresh);
+
+      if (!changed) {
+        setModulesMsg('✓ Already up to date — no module changes detected.');
+        setModulesDetecting(false);
+        return;
+      }
+
+      const updated = await updateProjectModules(selectedProject.id, merged);
       if (updated && onProjectUpdated) onProjectUpdated(updated);
-      const wrLabels = modules.workRequestModules.map(m => m.label).join(', ');
-      const srLabels = modules.scheduleRequestModules.map(m => m.label).join(', ');
-      const wtLabels = modules.workTaskModules.map(m => m.label).join(', ');
-      const pl = (n, s) => `${n} ${s}${n !== 1 ? 's' : ''}`;
-      setModulesMsg(`✓ Found ${pl(modules.workRequestModules.length, 'work request module')}: ${wrLabels} · ${pl(modules.scheduleRequestModules.length, 'schedule module')}: ${srLabels} · ${pl(modules.workTaskModules.length, 'work task module')}: ${wtLabels}`);
+
+      // Build summary message
+      const pl = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`;
+      const activeWr  = merged.workRequestModules.filter(m => !m.disabled);
+      const disabledWr = merged.workRequestModules.filter(m => m.disabled);
+      const activeSr  = merged.scheduleRequestModules.filter(m => !m.disabled);
+      const activeWt  = merged.workTaskModules.filter(m => !m.disabled);
+      const disabledWt = merged.workTaskModules.filter(m => m.disabled);
+
+      let msg = `✓ Updated — ${pl(activeWr.length, 'work request module')}: ${activeWr.map(m => m.label).join(', ')}`;
+      msg += ` · ${pl(activeSr.length, 'schedule module')}: ${activeSr.map(m => m.label).join(', ')}`;
+      msg += ` · ${pl(activeWt.length, 'work task module')}: ${activeWt.map(m => m.label).join(', ')}`;
+      if (disabledWr.length + disabledWt.length > 0) {
+        const disabledLabels = [...disabledWr, ...disabledWt].map(m => m.label).join(', ');
+        msg += ` · Disabled: ${disabledLabels}`;
+      }
+      setModulesMsg(msg);
     } catch {
       setModulesMsg('✕ Could not auto-detect modules.');
     }
@@ -372,9 +393,15 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
                       {entries.length > 0 ? (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                           {entries.map((m, i) => (
-                            <div key={i} style={{ background: '#F3F4F6', borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
-                              <span style={{ fontWeight: 600, color: NAVY }}>{m.label}</span>
+                            <div key={i} style={{
+                              background: m.disabled ? '#F9FAFB' : '#F3F4F6',
+                              borderRadius: 6, padding: '6px 10px', fontSize: 12,
+                              border: m.disabled ? '1px solid #E5E7EB' : 'none',
+                              opacity: m.disabled ? 0.7 : 1,
+                            }}>
+                              <span style={{ fontWeight: 600, color: m.disabled ? '#9CA3AF' : NAVY }}>{m.label}</span>
                               <span style={{ color: '#9CA3AF', marginLeft: 4 }}>({m.slug})</span>
+                              {m.disabled && <span style={{ marginLeft: 6, fontSize: 10, color: '#DC2626', fontWeight: 600 }}>disabled</span>}
                             </div>
                           ))}
                         </div>
