@@ -1,29 +1,48 @@
 export const FMX_FIELD_TYPE_MAP = {
-  // Numeric enum values from FMX API
-  0: { label: 'Text', type: 'string' },
-  1: { label: 'Long Text', type: 'string' },
-  2: { label: 'Number', type: 'number' },
-  3: { label: 'Date', type: 'date' },
-  4: { label: 'Dropdown', type: 'string' },
-  5: { label: 'Multi-select', type: 'string' },
-  6: { label: 'Yes/No', type: 'boolean' },
-  7: { label: 'Currency', type: 'number' },
-  8: { label: 'Attachment', type: 'string' },
-  // String versions in case API returns string names
-  'Text':        { label: 'Text', type: 'string' },
-  'LongText':    { label: 'Long Text', type: 'string' },
-  'Numeric':     { label: 'Number', type: 'number' },
-  'Date':        { label: 'Date', type: 'date' },
-  'Dropdown':    { label: 'Dropdown', type: 'string' },
-  'MultiSelect': { label: 'Multi-select', type: 'string' },
-  'Checkbox':    { label: 'Yes/No', type: 'boolean' },
-  'Currency':    { label: 'Currency', type: 'number' },
+  'Text':        { label: 'Text',       category: 'string'  },
+  'URL':         { label: 'URL',        category: 'string'  },
+  'Date':        { label: 'Date',       category: 'date'    },
+  'DropDownList':{ label: 'Dropdown',   category: 'string'  },
+  'ReadOnly':    { label: 'Read only',  category: 'string'  },
+  'Number':      { label: 'Number',     category: 'number'  },
+  'Checkbox':    { label: 'Yes/No',     category: 'boolean' },
+  'Time':        { label: 'Time',       category: 'string'  },
+  'Attachments': { label: 'Attachment', category: 'string'  },
+  'Currency':    { label: 'Currency',   category: 'number'  },
+  'User':        { label: 'User',       category: 'string'  },
 };
 
 export function getFieldTypeLabel(fieldType) {
-  return FMX_FIELD_TYPE_MAP[fieldType]?.label || `Type ${fieldType}`;
+  return FMX_FIELD_TYPE_MAP[fieldType]?.label || fieldType || 'Text';
 }
 
 export function getFieldTypeCategory(fieldType) {
-  return FMX_FIELD_TYPE_MAP[fieldType]?.type || 'string';
+  return FMX_FIELD_TYPE_MAP[fieldType]?.category || 'string';
+}
+
+export function getTooltipText(field) {
+  if (!field) return '';
+  const baseType = field.isCustomField
+    ? getFieldTypeLabel(field.fieldType)
+    : {
+        string: 'Text',
+        number: 'Number',
+        date: 'Date',
+        email: 'Email',
+      }[field.type] || 'Text';
+
+  const format = {
+    'Text':     'any characters',
+    'URL':      'valid URL (e.g. https://example.com)',
+    'Date':     'MM/DD/YYYY or YYYY-MM-DD',
+    'Dropdown': 'one of the available options',
+    'Number':   'numeric value (e.g. 1956 or 3.14)',
+    'Yes/No':   'Yes or No',
+    'Time':     'HH:MM (e.g. 09:30)',
+    'Currency': 'numeric value (e.g. 25.00)',
+    'Email':    'valid email (e.g. name@example.com)',
+  }[baseType] || 'any value';
+
+  const suffix = field.isCustomField ? ' · FMX Custom Field' : '';
+  return `${baseType} — ${format}${suffix}`;
 }

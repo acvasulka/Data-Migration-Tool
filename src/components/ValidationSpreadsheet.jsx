@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
-import { getFieldTypeLabel } from "../fmxFieldTypes";
+import { getTooltipText } from "../fmxFieldTypes";
 
 export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell }) {
   const [editCell, setEditCell] = useState(null);
@@ -98,14 +98,7 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
               {headers.map(h => {
                 const f = allFields?.find(f => f.name === h);
                 const w = widths[h] || 130;
-                const tooltip = (() => {
-                  if (!f) return '';
-                  if (f.isCustomField) {
-                    return `${getFieldTypeLabel(f.fieldType)} (FMX Custom Field)`;
-                  }
-                  const typeDesc = { string: 'Text — any characters', number: 'Number — numeric value (e.g. 42 or 3.14)', date: 'Date — MM/DD/YYYY or YYYY-MM-DD', email: 'Email — valid email address (e.g. name@example.com)' };
-                  return typeDesc[f.type] || '';
-                })();
+                const tooltip = getTooltipText(f);
                 return (
                   <th key={h} title={tooltip || undefined} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: w, minWidth: w, overflow: "hidden", textOverflow: "ellipsis", color: C.white, position: "relative", userSelect: "none", cursor: tooltip ? 'help' : undefined }}>
                     {h}{f?.required && <span style={{ color: C.blue }}> *</span>}

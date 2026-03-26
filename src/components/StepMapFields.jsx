@@ -46,8 +46,8 @@ export default function StepMapFields({
     if (f.isCustomField) {
       return getFieldTypeLabel(f.fieldType);
     }
-    const map = { string: 'Text', number: 'Number', date: 'Date', email: 'Email' };
-    return map[f.type] || null;
+    const standardTypeLabel = { string: 'Text', number: 'Number', date: 'Date', email: 'Email' };
+    return standardTypeLabel[f.type] || null;
   };
 
   const getBadge = (f, sourceHeader) => {

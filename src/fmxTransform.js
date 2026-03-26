@@ -6,13 +6,16 @@ function coerceCustomFieldValue(value, fieldType) {
   const category = getFieldTypeCategory(fieldType);
   switch (category) {
     case 'number': {
-      const num = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+      const cleaned = String(value).replace(/[^0-9.-]/g, '');
+      const num = parseFloat(cleaned);
       return isNaN(num) ? null : num;
     }
-    case 'date':
-      return String(value); // FMX handles date string parsing
     case 'boolean':
-      return value === true || value === 'true' || value === '1' || value === 'yes' || value === 'Yes';
+      return value === true || value === 'true' ||
+             value === '1' ||
+             String(value).toLowerCase() === 'yes';
+    case 'date':
+    case 'string':
     default:
       return String(value);
   }
