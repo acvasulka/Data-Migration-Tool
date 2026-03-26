@@ -145,6 +145,20 @@ export async function updateProject(projectId, updates) {
   }
 }
 
+export async function updateCardSetting(projectId, schemaType, settingKey, value) {
+  try {
+    const { data: project } = await supabase
+      .from('projects').select('card_settings').eq('id', projectId).single();
+    const current = project?.card_settings || {};
+    const entry = current[schemaType] || {};
+    const updated = { ...current, [schemaType]: { ...entry, [settingKey]: value } };
+    return updateProject(projectId, { card_settings: updated });
+  } catch (e) {
+    console.error('updateCardSetting exception:', e);
+    return null;
+  }
+}
+
 export async function deleteProject(projectId) {
   try {
     const { error } = await supabase
