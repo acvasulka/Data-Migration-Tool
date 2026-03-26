@@ -9,12 +9,17 @@ const ORANGE = C.orange;
 const GREEN = '#1A7F4E';
 
 const DEPS = {
-  Building:         "No dependencies",
-  Resource:         "Requires: Building",
-  User:             "Requires: Building",
-  "Equipment Type": "No dependencies",
-  Equipment:        "Requires: Building + Equipment Type",
-  Inventory:        "Requires: Building",
+  Building:                 "No dependencies",
+  Resource:                 "Requires: Building",
+  User:                     "Requires: Building",
+  "Equipment Type":         "No dependencies",
+  Equipment:                "Requires: Building + Equipment Type",
+  Inventory:                "Requires: Building",
+  "Work Request":           "Requires: Building (Equipment optional)",
+  "Schedule Request":       "Requires: Building (Resource optional)",
+  "Work Task":              "Requires: Building (Equipment optional)",
+  "Transportation Request": "Requires: Building (Resource optional)",
+  "Accounting Account":     "No dependencies",
 };
 
 function fmtDate(iso) {
@@ -68,7 +73,7 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
     <div>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
+        gridTemplateColumns: 'repeat(3, 1fr)',
         gap: 20,
       }}>
         {IMPORT_ORDER.map((schema, idx) => {

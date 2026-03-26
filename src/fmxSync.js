@@ -35,17 +35,29 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
+// Resolve post-options endpoint — handles both static strings and module-based functions
+function resolvePostOptionsEndpoint(schemaType, modules) {
+  const ep = POST_OPTIONS_ENDPOINTS[schemaType];
+  if (!ep) return null;
+  return typeof ep === 'function' ? ep(modules) : ep;
+}
+
 const POST_OPTIONS_ENDPOINTS = {
-  'Building':       '/v1/buildings/post-options',
-  'Equipment':      '/v1/equipment/post-options',
-  'Inventory':      '/v1/inventory/post-options',
-  'Resource':       '/v1/resources/post-options',
-  'User':           '/v1/users/post-options',
-  'Equipment Type': '/v1/equipment-types/post-options',
+  'Building':               '/v1/buildings/post-options',
+  'Equipment':              '/v1/equipment/post-options',
+  'Inventory':              '/v1/inventory/post-options',
+  'Resource':               '/v1/resources/post-options',
+  'User':                   '/v1/users/post-options',
+  'Equipment Type':         '/v1/equipment-types/post-options',
+  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests/post-options`,
+  'Schedule Request':       (m) => `/v1/${m?.scheduling || 'scheduling'}/requests/post-options`,
+  'Work Task':              (m) => `/v1/${m?.workTask || 'maintenance'}/tasks/post-options`,
+  'Transportation Request': '/v1/transportation-requests/post-options',
+  'Accounting Account':     '/v1/accounting-accounts/post-options',
 };
 
-async function fetchPostOptions(siteUrl, email, password, schemaType) {
-  const endpoint = POST_OPTIONS_ENDPOINTS[schemaType];
+async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
+  const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
 
   try {
@@ -61,8 +73,6 @@ async function fetchPostOptions(siteUrl, email, password, schemaType) {
     if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
     console.log('FMX post-options response:', data);
-
-    console.warn('Raw custom field data:', JSON.stringify(data.customFields?.slice(0, 3)));
 
     const customFields = (data.customFields || [])
       .filter(cf => cf.key && cf.label)
@@ -88,6 +98,52 @@ async function fetchPostOptions(siteUrl, email, password, schemaType) {
   }
 }
 
+// Auto-fetch module names from the FMX organization endpoint.
+// Returns { workRequest, scheduling, workTask } slug strings.
+// Falls back to defaults if the org endpoint doesn't expose module info.
+export async function fetchFmxModules(siteUrl, email, password) {
+  const defaults = { workRequest: 'maintenance', scheduling: 'scheduling', workTask: 'maintenance' };
+  try {
+    const res = await fetch('/api/fmx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl: siteUrl.trim(), email: email.trim(), password,
+        endpoint: '/v1/organization',
+        method: 'GET', payload: null,
+      }),
+    });
+    if (!res.ok) return defaults;
+    const data = await res.json();
+    console.log('FMX organization response:', data);
+
+    // Parse work request modules — FMX returns an array of module configs
+    const modules = { ...defaults };
+
+    // Try workRequestModules or similar keys
+    const wrModules = data.workRequestModules || data.modules || [];
+    if (Array.isArray(wrModules) && wrModules.length > 0) {
+      // Use the first enabled work request module's URL slug/name
+      const firstEnabled = wrModules.find(m => m.isEnabled !== false) || wrModules[0];
+      if (firstEnabled?.urlSlug || firstEnabled?.name) {
+        modules.workRequest = (firstEnabled.urlSlug || firstEnabled.name).toLowerCase();
+        modules.workTask = modules.workRequest; // work tasks share the same module
+      }
+    }
+
+    // Try scheduling module name
+    const schedModule = data.schedulingModule || data.scheduleRequestModule;
+    if (schedModule?.urlSlug || schedModule?.name) {
+      modules.scheduling = (schedModule.urlSlug || schedModule.name).toLowerCase();
+    }
+
+    return modules;
+  } catch (e) {
+    console.warn('fetchFmxModules failed, using defaults:', e);
+    return defaults;
+  }
+}
+
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
   console.log('FMX sync triggered for:', schemaType);
@@ -97,6 +153,7 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   }
 
   const projectId = project.id;
+  const modules = project.fmx_modules || {};
 
   // Check cache first (24h TTL)
   if (projectId && !forceRefresh) {
@@ -120,7 +177,7 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   const siteUrl = project.fmx_site_url;
 
   try {
-    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType);
+    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType, modules);
 
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);

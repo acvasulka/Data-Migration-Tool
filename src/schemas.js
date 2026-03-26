@@ -1,4 +1,8 @@
-export const IMPORT_ORDER = ["Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory"];
+export const IMPORT_ORDER = [
+  "Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory",
+  "Work Request", "Schedule Request", "Work Task",
+  "Transportation Request", "Accounting Account",
+];
 
 export const FMX_SCHEMAS = {
   Building: {
@@ -96,6 +100,7 @@ export const FMX_SCHEMAS = {
       { name: "Is contact", required: false, type: "string" },
       { name: "Is supplier", required: false, type: "string" },
       { name: "Reports to", required: false, type: "string" },
+      { name: "Assigned Equipment", required: false, type: "string" },
     ],
     crossRef: null,
   },
@@ -116,6 +121,7 @@ export const FMX_SCHEMAS = {
       { name: "Type", required: true, type: "string", crossSheet: "Equipment Type" },
       { name: "Building", required: true, type: "string", crossSheet: "Building" },
       { name: "Location", required: false, type: "string" },
+      { name: "Parent Equipment", required: false, type: "string" },
       { name: "Inventory items", required: false, type: "string" },
       { name: "Assigned users", required: false, type: "string" },
       { name: "Downtime calculation start date", required: false, type: "date" },
@@ -159,6 +165,64 @@ export const FMX_SCHEMAS = {
       { name: "Attachment IDs", required: false, type: "string" },
       { name: "Barcode Number", required: false, type: "string" },
       { name: "Image", required: false, type: "string" },
+    ],
+    crossRef: null,
+  },
+  "Work Request": {
+    fields: [
+      { name: "Name", required: true, type: "string" },
+      { name: "Building", required: true, type: "string", crossSheet: "Building" },
+      { name: "Request Type", required: true, type: "string" },
+      { name: "Location", required: false, type: "string" },
+      { name: "Other Location", required: false, type: "string" },
+      { name: "On Behalf Of", required: false, type: "string" },
+      { name: "Equipment Items", required: false, type: "string" },
+      { name: "Due Date", required: false, type: "date" },
+    ],
+    crossRef: null,
+  },
+  "Schedule Request": {
+    fields: [
+      { name: "Name", required: true, type: "string" },
+      { name: "Request Type", required: true, type: "string" },
+      { name: "Buildings", required: true, type: "string", crossSheet: "Building" },
+      { name: "Resources", required: false, type: "string" },
+      { name: "Other Resource", required: false, type: "string" },
+      { name: "Is Private", required: false, type: "string" },
+    ],
+    crossRef: null,
+  },
+  "Work Task": {
+    fields: [
+      { name: "Name", required: true, type: "string" },
+      { name: "Request Type", required: true, type: "string" },
+      { name: "Mode", required: false, type: "string" },
+      { name: "Next Due Date", required: false, type: "date" },
+      { name: "Buildings", required: false, type: "string", crossSheet: "Building" },
+      { name: "Location", required: false, type: "string" },
+      { name: "Equipment Items", required: false, type: "string" },
+      { name: "Assigned Users", required: false, type: "string" },
+      { name: "Other Location", required: false, type: "string" },
+    ],
+    crossRef: null,
+  },
+  "Transportation Request": {
+    fields: [
+      { name: "Name", required: true, type: "string" },
+      { name: "Request Type", required: true, type: "string" },
+      { name: "Building", required: true, type: "string", crossSheet: "Building" },
+      { name: "Pickup Location", required: false, type: "string" },
+      { name: "Pickup Location Text", required: false, type: "string" },
+      { name: "On Behalf Of", required: false, type: "string" },
+      { name: "Destination", required: false, type: "string" },
+      { name: "Departure Time", required: false, type: "string" },
+      { name: "Return Time", required: false, type: "string" },
+    ],
+    crossRef: null,
+  },
+  "Accounting Account": {
+    fields: [
+      { name: "Name", required: true, type: "string" },
     ],
     crossRef: null,
   },

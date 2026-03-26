@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { C } from "../theme";
 import Modal from "./Modal";
-import { FMX_ENDPOINTS } from "../fmxEndpoints";
+import { resolveEndpoint } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
 import { decodeCredentials } from "../fmxSync";
 
@@ -40,6 +40,7 @@ export default function FMXPushModal({
   fmxSiteUrl,
   fmxEmail,
   fmxCredentials,
+  fmxModules,
   customFieldIdMap,
   customFieldMetadata,
   onClose,
@@ -112,7 +113,7 @@ export default function FMXPushModal({
     cancelledRef.current = false;
 
     (async () => {
-      const endpoint = FMX_ENDPOINTS[schemaType];
+      const endpoint = resolveEndpoint(schemaType, fmxModules);
       const url = siteUrl.trim();
       const em = effectiveEmail.trim();
       const pw = effectivePassword;

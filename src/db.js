@@ -63,6 +63,22 @@ export async function saveProjectCredentials(projectId, encodedCredentials, conn
   }
 }
 
+export async function updateProjectModules(projectId, modules) {
+  try {
+    const { data, error } = await supabase
+      .from('projects')
+      .update({ fmx_modules: modules })
+      .eq('id', projectId)
+      .select()
+      .single();
+    if (error) { console.error('updateProjectModules error:', error); return null; }
+    return data;
+  } catch (e) {
+    console.error('updateProjectModules exception:', e);
+    return null;
+  }
+}
+
 // Cache uses a single sentinel row per (project_id, schema_type):
 //   record_type = 'custom_fields_cache', fmx_name = '__cache__'
 //   extra = { customFields: [...] }

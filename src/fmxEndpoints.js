@@ -1,13 +1,26 @@
+// FMX API endpoint map. Module-based schemas use a function that accepts the project's fmx_modules object.
 const FMX_ENDPOINTS = {
-  'Building':       '/v1/buildings',
-  'Resource':       '/v1/resources',
-  'User':           '/v1/users',
-  'Equipment Type': '/v1/equipment-types',
-  'Equipment':      '/v1/equipment',
-  'Inventory':      '/v1/inventory',
+  'Building':               '/v1/buildings',
+  'Resource':               '/v1/resources',
+  'User':                   '/v1/users',
+  'Equipment Type':         '/v1/equipment-types',
+  'Equipment':              '/v1/equipment',
+  'Inventory':              '/v1/inventory',
+  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests`,
+  'Schedule Request':       (m) => `/v1/${m?.scheduling  || 'scheduling'}/requests`,
+  'Work Task':              (m) => `/v1/${m?.workTask    || 'maintenance'}/tasks`,
+  'Transportation Request': '/v1/transportation-requests',
+  'Accounting Account':     '/v1/accounting-accounts',
 };
 
-// Maps FMX import schema field names → FMX API property names
+// Resolves the endpoint for a schema type, handling both static strings and module-based functions.
+export function resolveEndpoint(schemaType, modules) {
+  const ep = FMX_ENDPOINTS[schemaType];
+  if (!ep) return null;
+  return typeof ep === 'function' ? ep(modules) : ep;
+}
+
+// Maps FMX import schema field names → FMX API property names (non-lookup fields only)
 const FMX_FIELD_MAP = {
   'Building': {
     'Name':                       'name',
@@ -39,7 +52,8 @@ const FMX_FIELD_MAP = {
   },
   'Equipment': {
     'Tag':                        'tag',
-    'Location':                   'locationName',
+    // Location is now an ID lookup (locationResourceID) — not a direct string field
+    'Downtime calculation start date': 'downtimeCalculationStartDate',
     'Barcode ID':                 'barcodeID',
     'Cooling Capacity':           'coolingCapacity',
     'Date of Manufacture':        'dateOfManufacture',
@@ -52,12 +66,15 @@ const FMX_FIELD_MAP = {
     'Manufacturer':               'manufacturer',
     'Model number':               'modelNumber',
     'Serial number':              'serialNumber',
-    'Asset Condition':            'assetCondition',
+    // Asset Condition is an integer enum — handled specially in fmxTransform.js
     'Budget Category':            'budgetCategory',
+    'Estimated end-of-life (EOL)': 'estimatedEndOfLife',
+    'Planned replacement date':   'plannedReplacementDate',
+    'Replacement asset value':    'replacementAssetValue',
   },
   'Inventory': {
     'Name':                       'name',
-    'Location':                   'locationName',
+    // Location is now an ID lookup (locationResourceID) — not a direct string field
     'SKU':                        'sku',
     'Current quantity':           'currentQuantity',
     'Minimum quantity':           'minimumQuantity',
@@ -69,10 +86,9 @@ const FMX_FIELD_MAP = {
     'Address':                    'address',
     'Latitude':                   'latitude',
     'Longitude':                  'longitude',
-    'Location':                   'locationName',
-    'Resource type':              'resourceType',
+    // Resource type is now an array ID lookup — not a direct string field
     'Capacity':                   'capacity',
-    'Quantity':                   'quantity',
+    'Quantity':                   'scheduleRequestQuantity',
     'Sunday From':                'sundayAvailabilityStartTime',
     'Sunday To':                  'sundayAvailabilityEndTime',
     'Monday From':                'mondayAvailabilityStartTime',
@@ -95,23 +111,83 @@ const FMX_FIELD_MAP = {
     'Labor rate':                 'laborRate',
     'Is contact':                 'isContact',
     'Is supplier':                'isSupplier',
+    'Can be a driver':            'canBeDriver',
+    // User type is now an ID lookup (userTypeID)
+    // Building access is now an ID lookup (accessibleBuildingIDs)
+    // Assigned Equipment is now an ID lookup (assignedEquipmentItemIDs)
+  },
+  'Work Request': {
+    'Name':                       'name',
+    'Other Location':             'otherLocation',
+    'Due Date':                   'dueDate',
+  },
+  'Schedule Request': {
+    'Name':                       'name',
+    'Other Resource':             'otherResource',
+    'Is Private':                 'isPrivate',
+  },
+  'Work Task': {
+    'Name':                       'name',
+    'Mode':                       'mode',
+    'Next Due Date':              'nextDueDate',
+    'Other Location':             'otherLocation',
+  },
+  'Transportation Request': {
+    'Name':                       'name',
+    'Pickup Location Text':       'pickupLocation',
+    'Destination':                'destination',
+    'Departure Time':             'departureTimeUtc',
+    'Return Time':                'returnTimeUtc',
+  },
+  'Accounting Account': {
+    'Name':                       'name',
   },
 };
 
 // Fields requiring an ID lookup before pushing
 const FMX_ID_LOOKUP_FIELDS = {
   'Equipment': {
-    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
-    'Type':     { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID', searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
+    'Type':              { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID',           searchParam: 'search' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
+    'Parent Equipment':  { endpoint: '/v1/equipment',       idField: 'parentEquipmentID',         searchParam: 'search' },
   },
   'Inventory': {
-    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
+    'Type':              { endpoint: '/v1/inventory-types', idField: 'inventoryTypeID',           searchParam: 'search' },
   },
   'Resource': {
-    'Building': { endpoint: '/v1/buildings',       idField: 'buildingID',      searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
+    'Resource type':     { endpoint: '/v1/resource-types',  idField: 'resourceTypeIDs',           searchParam: 'search', isArray: true },
   },
   'User': {
-    'Building access': { endpoint: '/v1/buildings', idField: 'buildingIDs', searchParam: 'search', isArray: true },
+    'Building access':   { endpoint: '/v1/buildings',       idField: 'accessibleBuildingIDs',     searchParam: 'search', isArray: true },
+    'User type':         { endpoint: '/v1/user-types',      idField: 'userTypeID',                searchParam: 'search' },
+    'Assigned Equipment':{ endpoint: '/v1/equipment',       idField: 'assignedEquipmentItemIDs',  searchParam: 'search', isArray: true },
+  },
+  'Work Request': {
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
+    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          searchParam: 'search', isArray: true },
+    'On Behalf Of':      { endpoint: '/v1/users',           idField: 'onBehalfOfUserID',          searchParam: 'search' },
+  },
+  'Schedule Request': {
+    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               searchParam: 'search', isArray: true },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
+  },
+  'Work Task': {
+    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               searchParam: 'search', isArray: true },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
+    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          searchParam: 'search', isArray: true },
+    'Assigned Users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',           searchParam: 'search', isArray: true },
+  },
+  'Transportation Request': {
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
+    'Pickup Location':   { endpoint: '/v1/resources',       idField: 'pickupLocationResourceID',  searchParam: 'search' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
   },
 };
 
