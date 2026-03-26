@@ -50,17 +50,27 @@ function resolvePostOptionsEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
-// Convert old flat fmx_modules shape { workRequest, scheduling, workTask } to the new
-// array-based shape { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }.
-// Pass-through if already in new format, returns null for falsy input.
+// Convert any fmx_modules shape to the canonical new format:
+//   { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}], workTaskModules:[{slug,label}] }
+// Handles three cases:
+//   1. Already fully-formed new format — pass-through
+//   2. New format missing workTaskModules (saved before this fix) — backfill default
+//   3. Old flat format { workRequest, scheduling, workTask } — convert to arrays
+// Returns null for falsy input.
 export function normalizeModules(raw) {
   if (!raw) return null;
-  if (Array.isArray(raw.workRequestModules)) return raw; // already new format
+  // Already fully-formed
+  if (Array.isArray(raw.workRequestModules) && Array.isArray(raw.workTaskModules)) return raw;
+  // New format missing workTaskModules (data saved before work-task independence fix)
+  if (Array.isArray(raw.workRequestModules)) {
+    return { ...raw, workTaskModules: [{ slug: 'maintenance', label: 'Maintenance' }] };
+  }
   // Old flat format
   const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
   return {
     workRequestModules:    [{ slug: raw.workRequest || 'maintenance', label: cap(raw.workRequest || 'maintenance') }],
     scheduleRequestModules: [{ slug: raw.scheduling  || 'scheduling',  label: cap(raw.scheduling  || 'scheduling')  }],
+    workTaskModules:       [{ slug: raw.workTask    || 'maintenance', label: cap(raw.workTask    || 'maintenance')  }],
   };
 }
 
@@ -121,12 +131,18 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
 }
 
 // Auto-fetch module arrays from the FMX organization endpoint.
-// Returns { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}] }.
+// Returns { workRequestModules, scheduleRequestModules, workTaskModules } each as [{slug,label}].
 // Falls back to single-entry defaults if the org endpoint fails or returns no data.
+//
+// Actual response fields (confirmed from API):
+//   data.workRequestSettings    — array,  each has .moduleKey (slug) and .moduleName (label)
+//   data.scheduleRequestSettings — object, has .moduleKey and .moduleName
+//   data.workTaskSettings       — array,  each has .moduleKey and .moduleName
 export async function fetchFmxModules(siteUrl, email, password) {
   const defaults = {
     workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
     scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
+    workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
   };
   try {
     const res = await fetch('/api/fmx', {
@@ -144,37 +160,28 @@ export async function fetchFmxModules(siteUrl, email, password) {
 
     const modules = { ...defaults };
 
-    // Work request modules — FMX returns an array of module configs
-    const wrMods = data.workRequestModules || data.modules || [];
-    if (Array.isArray(wrMods) && wrMods.length > 0) {
-      const enabled = wrMods.filter(m => m.isEnabled !== false);
-      if (enabled.length > 0) {
-        modules.workRequestModules = enabled.map(m => ({
-          slug:  (m.urlSlug || m.name || 'maintenance').toLowerCase().replace(/\s+/g, '-'),
-          label: m.name || m.urlSlug || 'Maintenance',
-        }));
-      }
+    // Work request modules — data.workRequestSettings is an array
+    const wrSettings = data.workRequestSettings || [];
+    if (Array.isArray(wrSettings) && wrSettings.length > 0) {
+      modules.workRequestModules = wrSettings.map(m => ({
+        slug:  m.moduleKey,
+        label: m.moduleName,
+      }));
     }
 
-    // Scheduling / schedule-request modules
-    const srMods = data.scheduleRequestModules || data.schedulingModules || [];
-    if (Array.isArray(srMods) && srMods.length > 0) {
-      const enabled = srMods.filter(m => m.isEnabled !== false);
-      if (enabled.length > 0) {
-        modules.scheduleRequestModules = enabled.map(m => ({
-          slug:  (m.urlSlug || m.name || 'scheduling').toLowerCase().replace(/\s+/g, '-'),
-          label: m.name || m.urlSlug || 'Scheduling',
-        }));
-      }
-    } else {
-      // Fall back to single schedulingModule object
-      const schedMod = data.schedulingModule || data.scheduleRequestModule;
-      if (schedMod?.urlSlug || schedMod?.name) {
-        modules.scheduleRequestModules = [{
-          slug:  (schedMod.urlSlug || schedMod.name || 'scheduling').toLowerCase().replace(/\s+/g, '-'),
-          label: schedMod.name || schedMod.urlSlug || 'Scheduling',
-        }];
-      }
+    // Schedule request — data.scheduleRequestSettings is a single object (not array)
+    const srSettings = data.scheduleRequestSettings;
+    if (srSettings?.moduleKey) {
+      modules.scheduleRequestModules = [{ slug: srSettings.moduleKey, label: srSettings.moduleName }];
+    }
+
+    // Work task modules — data.workTaskSettings is an array, independent of work requests
+    const wtSettings = data.workTaskSettings || [];
+    if (Array.isArray(wtSettings) && wtSettings.length > 0) {
+      modules.workTaskModules = wtSettings.map(m => ({
+        slug:  m.moduleKey,
+        label: m.moduleName,
+      }));
     }
 
     return modules;
