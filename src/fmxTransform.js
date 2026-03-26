@@ -3,6 +3,13 @@ import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType } from './schemas';
 
 // Equipment assetCondition is an integer enum in the FMX API
+function generateDefaultPassword() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
+  let pw = '';
+  for (let i = 0; i < 16; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+  return pw;
+}
+
 const ASSET_CONDITION_MAP = {
   'unknown': 0, 'excellent': 1, 'good': 2, 'fair': 3, 'poor': 4, 'retired': 5,
 };
@@ -92,6 +99,11 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
       payload[lookup.idField] = lookup.isArray ? [idCache[cacheKey]] : idCache[cacheKey];
     }
   });
+
+  if (baseType === 'User' && !payload.password) {
+    payload.password = generateDefaultPassword();
+    payload.requirePasswordChange = true;
+  }
 
   console.warn('Payload:', JSON.stringify(payload));
   return payload;

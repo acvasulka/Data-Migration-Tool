@@ -122,6 +122,8 @@ const FMX_FIELD_MAP = {
     'Is contact':                 'isContact',
     'Is supplier':                'isSupplier',
     'Can be a driver':            'canBeDriver',
+    'Password':                   'password',
+    'Require password change':    'requirePasswordChange',
     // User type is now an ID lookup (userTypeID)
     // Building access is now an ID lookup (accessibleBuildingIDs)
     // Assigned Equipment is now an ID lookup (assignedEquipmentItemIDs)
