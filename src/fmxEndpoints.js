@@ -35,6 +35,11 @@ export function resolvePostOptionsEndpoint(schemaType, modules) {
   return base ? `${base}/post-options` : null;
 }
 
+export function resolveGetOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/get-options` : null;
+}
+
 // DEPRECATED: Use deriveFieldMap() from fmxFieldMetadata.js for dynamic field mapping.
 // Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_FIELD_MAP = {
