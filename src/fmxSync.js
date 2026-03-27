@@ -271,8 +271,35 @@ async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,na
   return { items: allItems, totalCount: totalCount ?? allItems.length };
 }
 
-// Fetch all dependencies for a project. Calls onTypeProgress(depKey, 'done'|'error', count) per type.
-export async function fetchAllDependencies(project, onTypeProgress) {
+// Which dep keys each schema base type needs for cross-field validation.
+// null = not in map = fetch all (safe default for unknown types).
+const SCHEMA_DEP_KEYS = {
+  'Building':               [],
+  'Resource':               ['buildings'],
+  'User':                   ['buildings', 'user-types'],
+  'Equipment Type':         [],
+  'Equipment':              ['buildings', 'equipment-types'],
+  'Inventory Type':         [],
+  'Inventory':              ['buildings', 'inventory-types'],
+  'Work Request':           ['buildings', 'users', 'resources', 'request-types'],
+  'Schedule Request':       ['buildings', 'resources'],
+  'Work Task':              ['buildings', 'users', 'equipment'],
+  'Transportation Request': ['buildings', 'resources'],
+  'Accounting Account':     [],
+};
+
+/** Returns the dep keys needed for a given schema type, or null if unknown (fetch all). */
+export function getDepKeysForSchema(schemaType) {
+  if (!schemaType) return null;
+  const base = schemaType.indexOf(':') === -1 ? schemaType : schemaType.slice(0, schemaType.indexOf(':'));
+  const keys = SCHEMA_DEP_KEYS[base];
+  return Array.isArray(keys) ? keys : null; // null = unknown type → fetch all
+}
+
+// Fetch dependencies for a project in parallel.
+// depKeys: optional string[] to limit which types are fetched (schema-aware auto-sync).
+// Calls onTypeProgress(depKey, 'done'|'error', count) as each type completes.
+export async function fetchAllDependencies(project, onTypeProgress, depKeys = null) {
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
     throw new Error('Missing FMX credentials');
   }
@@ -280,31 +307,40 @@ export async function fetchAllDependencies(project, onTypeProgress) {
   const { email, password } = decodeCredentials(project.fmx_credentials);
   const siteUrl = project.fmx_site_url;
   const projectId = project.id;
+
+  // Filter to only the requested types; if depKeys is empty array, nothing to fetch
+  const depsToFetch = depKeys === null
+    ? DEPENDENCY_TYPES
+    : DEPENDENCY_TYPES.filter(d => depKeys.includes(d.key));
+
+  if (depsToFetch.length === 0) return {};
+
+  const settled = await Promise.allSettled(
+    depsToFetch.map(async dep => {
+      try {
+        const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
+        const { items, totalCount } = await fetchAllPages(siteUrl, email, password, dep.endpoint, fields);
+
+        const cleaned = items.map(item => {
+          const entry = { id: item.id, name: item[dep.nameField] };
+          for (const ef of (dep.extraFields || [])) entry[ef] = item[ef];
+          return entry;
+        });
+
+        await saveDependencyCache(projectId, dep.key, cleaned, totalCount);
+        if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);
+        return { key: dep.key, count: totalCount, status: 'done' };
+      } catch (e) {
+        console.warn(`Failed to fetch dependency "${dep.key}":`, e);
+        if (onTypeProgress) onTypeProgress(dep.key, 'error', 0);
+        return { key: dep.key, count: 0, status: 'error', error: e.message };
+      }
+    })
+  );
+
   const results = {};
-
-  for (const dep of DEPENDENCY_TYPES) {
-    try {
-      const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
-      const { items, totalCount } = await fetchAllPages(siteUrl, email, password, dep.endpoint, fields);
-
-      // Extract only the fields we need
-      const cleaned = items.map(item => {
-        const entry = { id: item.id, name: item[dep.nameField] };
-        for (const ef of (dep.extraFields || [])) {
-          entry[ef] = item[ef];
-        }
-        return entry;
-      });
-
-      await saveDependencyCache(projectId, dep.key, cleaned, totalCount);
-      results[dep.key] = { count: totalCount, status: 'done' };
-      if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);
-    } catch (e) {
-      console.warn(`Failed to fetch dependency "${dep.key}":`, e);
-      results[dep.key] = { count: 0, status: 'error', error: e.message };
-      if (onTypeProgress) onTypeProgress(dep.key, 'error', 0);
-    }
+  for (const r of settled) {
+    if (r.status === 'fulfilled') results[r.value.key] = r.value;
   }
-
   return results;
 }
