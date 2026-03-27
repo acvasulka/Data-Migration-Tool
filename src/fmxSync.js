@@ -130,6 +130,28 @@ const POST_OPTIONS_ENDPOINTS = {
   'Accounting Account':     '/v1/accounting-accounts/post-options',
 };
 
+// Resolve put-options endpoint for an existing entity.
+// schemaType can be module-qualified (e.g. "Work Request:maintenance").
+export function resolvePutOptionsEndpoint(schemaType, entityId, modules) {
+  if (schemaType.startsWith('Work Request:'))
+    return `/v1/${schemaType.split(':')[1]}-requests/${entityId}/put-options`;
+  if (schemaType.startsWith('Schedule Request:'))
+    return `/v1/${schemaType.split(':')[1]}/requests/${entityId}/put-options`;
+  if (schemaType.startsWith('Work Task:'))
+    return `/v1/${schemaType.split(':')[1]}/tasks/${entityId}/put-options`;
+  const base = {
+    'Building': `/v1/buildings/${entityId}/put-options`,
+    'Equipment': `/v1/equipment/${entityId}/put-options`,
+    'Inventory': `/v1/inventory/${entityId}/put-options`,
+    'Resource': `/v1/resources/${entityId}/put-options`,
+    'User': `/v1/users/${entityId}/put-options`,
+    'Equipment Type': null, // Equipment types don't support PUT
+    'Transportation Request': `/v1/transportation-requests/${entityId}/put-options`,
+    'Accounting Account': `/v1/accounting-accounts/${entityId}/put-options`,
+  };
+  return base[schemaType] || null;
+}
+
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
@@ -155,6 +177,11 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
         name: cf.label,
         fieldType: cf.fieldTypeName,
         isRequired: cf.isRequired || false,
+        options: cf.options || [],
+        allowMultipleSelections: cf.allowMultipleSelections || false,
+        allowOtherOption: cf.allowOtherOption || false,
+        description: cf.description || '',
+        defaults: cf.defaults || [],
       }));
 
     const systemFields = (data.systemFields || []).map(sf => ({
@@ -163,6 +190,12 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       isRequired: sf.isRequired || false,
       isPermitted: sf.isPermitted !== false,
       maximumLength: sf.maximumLength || null,
+      minimumLength: sf.minimumLength || null,
+      minimumValue: sf.minimumValue ?? null,
+      maximumValue: sf.maximumValue ?? null,
+      defaultValue: sf.defaultValue ?? null,
+      defaultValues: sf.defaultValues || null,
+      options: sf.options || null,
     }));
 
     console.log('Custom fields found:', customFields);
@@ -255,6 +288,11 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
           name: cf.name,
           fieldType: cf.fieldType,
           isRequired: cf.isRequired || false,
+          options: cf.options || [],
+          allowMultipleSelections: cf.allowMultipleSelections || false,
+          allowOtherOption: cf.allowOtherOption || false,
+          description: cf.description || '',
+          defaults: cf.defaults || [],
         }));
         const systemFields = cached.extra.systemFields || [];
         return { customFields, systemFields, fromCache: true };

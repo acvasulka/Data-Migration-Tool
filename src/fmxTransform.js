@@ -44,9 +44,18 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     if (customFieldIdMap[fieldName] !== undefined) {
       const cfId = customFieldIdMap[fieldName];
       const cfMeta = customFieldMetadata.find(cf => cf.id === cfId);
-      const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
-      if (coerced !== null) {
-        customFields.push({ customFieldID: cfId, value: coerced });
+
+      // Multi-select dropdown: split delimited value into array
+      if (cfMeta?.allowMultipleSelections) {
+        const parts = String(value).split(/[;,]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) {
+          customFields.push({ customFieldID: cfId, values: parts });
+        }
+      } else {
+        const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
+        if (coerced !== null) {
+          customFields.push({ customFieldID: cfId, value: coerced });
+        }
       }
       return;
     }
@@ -97,35 +106,109 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   return payload;
 }
 
-// Pre-fetch IDs for all unique reference values in the dataset.
-// Returns an idCache map: { "Building:Main Campus": 42, ... }
-export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
+// Fetch all records from an endpoint using paginated requests.
+// Returns an array of all items across all pages.
+export async function fetchAllRecords(siteUrl, email, password, endpoint, fields) {
+  const allItems = [];
+  let offset = 0;
+  const limit = 100;
+  let totalCount = Infinity;
+
+  while (offset < totalCount) {
+    const qs = `?fields=${encodeURIComponent(fields)}&offset=${offset}&limit=${limit}`;
+    const res = await fetch('/api/fmx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl, email, password,
+        endpoint: `${endpoint}${qs}`,
+        method: 'GET',
+        payload: null,
+      }),
+    });
+
+    // Read FMX-Total-Count header for accurate pagination
+    const headerTotal = res.headers.get('FMX-Total-Count');
+    if (headerTotal) totalCount = parseInt(headerTotal, 10);
+
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
+    if (!Array.isArray(items) || items.length === 0) break;
+
+    allItems.push(...items);
+    offset += limit;
+
+    // If no header, stop when a page returns fewer than limit
+    if (!headerTotal && items.length < limit) break;
+  }
+
+  return allItems;
+}
+
+// Match an input value against a list of records using the nameField.
+// Strategy: exact match → case-insensitive → trimmed case-insensitive.
+function matchRecord(value, records, nameField) {
+  const input = String(value);
+  // Exact match
+  const exact = records.find(r => String(r[nameField] ?? '') === input);
+  if (exact) return exact.id;
+  // Case-insensitive
+  const lower = input.toLowerCase();
+  const ci = records.find(r => String(r[nameField] ?? '').toLowerCase() === lower);
+  if (ci) return ci.id;
+  // Trimmed case-insensitive
+  const trimmed = lower.trim();
+  const tr = records.find(r => String(r[nameField] ?? '').toLowerCase().trim() === trimmed);
+  if (tr) return tr.id;
+  return null;
+}
+
+// Pre-fetch IDs for all reference values in the dataset using bulk fetch + local match.
+// Returns { idCache: { "Building:Main Campus": 42, ... }, unresolved: ["Building:Unknown Place", ...] }
+// Optional existingCache: pre-populated cache from previous pushes (e.g. from createdIdsRef)
+// to skip API calls for values already resolved.
+export async function buildIdCache(rows, schemaType, siteUrl, email, password, existingCache = {}) {
   const lookups = FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
-  const idCache = {};
+  const idCache = { ...existingCache };
+  const unresolved = [];
+
+  // Group lookups by endpoint to avoid fetching the same endpoint multiple times
+  // (e.g. multiple fields may reference /v1/buildings)
+  const endpointRecords = {};
 
   for (const [fmxField, lookup] of Object.entries(lookups)) {
     const uniqueValues = [...new Set(rows.map(r => r[fmxField]).filter(Boolean))];
-    for (const value of uniqueValues) {
+    if (uniqueValues.length === 0) continue;
+
+    const nameField = lookup.nameField || 'name';
+    const fields = `id,${nameField}`;
+    const epKey = `${lookup.endpoint}|${fields}`;
+
+    // Fetch records for this endpoint (cached across fields sharing the same endpoint)
+    if (!endpointRecords[epKey]) {
       try {
-        const res = await fetch('/api/fmx', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            siteUrl, email, password,
-            endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
-            method: 'GET',
-            payload: null,
-          }),
-        });
-        const data = await res.json();
-        const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
-        if (Array.isArray(items) && items.length > 0) {
-          idCache[`${fmxField}:${value}`] = items[0].id;
-        }
+        endpointRecords[epKey] = await fetchAllRecords(siteUrl, email, password, lookup.endpoint, fields);
       } catch (e) {
-        console.warn(`Could not resolve ID for ${fmxField}:${value}`, e);
+        console.warn(`Could not fetch records from ${lookup.endpoint}:`, e);
+        endpointRecords[epKey] = [];
+      }
+    }
+
+    const records = endpointRecords[epKey];
+
+    for (const value of uniqueValues) {
+      const cacheKey = `${fmxField}:${value}`;
+      // Skip if already resolved (from existingCache or prior endpoint in this run)
+      if (idCache[cacheKey]) continue;
+      const id = matchRecord(value, records, nameField);
+      if (id !== null) {
+        idCache[cacheKey] = id;
+      } else {
+        unresolved.push(cacheKey);
+        console.warn(`Could not resolve ID for ${fmxField}: "${value}"`);
       }
     }
   }
-  return idCache;
+
+  return { idCache, unresolved };
 }

@@ -756,6 +756,7 @@ export default function App() {
                 userEmail={user?.email}
                 customFieldIdMap={fmxCustomFieldIdMap}
                 customFieldMetadata={fmxSyncData?.customFields || []}
+                systemFieldMetadata={fmxSyncData?.systemFields || []}
                 fileInfo={fileInfo}
               />
             )}

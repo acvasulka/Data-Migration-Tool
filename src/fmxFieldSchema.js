@@ -112,6 +112,8 @@ export const FMX_API_STANDARD_FIELDS = {
     { name: 'On Behalf Of', apiKey: null, required: false, type: 'string' },       // ID lookup → onBehalfOfUserID
     { name: 'Equipment Items', apiKey: null, required: false, type: 'string' },    // Array ID lookup → equipmentItemIDs
     { name: 'Due Date', apiKey: 'dueDate', required: false, type: 'date' },
+    { name: 'Assigned Users', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
+    { name: 'Priority Level', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
   ],
   'Schedule Request': [
     { name: 'Name', apiKey: 'name', required: true, type: 'string' },

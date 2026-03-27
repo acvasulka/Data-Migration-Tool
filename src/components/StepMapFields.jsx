@@ -25,7 +25,8 @@ export default function StepMapFields({
   const getColPreview = col =>
     !csv || !col ? [] : [...new Set(csv.rows.map(r => r[col]).filter(v => v !== undefined))].slice(0, 20);
 
-  const supportsCustomFields = schemaType === "Building" || schemaType === "Resource";
+  // FMX API supports custom fields on all entity types via post-options
+  const supportsCustomFields = true;
 
   const mappedCols = new Set(Object.values(mapping).filter(Boolean));
   const unmappedHeaders = csv.headers.filter(h => !mappedCols.has(h));
