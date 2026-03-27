@@ -26,7 +26,7 @@ function DonutRing({ cleanPct }) {
         transform={`rotate(-90 ${CX} ${CY})`}
         style={{ transition: 'stroke-dashoffset 0.6s ease' }}
       />
-      <text x={CX} y={CY + 6} textAnchor="middle" fontSize={17} fontWeight={700} fill={color}>
+      <text x={CX} y={CY + 6} textAnchor="middle" fontSize={20} fontWeight={700} fill={color}>
         {pct}%
       </text>
     </svg>
@@ -321,7 +321,7 @@ export default function StepValidate({
       )}
 
       {/* ── Two-panel header: Bulk Edit (left 40%) + Data Quality (right 40%) ── */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 14, alignItems: 'stretch' }}>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 14, alignItems: 'stretch', justifyContent: 'center' }}>
 
         {/* Left: NLEditPanel — 40% */}
         <div style={{ width: '40%', flexShrink: 0, minWidth: 0 }}>
@@ -346,21 +346,20 @@ export default function StepValidate({
           {/* Donut ring + counts */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <DonutRing cleanPct={cleanPct} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: C.textDark }}>
-                {cleanRows} of {totalRows} rows clean
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: errorCount > 0 ? C.errText : C.okText }} />
-                <span style={{ fontSize: 11, color: errorCount > 0 ? C.errText : C.okText }}>
-                  {errorCount} missing required data
-                </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'center' }}>
+              <div>
+                <span style={{ fontSize: 18, fontWeight: 700, color: C.textDark }}>{cleanRows}</span>
+                <span style={{ fontSize: 12, fontWeight: 400, color: C.textMid, marginLeft: 5 }}>of {totalRows} rows clean</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: depErrorCount > 0 ? C.warnText : C.okText }} />
-                <span style={{ fontSize: 11, color: depErrorCount > 0 ? C.warnText : C.okText }}>
-                  {depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''}
-                </span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ padding: '4px 10px', borderRadius: 6, background: errorCount > 0 ? C.errBg : C.okBg, border: `1px solid ${errorCount > 0 ? C.errBorder : C.okBorder}` }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: errorCount > 0 ? C.errText : C.okText }}>{errorCount}</span>
+                  <span style={{ fontSize: 10, color: errorCount > 0 ? C.errText : C.okText, marginLeft: 5 }}>missing required</span>
+                </div>
+                <div style={{ padding: '4px 10px', borderRadius: 6, background: depErrorCount > 0 ? C.warnBg : C.okBg, border: `1px solid ${depErrorCount > 0 ? C.warnBorder : C.okBorder}` }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: depErrorCount > 0 ? C.warnText : C.okText }}>{depErrorCount}</span>
+                  <span style={{ fontSize: 10, color: depErrorCount > 0 ? C.warnText : C.okText, marginLeft: 5 }}>dep mismatches</span>
+                </div>
               </div>
             </div>
           </div>
@@ -389,7 +388,7 @@ export default function StepValidate({
           {/* Errors by column */}
           {errorsByColumn.length > 0 && (
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
-              <p style={{ margin: '0 0 5px', fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              <p style={{ margin: '0 0 6px', fontSize: 11, fontWeight: 600, color: C.textMid, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 Errors by column
               </p>
               {errorsByColumn.map(([col, count]) => {

@@ -70,8 +70,8 @@ export default function NLEditPanel({
       overflow: 'hidden',
     }}>
 
-      {/* ── Left column: label + hint + input ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px' }}>
+      {/* ── Left column: label + hint + textarea + controls ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px' }}>
         <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: C.navy, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
           Bulk Edit
         </p>
@@ -79,45 +79,93 @@ export default function NLEditPanel({
           e.g. "Fill blank 'Type' fields with HVAC" or "Set Building to 'Main Campus' where it's empty"
         </p>
 
-        {/* Input pushed to bottom */}
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <input
-            className="fmx-input"
-            value={instruction}
-            onChange={e => setInstruction(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && apply()}
-            placeholder="Describe what to change…"
-            style={{ width: '100%', boxSizing: 'border-box' }}
-          />
-          {err && <p style={{ fontSize: 12, color: C.errText, margin: 0 }}>{err}</p>}
+        <textarea
+          className="fmx-input"
+          rows={5}
+          value={instruction}
+          onChange={e => setInstruction(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) apply(); }}
+          placeholder="Describe what to change…"
+          style={{ width: '100%', boxSizing: 'border-box', resize: 'none', lineHeight: 1.5, fontFamily: 'inherit', fontSize: 13 }}
+        />
+        {err && <p style={{ fontSize: 12, color: C.errText, margin: 0 }}>{err}</p>}
+
+        {/* Apply + Undo */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            className="fmx-btn-primary"
+            style={{ fontSize: 13, padding: "6px 16px", whiteSpace: "nowrap" }}
+            onClick={apply}
+            disabled={loading}
+          >
+            {loading ? "Applying…" : "Apply"}
+          </button>
+          {onUndo && (
+            <button
+              className="fmx-btn-xs"
+              onClick={onUndo}
+              disabled={!canUndo}
+              title={canUndo ? "Undo last bulk edit" : "Nothing to undo"}
+              style={{ whiteSpace: 'nowrap', opacity: canUndo ? 1 : 0.4 }}
+            >
+              ↩ Undo
+            </button>
+          )}
+          <span style={{ fontSize: 11, color: C.textLight, marginLeft: 2 }}>⌘↵ to apply</span>
         </div>
+
+        {/* Scope toggle */}
+        {onToggleScope && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: C.textMid, whiteSpace: 'nowrap' }}>Apply to:</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                className={`fmx-btn-xs-rule${updateScope === 'all' ? ' active' : ''}`}
+                onClick={() => updateScope !== 'all' && onToggleScope()}
+                style={{ whiteSpace: 'nowrap' }}
+              >
+                All rows{typeof totalCount === 'number' ? ` (${totalCount})` : ''}
+              </button>
+              <button
+                className={`fmx-btn-xs-rule${updateScope === 'filtered' ? ' active' : ''}`}
+                onClick={() => updateScope !== 'filtered' && onToggleScope()}
+                disabled={!hasFilter}
+                title={!hasFilter ? 'No active filters — same as all rows' : `Apply only to the ${filteredCount} visible rows`}
+                style={{ whiteSpace: 'nowrap', opacity: !hasFilter ? 0.5 : 1 }}
+              >
+                Filtered{typeof filteredCount === 'number' ? ` (${filteredCount})` : ''}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Vertical divider ── */}
       <div style={{ background: C.border }} />
 
-      {/* ── Right column: suggestions top, controls bottom ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px' }}>
+      {/* ── Right column: suggestions only, filling height ── */}
+      <div style={{ display: 'flex', flexDirection: 'column', padding: '14px 16px', gap: 8, minHeight: 0 }}>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: C.navy, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          Suggestions
+        </p>
 
-        {/* Suggestions */}
         {suggestionsLoading && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textLight }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, fontSize: 11, color: C.textLight }}>
             <div style={{ width: 10, height: 10, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: '50%', animation: '_sv_spin 0.8s linear infinite', flexShrink: 0 }} />
             Generating suggestions…
           </div>
         )}
+
         {suggestions && suggestions.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-            <p style={{ margin: '0 0 5px', fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-              Suggestions
-            </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
             {suggestions.map((s, i) => (
               <div key={i} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 8,
-                padding: '6px 8px', marginBottom: 4, borderRadius: 6,
+                flex: 1,
+                display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                padding: '10px 12px', borderRadius: 6,
                 background: C.blueBg, border: `1px solid ${C.blueBorder}`,
               }}>
-                <span style={{ fontSize: 11, color: C.textDark, flex: 1, lineHeight: 1.5 }}>
+                <span style={{ fontSize: 12, color: C.textDark, lineHeight: 1.5 }}>
                   {s.text}
                   {s.affectedCount > 0 && (
                     <span style={{ color: C.textLight, marginLeft: 5 }}>— {s.affectedCount} rows</span>
@@ -125,7 +173,7 @@ export default function NLEditPanel({
                 </span>
                 <button
                   className="fmx-btn-xs"
-                  style={{ flexShrink: 0, fontSize: 10, padding: '2px 8px', whiteSpace: 'nowrap' }}
+                  style={{ alignSelf: 'flex-end', marginTop: 8, fontSize: 11, padding: '3px 10px' }}
                   onClick={() => applySuggestion(s.text)}
                   disabled={loading}
                 >
@@ -135,58 +183,19 @@ export default function NLEditPanel({
             ))}
           </div>
         )}
+
         {suggestions && suggestions.length === 0 && !suggestionsLoading && (
-          <p style={{ margin: 0, fontSize: 11, color: C.textLight, fontStyle: 'italic' }}>No suggestions — data looks good!</p>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <p style={{ margin: 0, fontSize: 12, color: C.textLight, fontStyle: 'italic', textAlign: 'center' }}>
+              No suggestions —<br />data looks good!
+            </p>
+          </div>
         )}
 
-        {/* Controls: Apply + Undo + scope (pushed to bottom) */}
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button
-              className="fmx-btn-primary"
-              style={{ fontSize: 13, padding: "6px 16px", whiteSpace: "nowrap" }}
-              onClick={apply}
-              disabled={loading}
-            >
-              {loading ? "Applying…" : "Apply"}
-            </button>
-            {onUndo && (
-              <button
-                className="fmx-btn-xs"
-                onClick={onUndo}
-                disabled={!canUndo}
-                title={canUndo ? "Undo last bulk edit" : "Nothing to undo"}
-                style={{ whiteSpace: 'nowrap', opacity: canUndo ? 1 : 0.4 }}
-              >
-                ↩ Undo
-              </button>
-            )}
-          </div>
-
-          {onToggleScope && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: C.textMid, whiteSpace: 'nowrap' }}>Apply to:</span>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button
-                  className={`fmx-btn-xs-rule${updateScope === 'all' ? ' active' : ''}`}
-                  onClick={() => updateScope !== 'all' && onToggleScope()}
-                  style={{ whiteSpace: 'nowrap' }}
-                >
-                  All rows{typeof totalCount === 'number' ? ` (${totalCount})` : ''}
-                </button>
-                <button
-                  className={`fmx-btn-xs-rule${updateScope === 'filtered' ? ' active' : ''}`}
-                  onClick={() => updateScope !== 'filtered' && onToggleScope()}
-                  disabled={!hasFilter}
-                  title={!hasFilter ? 'No active filters — same as all rows' : `Apply only to the ${filteredCount} visible rows`}
-                  style={{ whiteSpace: 'nowrap', opacity: !hasFilter ? 0.5 : 1 }}
-                >
-                  Filtered{typeof filteredCount === 'number' ? ` (${filteredCount})` : ''}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Placeholder while null (not yet loaded) */}
+        {suggestions === null && !suggestionsLoading && (
+          <div style={{ flex: 1 }} />
+        )}
       </div>
     </div>
   );
