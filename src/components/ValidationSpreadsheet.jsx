@@ -2,7 +2,18 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
 import { getTooltipText } from "../fmxFieldTypes";
 
-export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell, onDepColumnClick }) {
+export default function ValidationSpreadsheet({
+  headers,
+  rows,
+  rowGlobalIndices,  // number[] mapping localRi → globalRi; omit for legacy mode
+  cellErrors,
+  allFields,
+  onChange,
+  onRowRemove,       // (localRi) => void; if provided, used instead of inline filter
+  onRowAdd,          // () => void; if provided, used instead of inline append
+  focusCell,
+  onDepColumnClick,
+}) {
   const [editCell, setEditCell] = useState(null);
   const [editVal, setEditVal] = useState("");
   const [widths, setWidths] = useState(() => Object.fromEntries(headers.map(h => [h, 130])));
@@ -20,17 +31,19 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
   }, [headers]);
 
   // Jump to a specific cell when focusCell changes
+  // focusCell.ri is always a GLOBAL row index
   useEffect(() => {
     if (!focusCell) return;
-    const { ri, header } = focusCell;
-    if (rows[ri] == null) return;
-    setEditCell(`${ri}-${header}`);
-    setEditVal(rows[ri][header] ?? "");
+    const { ri: globalRi, header } = focusCell;
+    const localRi = rowGlobalIndices ? rowGlobalIndices.findIndex(g => g === globalRi) : globalRi;
+    if (localRi < 0 || rows[localRi] == null) return; // not on this page
+    setEditCell(`${localRi}-${header}`);
+    setEditVal(rows[localRi][header] ?? "");
     setTimeout(() => {
       inputRef.current?.focus();
-      rowRefs.current[ri]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      rowRefs.current[localRi]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }, 0);
-  }, [focusCell]); // eslint-disable-line
+  }, [focusCell]); // intentional — only trigger on focusCell identity change
 
   const startEdit = (ri, h, val) => {
     setEditCell(`${ri}-${h}`); setEditVal(val);
@@ -38,23 +51,33 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
   };
   const commit = (ri, h) => { onChange(rows.map((r, i) => i === ri ? { ...r, [h]: editVal } : r)); setEditCell(null); };
   const handleKey = (e, ri, h) => { if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); commit(ri, h); } if (e.key === "Escape") setEditCell(null); };
-  const addRow = () => onChange([...rows, Object.fromEntries(headers.map(h => [h, ""]))]);
-  const removeRow = ri => onChange(rows.filter((_, i) => i !== ri));
+
+  const addRow = () => {
+    if (onRowAdd) { onRowAdd(); }
+    else { onChange([...rows, Object.fromEntries(headers.map(h => [h, ""]))]); }
+  };
+  const removeRow = ri => {
+    if (onRowRemove) { onRowRemove(ri); }
+    else { onChange(rows.filter((_, i) => i !== ri)); }
+  };
+
+  // Resolve cellErrors key using global index when available
+  const getGlobalRi = ri => rowGlobalIndices ? rowGlobalIndices[ri] : ri;
 
   const getCellBg = (ri, h) => {
-    const key = `${ri}-${h}`;
+    const key = `${getGlobalRi(ri)}-${h}`;
     if (cellErrors[key] === "error") return C.errBg;
     if (cellErrors[key] === "dep_error") return C.warnBg;
     return ri % 2 === 0 ? C.white : C.bgPage;
   };
   const getCellColor = (ri, h) => {
-    const key = `${ri}-${h}`;
+    const key = `${getGlobalRi(ri)}-${h}`;
     if (cellErrors[key] === "error") return C.errText;
     if (cellErrors[key] === "dep_error") return C.warnText;
     return C.textDark;
   };
 
-  // Count dep_errors per column header for the ⚠ badge
+  // Count dep_errors per column header for the ⚠ badge (from full cellErrors map)
   const depErrorsByCol = {};
   Object.entries(cellErrors).forEach(([key, val]) => {
     if (val === "dep_error") {
@@ -79,29 +102,8 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
     document.addEventListener("mouseup", onUp);
   }, [widths]);
 
-  const errorCount = Object.values(cellErrors).filter(v => v === "error").length;
-  const depErrCount = Object.values(cellErrors).filter(v => v === "dep_error").length;
-
   return (
     <div>
-      {(errorCount > 0 || depErrCount > 0) && (
-        <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-          {errorCount > 0 && (
-            <span style={{ fontSize: 12, padding: "4px 10px", background: C.errBg, color: C.errText, border: `1px solid ${C.errBorder}`, borderRadius: 6 }}>
-              {errorCount} cell{errorCount > 1 ? "s" : ""} with errors (red)
-            </span>
-          )}
-          {depErrCount > 0 && (
-            <span style={{ fontSize: 12, padding: "4px 10px", background: C.warnBg, color: C.warnText, border: `1px solid ${C.warnBorder}`, borderRadius: 6, cursor: onDepColumnClick ? 'pointer' : undefined }}
-              onClick={() => onDepColumnClick?.('__all__')}
-              title="Click column ⚠ badges to fix dependency mismatches"
-            >
-              {depErrCount} dependency mismatch{depErrCount > 1 ? "es" : ""} (yellow) — click ⚠ to fix
-            </span>
-          )}
-          <span style={{ fontSize: 12, color: C.textLight, padding: "4px 0" }}>Click any cell to edit inline</span>
-        </div>
-      )}
       <div ref={containerRef} style={{ overflowX: "auto", overflowY: "auto", maxHeight: 420, border: `1px solid ${C.border}`, borderRadius: 8 }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", width: (headers.length + 1) * 130 }}>
           <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
@@ -151,7 +153,8 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
                   <button onClick={() => removeRow(ri)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 14, padding: 0, transition: "color 0.15s ease" }}>×</button>
                 </td>
                 {headers.map(h => {
-                  const key = `${ri}-${h}`, isEditing = editCell === key;
+                  const gri = getGlobalRi(ri);
+                  const key = `${gri}-${h}`, isEditing = editCell === `${ri}-${h}`;
                   const bg = getCellBg(ri, h), fg = getCellColor(ri, h);
                   const w = widths[h] || 130;
                   return (
