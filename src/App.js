@@ -5,7 +5,7 @@ import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMappi
 import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
-import { syncFmxDataForProject, fetchAllDependencies } from "./fmxSync";
+import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
@@ -285,13 +285,16 @@ export default function App() {
     setWStep(1);
     setMainTab('wizard');
     handleFmxSync(t);
-    // Auto-refresh all dependency caches in the background so StepValidate has fresh data
+    // Auto-refresh only the dep types this schema actually needs (parallel, schema-aware)
     if (selectedProject?.fmx_connection_verified) {
-      setDepAutoSyncing(true);
-      fetchAllDependencies(selectedProject, () => {})
-        .then(() => loadDepCacheMap())
-        .catch(() => {})
-        .finally(() => setDepAutoSyncing(false));
+      const depKeys = getDepKeysForSchema(t); // [] for self-imports, null = all
+      if (depKeys === null || depKeys.length > 0) {
+        setDepAutoSyncing(true);
+        fetchAllDependencies(selectedProject, () => {}, depKeys)
+          .then(() => loadDepCacheMap())
+          .catch(() => {})
+          .finally(() => setDepAutoSyncing(false));
+      }
     }
   };
 

@@ -6,6 +6,10 @@ const NAVY = '#041662';
 const GREEN = '#1A7F4E';
 const ORANGE = '#CF4A12';
 
+// Max items rendered in each card by default / while searching
+const PREVIEW_COUNT = 10;
+const SEARCH_CAP = 50;
+
 function timeAgo(isoString) {
   if (!isoString) return null;
   const ms = Date.now() - new Date(isoString).getTime();
@@ -58,7 +62,6 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
 
   const credentialsReady = project?.fmx_connection_verified;
   const completedCount = Object.values(syncProgress).filter(p => p.status === 'done' || p.status === 'error').length;
-  const currentType = syncing ? DEPENDENCY_TYPES.find(d => !syncProgress[d.key]) : null;
 
   if (loading) {
     return <p style={{ fontSize: 13, color: '#9CA3AF', padding: '2rem 0' }}>Loading dependencies…</p>;
@@ -86,9 +89,9 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
           {syncing ? 'Updating…' : 'Update Dependencies'}
         </button>
 
-        {syncing && currentType && (
+        {syncing && (
           <span style={{ fontSize: 12, color: '#6B7280' }}>
-            Fetching {currentType.label}… ({completedCount}/{DEPENDENCY_TYPES.length})
+            Updating in parallel… ({completedCount}/{DEPENDENCY_TYPES.length} done)
           </span>
         )}
 
@@ -118,9 +121,14 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
           const allItems = cache?.items || [];
           const count = cache?.totalCount ?? allItems.length;
           const search = (searchTerms[dep.key] || '').toLowerCase();
-          const items = search ? allItems.filter(i => (i.name || '').toLowerCase().includes(search) || (i.email || '').toLowerCase().includes(search)) : allItems;
+          const filtered = search
+            ? allItems.filter(i => (i.name || '').toLowerCase().includes(search) || (i.email || '').toLowerCase().includes(search))
+            : allItems;
+          // Cap rendered items — prevents DOM freeze on large datasets
+          const items = filtered.slice(0, search ? SEARCH_CAP : PREVIEW_COUNT);
+          const hiddenCount = filtered.length - items.length;
           const age = timeAgo(cache?.cachedAt);
-          const isFetching = syncing && !progress && currentType?.key === dep.key;
+          const isFetching = syncing && !progress; // all types fetch in parallel now
           const isDone = progress?.status === 'done';
           const isError = progress?.status === 'error';
 
@@ -188,14 +196,14 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
                   />
                   {search && (
                     <span style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2, display: 'block' }}>
-                      {items.length} of {allItems.length} shown
+                      {filtered.length} match{filtered.length !== 1 ? 'es' : ''}{hiddenCount > 0 ? `, showing first ${items.length}` : ''}
                     </span>
                   )}
                 </div>
               )}
 
               {/* Values list */}
-              <div style={{ padding: '10px 20px 14px', maxHeight: 240, overflowY: 'auto' }}>
+              <div style={{ padding: '10px 20px 6px', maxHeight: 240, overflowY: 'auto' }}>
                 {items.length === 0 ? (
                   <p style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', margin: '4px 0' }}>
                     {cache ? (search ? 'No matches' : 'No records found in FMX') : 'Click "Update Dependencies" to fetch'}
@@ -227,6 +235,14 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
                   ))
                 )}
               </div>
+              {/* Overflow hint */}
+              {hiddenCount > 0 && (
+                <p style={{ fontSize: 11, color: '#9CA3AF', margin: '0 20px 10px', fontStyle: 'italic' }}>
+                  {search
+                    ? `${hiddenCount} more match${hiddenCount !== 1 ? 'es' : ''} — refine your search`
+                    : `+${hiddenCount} more — use the search bar to find specific records`}
+                </p>
+              )}
             </div>
           );
         })}
