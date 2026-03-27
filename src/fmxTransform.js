@@ -120,7 +120,7 @@ const ENDPOINT_TO_DEP_KEY = {
   '/v1/inventory':        'inventory',
   '/v1/request-types':    'request-types',
   '/v1/resource-types':   'resources',   // resource-types map to resources cache as fallback
-  '/v1/user-types':       'users',       // user-types not cached separately
+  '/v1/user-types':       'user-types',
 };
 
 // Build a name→ID lookup from dependency cache items.

@@ -289,6 +289,7 @@ export const DEPENDENCY_TYPES = [
   { key: 'inventory-types', endpoint: '/v1/inventory-types',  label: 'Inventory Types',       nameField: 'name' },
   { key: 'inventory',       endpoint: '/v1/inventory',        label: 'Inventory Names',       nameField: 'name' },
   { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name' },
+  { key: 'user-types',      endpoint: '/v1/user-types',       label: 'User Types',            nameField: 'name' },
 ];
 
 // Generic paginated fetcher — collects all pages from an FMX list endpoint.
