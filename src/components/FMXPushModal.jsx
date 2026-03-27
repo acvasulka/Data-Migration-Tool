@@ -3,6 +3,7 @@ import { C } from "../theme";
 import Modal from "./Modal";
 import { resolveEndpoint } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
+import { deriveFieldMap, deriveLookupFields } from "../fmxFieldMetadata";
 import { decodeCredentials } from "../fmxSync";
 
 const ANIM = `
@@ -43,6 +44,7 @@ export default function FMXPushModal({
   fmxModules,
   customFieldIdMap,
   customFieldMetadata,
+  allFields,
   onClose,
   onSuccess,
 }) {
@@ -122,11 +124,15 @@ export default function FMXPushModal({
       let failCount = 0;
       const failures = [];
 
+      // Derive dynamic field/lookup maps from allFields (falls back to static maps inside transform)
+      const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
+      const dynLookups = allFields?.length ? deriveLookupFields(allFields) : null;
+
       // Step 1: Build ID cache
       setStatusMsg('Preparing — resolving reference IDs…');
       let idCache = {};
       try {
-        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw);
+        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw, dynLookups);
       } catch {}
 
       if (cancelledRef.current) return;
@@ -141,7 +147,7 @@ export default function FMXPushModal({
 
         let ok = false;
         try {
-          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || []);
+          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || [], dynFieldMap, dynLookups);
           const res = await fetch('/api/fmx', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

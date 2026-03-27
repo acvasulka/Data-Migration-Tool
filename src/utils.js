@@ -62,6 +62,7 @@ export function computeCellErrors(rows, allFields, importedData) {
       if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { cellMap[key] = "error"; return; }
       if (f.type === "date" && isNaN(Date.parse(val))) { cellMap[key] = "error"; return; }
       if (f.type === "number" && isNaN(Number(val))) { cellMap[key] = "error"; return; }
+      if (f.maximumLength && String(val).length > f.maximumLength) { cellMap[key] = "warning"; return; }
       if (f.crossSheet && importedData[f.crossSheet] && !importedData[f.crossSheet].includes(val)) { cellMap[key] = "warning"; }
     });
   });

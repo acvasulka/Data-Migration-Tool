@@ -30,7 +30,8 @@ export function resolveEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
-// Maps FMX import schema field names → FMX API property names (non-lookup fields only)
+// DEPRECATED: Use deriveFieldMap() from fmxFieldMetadata.js for dynamic field mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_FIELD_MAP = {
   'Building': {
     'Name':                       'name',
@@ -154,7 +155,8 @@ const FMX_FIELD_MAP = {
   },
 };
 
-// Fields requiring an ID lookup before pushing
+// DEPRECATED: Use deriveLookupFields() from fmxFieldMetadata.js for dynamic lookup mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_ID_LOOKUP_FIELDS = {
   'Equipment': {
     'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },

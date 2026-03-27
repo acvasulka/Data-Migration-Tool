@@ -31,9 +31,9 @@ function coerceCustomFieldValue(value, fieldType) {
 // idCache: { "Building:Main Campus": 42 }
 // customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
-export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = []) {
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null) {
   const baseType = getBaseSchemaType(schemaType);
-  const fieldMap = FMX_FIELD_MAP[baseType] || {};
+  const fieldMap = fieldMapOverride || FMX_FIELD_MAP[baseType] || {};
   const payload = {};
   const customFields = [];
 
@@ -83,7 +83,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   }
 
   // Resolve ID lookup fields (Building → buildingID, etc.)
-  const lookups = FMX_ID_LOOKUP_FIELDS[baseType] || {};
+  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[baseType] || {};
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
     const value = row[fmxField];
     if (!value) return;
@@ -99,8 +99,8 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
 
 // Pre-fetch IDs for all unique reference values in the dataset.
 // Returns an idCache map: { "Building:Main Campus": 42, ... }
-export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
-  const lookups = FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
+export async function buildIdCache(rows, schemaType, siteUrl, email, password, lookupFieldsOverride = null) {
+  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
   const idCache = {};
 
   for (const [fmxField, lookup] of Object.entries(lookups)) {

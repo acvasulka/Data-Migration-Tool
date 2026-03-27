@@ -1,5 +1,5 @@
-// Standard FMX API fields per schema type — used when credentials are present.
-// These replace the hardcoded schemas.js fields for the push flow.
+// DEPRECATED: Use buildFieldDefinitions() from fmxFieldMetadata.js for dynamic field definitions.
+// Retained as fallback when systemFields from /post-options are unavailable.
 // Fields with apiKey: null are resolved via FMX_ID_LOOKUP_FIELDS in fmxEndpoints.js.
 
 export const FMX_API_STANDARD_FIELDS = {
