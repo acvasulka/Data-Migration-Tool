@@ -18,7 +18,7 @@ export default function TransformModal({ fieldName, csvHeaders, currentRule, sav
         messages: [{ role: "user", content: `You are a JavaScript code generator for a data migration tool. Write a function body (no declaration) that receives a "row" object (keys = CSV column names) and returns the computed string value for FMX field "${fieldName}". Available columns: ${JSON.stringify(csvHeaders)}. Instruction: "${instruction}". Return ONLY raw JS, no markdown, no explanation.` }]
       });
       setCode(parseClaudeText(data));
-    } catch { setErr("Generation failed — check connection."); }
+    } catch (e) { setErr(e.status ? e.message : "Generation failed — check connection."); }
     setLoading(false);
   };
 

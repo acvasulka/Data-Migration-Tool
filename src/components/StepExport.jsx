@@ -55,13 +55,17 @@ export default function StepExport({
         let fieldPatterns = [];
         if (Object.keys(fieldSamples).length > 0) {
           try {
-            const data = await claudeFetch({
-              max_tokens: 1000,
-              messages: [{
-                role: "user",
-                content: `Analyze these data samples from an FMX ${schemaType} import. For each field, give a ONE sentence pattern hint describing the data format. Return ONLY a JSON object where keys are field names and values are pattern hint strings. Data samples: ${JSON.stringify(fieldSamples)}`
-              }]
-            });
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000));
+            const data = await Promise.race([
+              claudeFetch({
+                max_tokens: 1000,
+                messages: [{
+                  role: "user",
+                  content: `Analyze these data samples from an FMX ${schemaType} import. For each field, give a ONE sentence pattern hint describing the data format. Return ONLY a JSON object where keys are field names and values are pattern hint strings. Data samples: ${JSON.stringify(fieldSamples)}`
+                }]
+              }),
+              timeout,
+            ]);
             const clean = parseClaudeText(data) || "{}";
             const hints = JSON.parse(clean);
             fieldPatterns = Object.entries(fieldSamples).map(([fmxField, sampleValues]) => ({

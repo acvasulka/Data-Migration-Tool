@@ -1,4 +1,4 @@
-import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge } from './db';
+import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
 import { fmxFetch } from './apiClient';
 import { resolvePostOptionsEndpoint } from './fmxEndpoints';
 
@@ -226,4 +226,85 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   } catch {
     return { customFields: [], systemFields: [], fromCache: false };
   }
+}
+
+// --- Dependency update system ---
+
+export const DEPENDENCY_TYPES = [
+  { key: 'buildings',       endpoint: '/v1/buildings',        label: 'Buildings',             nameField: 'name' },
+  { key: 'resources',       endpoint: '/v1/resources',        label: 'Resources & Locations', nameField: 'name' },
+  { key: 'users',           endpoint: '/v1/users',            label: 'Users',                 nameField: 'name', extraFields: ['email'] },
+  { key: 'equipment-types', endpoint: '/v1/equipment-types',  label: 'Equipment Types',       nameField: 'name' },
+  { key: 'equipment',       endpoint: '/v1/equipment',        label: 'Equipment Names',       nameField: 'tag' },
+  { key: 'inventory-types', endpoint: '/v1/inventory-types',  label: 'Inventory Types',       nameField: 'name' },
+  { key: 'inventory',       endpoint: '/v1/inventory',        label: 'Inventory Names',       nameField: 'name' },
+  { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name' },
+  { key: 'user-types',      endpoint: '/v1/user-types',       label: 'User Types',            nameField: 'name' },
+];
+
+// Generic paginated fetcher — collects all pages from an FMX list endpoint.
+async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,name', limit = 100) {
+  const allItems = [];
+  let offset = 0;
+  let totalCount = null;
+
+  while (true) {
+    const sep = endpoint.includes('?') ? '&' : '?';
+    const url = `${endpoint}${sep}offset=${offset}&limit=${limit}&fields=${encodeURIComponent(fields)}`;
+    const res = await fmxFetch({ siteUrl, email, password, endpoint: url, method: 'GET' });
+    if (!res.ok) throw new Error(`FMX returned ${res.status} for ${endpoint}`);
+
+    const headerTotal = res.headers.get('FMX-Total-Count');
+    if (headerTotal !== null && totalCount === null) {
+      totalCount = parseInt(headerTotal, 10);
+    }
+
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
+    allItems.push(...items);
+
+    if (items.length < limit) break;        // last page
+    if (totalCount !== null && allItems.length >= totalCount) break;
+    offset += limit;
+  }
+
+  return { items: allItems, totalCount: totalCount ?? allItems.length };
+}
+
+// Fetch all dependencies for a project. Calls onTypeProgress(depKey, 'done'|'error', count) per type.
+export async function fetchAllDependencies(project, onTypeProgress) {
+  if (!project?.fmx_credentials || !project?.fmx_site_url) {
+    throw new Error('Missing FMX credentials');
+  }
+
+  const { email, password } = decodeCredentials(project.fmx_credentials);
+  const siteUrl = project.fmx_site_url;
+  const projectId = project.id;
+  const results = {};
+
+  for (const dep of DEPENDENCY_TYPES) {
+    try {
+      const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
+      const { items, totalCount } = await fetchAllPages(siteUrl, email, password, dep.endpoint, fields);
+
+      // Extract only the fields we need
+      const cleaned = items.map(item => {
+        const entry = { id: item.id, name: item[dep.nameField] };
+        for (const ef of (dep.extraFields || [])) {
+          entry[ef] = item[ef];
+        }
+        return entry;
+      });
+
+      await saveDependencyCache(projectId, dep.key, cleaned, totalCount);
+      results[dep.key] = { count: totalCount, status: 'done' };
+      if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);
+    } catch (e) {
+      console.warn(`Failed to fetch dependency "${dep.key}":`, e);
+      results[dep.key] = { count: 0, status: 'error', error: e.message };
+      if (onTypeProgress) onTypeProgress(dep.key, 'error', 0);
+    }
+  }
+
+  return results;
 }

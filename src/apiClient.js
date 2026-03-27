@@ -17,7 +17,20 @@ export async function claudeFetch({ messages, max_tokens, system }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const data = await res.json();
+  if (!res.ok) {
+    const err = new Error(
+      res.status === 529
+        ? "Claude is temporarily overloaded — please try again in a moment."
+        : res.status === 429
+          ? "Rate limit reached — please wait a moment and try again."
+          : data.error?.message || "AI request failed."
+    );
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
 }
 
 export function parseClaudeText(data) {

@@ -19,7 +19,7 @@ export default function NLEditPanel({ headers, onApply }) {
       const { field, code } = JSON.parse(clean);
       if (field && code) onApply(field, code);
       setInstruction("");
-    } catch { setErr("Failed to parse instruction — try rephrasing."); }
+    } catch (e) { setErr(e.status ? e.message : "Failed to parse instruction — try rephrasing."); }
     setLoading(false);
   };
 
