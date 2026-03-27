@@ -9,13 +9,13 @@ const PAGE_SIZE = 100;
 
 // SVG donut ring — shows % of clean rows
 function DonutRing({ cleanPct }) {
-  const R = 34, CX = 44, CY = 44, SW = 10;
+  const R = 48, CX = 56, CY = 56, SW = 11;
   const circumference = 2 * Math.PI * R;
   const dashOffset = circumference * (1 - cleanPct);
   const pct = Math.round(cleanPct * 100);
   const color = cleanPct === 1 ? C.okText : cleanPct > 0.8 ? C.warnText : C.errText;
   return (
-    <svg width={88} height={88} viewBox="0 0 88 88" style={{ flexShrink: 0 }}>
+    <svg width={112} height={112} viewBox="0 0 112 112" style={{ flexShrink: 0 }}>
       <circle cx={CX} cy={CY} r={R} fill="none" stroke={C.border} strokeWidth={SW} />
       <circle
         cx={CX} cy={CY} r={R} fill="none"
@@ -26,7 +26,7 @@ function DonutRing({ cleanPct }) {
         transform={`rotate(-90 ${CX} ${CY})`}
         style={{ transition: 'stroke-dashoffset 0.6s ease' }}
       />
-      <text x={CX} y={CY + 5} textAnchor="middle" fontSize={15} fontWeight={700} fill={color}>
+      <text x={CX} y={CY + 6} textAnchor="middle" fontSize={17} fontWeight={700} fill={color}>
         {pct}%
       </text>
     </svg>
@@ -71,9 +71,9 @@ export default function StepValidate({
   const [globalSearch, setGlobalSearch] = useState('');
   const [columnFilters, setColumnFilters] = useState({});
   const [nlEditScope, setNlEditScope] = useState('all');
-  const [errorColFilter, setErrorColFilter] = useState(null);  // column name to filter by error
-  const [undoSnapshot, setUndoSnapshot] = useState(null);      // single-level undo
-  const [suggestions, setSuggestions] = useState(null);        // null=loading, []=none, [...]= ready
+  const [errorColFilter, setErrorColFilter] = useState(null);
+  const [undoSnapshot, setUndoSnapshot] = useState(null);
+  const [suggestions, setSuggestions] = useState(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
   // Dep modal
@@ -306,6 +306,7 @@ export default function StepValidate({
 
   const pageStart = clampedPage * PAGE_SIZE + 1;
   const pageEnd = Math.min((clampedPage + 1) * PAGE_SIZE, activeRows.length);
+  const hiddenRowCount = mappedRows.length - activeRows.length;
 
   return (
     <div>
@@ -319,11 +320,11 @@ export default function StepValidate({
         </div>
       )}
 
-      {/* ── Two-panel header: Bulk Edit (left) + Data Quality (right) ── */}
+      {/* ── Two-panel header: Bulk Edit (left 40%) + Data Quality (right 40%) ── */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 14, alignItems: 'stretch' }}>
 
-        {/* Left: NLEditPanel */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Left: NLEditPanel — 40% */}
+        <div style={{ width: '40%', flexShrink: 0, minWidth: 0 }}>
           <NLEditPanel
             headers={mappedHeaders}
             onApply={handleNLEditApply}
@@ -338,25 +339,25 @@ export default function StepValidate({
           />
         </div>
 
-        {/* Right: Data Quality panel */}
-        <div style={{ width: '42%', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 16px', background: C.white, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Right: Data Quality panel — 40% */}
+        <div style={{ width: '40%', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 16px', background: C.white, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: C.navy, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Data Quality</p>
 
           {/* Donut ring + counts */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <DonutRing cleanPct={cleanPct} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, justifyContent: 'center' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center' }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: C.textDark }}>
                 {cleanRows} of {totalRows} rows clean
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: errorCount > 0 ? C.errText : C.okText }} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: errorCount > 0 ? C.errText : C.okText }} />
                 <span style={{ fontSize: 11, color: errorCount > 0 ? C.errText : C.okText }}>
                   {errorCount} missing required data
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: depErrorCount > 0 ? C.warnText : C.okText }} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: depErrorCount > 0 ? C.warnText : C.okText }} />
                 <span style={{ fontSize: 11, color: depErrorCount > 0 ? C.warnText : C.okText }}>
                   {depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''}
                 </span>
@@ -364,10 +365,31 @@ export default function StepValidate({
             </div>
           </div>
 
+          {/* Error navigation buttons */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              className={`fmx-btn-xs-rule${showOnlyErrors ? ' active' : ''}`}
+              onClick={() => setShowOnlyErrors(v => !v)}
+              disabled={errorRowSet.size === 0}
+              style={{ opacity: errorRowSet.size === 0 ? 0.5 : 1 }}
+            >
+              {showOnlyErrors ? '✓ Error rows only' : 'Show error rows'}
+            </button>
+            <button
+              className="fmx-btn-xs"
+              onClick={jumpToNextError}
+              disabled={errorCells.length === 0}
+              style={{ color: errorCells.length > 0 ? C.errText : undefined, borderColor: errorCells.length > 0 ? C.errBorder : undefined, background: errorCells.length > 0 ? C.errBg : undefined }}
+            >
+              Jump to error ↓
+            </button>
+            {noMoreMsg && <span style={{ fontSize: 11, color: C.textMid, fontStyle: 'italic' }}>No more errors</span>}
+          </div>
+
           {/* Errors by column */}
           {errorsByColumn.length > 0 && (
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
-              <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              <p style={{ margin: '0 0 5px', fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 Errors by column
               </p>
               {errorsByColumn.map(([col, count]) => {
@@ -378,18 +400,20 @@ export default function StepValidate({
                     onClick={() => { setErrorColFilter(isActive ? null : col); setPage(0); }}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      width: '100%', padding: '4px 8px', marginBottom: 2, borderRadius: 5,
-                      border: 'none', cursor: 'pointer', textAlign: 'left',
-                      background: isActive ? C.warnBg : 'transparent',
-                      transition: 'background 0.15s ease',
+                      width: '100%', padding: '5px 8px 5px 10px', marginBottom: 3, borderRadius: 6,
+                      border: `1px solid ${isActive ? C.warnBorder : 'transparent'}`,
+                      borderLeft: `3px solid ${isActive ? C.warnText : C.errText}`,
+                      cursor: 'pointer', textAlign: 'left',
+                      background: isActive ? C.warnBg : C.errBg,
+                      transition: 'all 0.15s ease',
                     }}
-                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = C.bgPage; }}
-                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                    onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = '#FFDDD4'; e.currentTarget.style.borderColor = C.errBorder; } }}
+                    onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = C.errBg; e.currentTarget.style.borderColor = 'transparent'; } }}
                   >
-                    <span style={{ fontSize: 11, color: isActive ? C.warnText : C.textDark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    <span style={{ fontSize: 11, color: isActive ? C.warnText : C.errText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, fontWeight: isActive ? 600 : 400 }}>
                       {isActive ? '▶ ' : ''}{col}
                     </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4, marginLeft: 8, flexShrink: 0, background: isActive ? C.warnText : C.errBg, color: isActive ? C.white : C.errText }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, marginLeft: 8, flexShrink: 0, background: isActive ? C.warnText : C.errText, color: C.white }}>
                       {count}
                     </span>
                   </button>
@@ -398,33 +422,13 @@ export default function StepValidate({
             </div>
           )}
 
-          {/* Action buttons row */}
+          {/* Action buttons: Fix dep issues */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* Fix dep issues */}
             {depErrorCount > 0 && (
               <button className="fmx-btn-xs" onClick={handleFixAll} style={{ color: C.warnText, borderColor: C.warnBorder, background: C.warnBg, fontWeight: 600 }}>
                 ⚠ Fix {depErrorCount} dep issue{depErrorCount !== 1 ? 's' : ''}
               </button>
             )}
-
-            {/* Column visibility */}
-            <div style={{ position: 'relative', marginLeft: 'auto' }}>
-              <button className="fmx-btn-xs" onClick={() => setColMenuOpen(v => !v)}>Columns ▾</button>
-              {colMenuOpen && (
-                <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 0', zIndex: 100, minWidth: 210, maxHeight: 320, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)' }}>
-                  <div style={{ padding: '4px 14px 8px', borderBottom: `1px solid ${C.border}`, marginBottom: 2, display: 'flex', justifyContent: 'space-between' }}>
-                    <button onClick={() => setHiddenCols(new Set())} style={{ fontSize: 11, color: C.navy, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}>Show all</button>
-                    <button onClick={() => setHiddenCols(new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h]))))} style={{ fontSize: 11, color: C.textMid, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Reset defaults</button>
-                  </div>
-                  {mappedHeaders.map(h => (
-                    <label key={h} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', cursor: 'pointer', fontSize: 12, color: C.textDark }}>
-                      <input type="checkbox" checked={!hiddenCols.has(h)} onChange={e => { setHiddenCols(prev => { const next = new Set(prev); e.target.checked ? next.delete(h) : next.add(h); return next; }); }} />
-                      {h}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Dep sync status + toast */}
@@ -444,25 +448,46 @@ export default function StepValidate({
         </div>
       </div>
 
-      {/* ── Error filter row (above search) ── */}
+      {/* ── Row above search: Columns dropdown + hidden counts ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <button
-          className={`fmx-btn-xs-rule${showOnlyErrors ? ' active' : ''}`}
-          onClick={() => setShowOnlyErrors(v => !v)}
-          disabled={errorRowSet.size === 0}
-          style={{ opacity: errorRowSet.size === 0 ? 0.5 : 1 }}
-        >
-          {showOnlyErrors ? '✓ Showing error rows only' : 'Show only error rows'}
-        </button>
-        <button
-          className="fmx-btn-xs"
-          onClick={jumpToNextError}
-          disabled={errorCells.length === 0}
-          style={{ color: errorCells.length > 0 ? C.errText : undefined, borderColor: errorCells.length > 0 ? C.errBorder : undefined, background: errorCells.length > 0 ? C.errBg : undefined }}
-        >
-          Jump to error ↓
-        </button>
-        {noMoreMsg && <span style={{ fontSize: 11, color: C.textMid, fontStyle: 'italic' }}>No more errors</span>}
+
+        {/* Columns dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button className="fmx-btn-xs" onClick={() => setColMenuOpen(v => !v)}>Columns ▾</button>
+          {colMenuOpen && (
+            <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 0', zIndex: 100, minWidth: 210, maxHeight: 320, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)' }}>
+              <div style={{ padding: '4px 14px 8px', borderBottom: `1px solid ${C.border}`, marginBottom: 2, display: 'flex', justifyContent: 'space-between' }}>
+                <button onClick={() => setHiddenCols(new Set())} style={{ fontSize: 11, color: C.navy, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}>Show all</button>
+                <button onClick={() => setHiddenCols(new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h]))))} style={{ fontSize: 11, color: C.textMid, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Reset defaults</button>
+              </div>
+              {mappedHeaders.map(h => (
+                <label key={h} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', cursor: 'pointer', fontSize: 12, color: C.textDark }}>
+                  <input type="checkbox" checked={!hiddenCols.has(h)} onChange={e => { setHiddenCols(prev => { const next = new Set(prev); e.target.checked ? next.delete(h) : next.add(h); return next; }); }} />
+                  {h}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Hidden columns count */}
+        {hiddenCols.size > 0 && (
+          <span style={{ fontSize: 11, color: C.textMid }}>
+            {hiddenCols.size} column{hiddenCols.size !== 1 ? 's' : ''} hidden
+          </span>
+        )}
+
+        {/* Separator dot — only when both labels shown */}
+        {hiddenCols.size > 0 && hiddenRowCount > 0 && (
+          <span style={{ fontSize: 11, color: C.textLight }}>·</span>
+        )}
+
+        {/* Hidden rows count */}
+        {hiddenRowCount > 0 && (
+          <span style={{ fontSize: 11, color: C.textMid }}>
+            {hiddenRowCount} row{hiddenRowCount !== 1 ? 's' : ''} hidden
+          </span>
+        )}
       </div>
 
       {/* ── Global search bar ── */}
