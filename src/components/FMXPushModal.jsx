@@ -3,6 +3,7 @@ import { C } from "../theme";
 import Modal from "./Modal";
 import { resolveEndpoint } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
+import { deriveFieldMap, deriveLookupFields } from "../fmxFieldMetadata";
 import { decodeCredentials } from "../fmxSync";
 import { fmxFetch } from "../apiClient";
 import { downloadCSV } from "../utils";
@@ -29,6 +30,7 @@ export default function FMXPushModal({
   fmxModules,
   customFieldIdMap,
   customFieldMetadata,
+  allFields,
   onClose,
   onSuccess,
 }) {
@@ -103,12 +105,16 @@ export default function FMXPushModal({
       let failCount = 0;
       const failures = [];
 
+      // Derive dynamic field/lookup maps from allFields (falls back to static maps inside transform)
+      const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
+      const dynLookups = allFields?.length ? deriveLookupFields(allFields) : null;
+
       // Step 1: Build ID cache (use dependency caches for speed if available)
       setStatusMsg('Preparing — resolving reference IDs…');
       let idCache = {};
       try {
         const depCaches = projectId ? await getAllDependencyCaches(projectId) : [];
-        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw, depCaches);
+        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw, depCaches, dynLookups);
       } catch {}
 
       if (cancelledRef.current) return;
@@ -123,7 +129,7 @@ export default function FMXPushModal({
 
         let ok = false;
         try {
-          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || []);
+          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || [], dynFieldMap, dynLookups);
           const res = await fmxFetch({ siteUrl: url, email: em, password: pw, endpoint, payload });
           ok = res.ok || res.status === 200 || res.status === 201;
         } catch {}

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
 import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
+import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
@@ -206,11 +207,18 @@ export default function App() {
 
   // Use API-driven field list when credentials are present and sync has completed
   const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
-  const baseFields = schemaType
-    ? (hasApiFields && FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
-        ? FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
-        : (schema?.fields || []))
-    : [];
+  const baseType = schemaType ? getBaseSchemaType(schemaType) : null;
+  const baseFields = useMemo(() => {
+    if (!schemaType) return [];
+    // Dynamic: merge live systemFields from /post-options with enrichment metadata
+    if (hasApiFields && fmxSyncData.systemFields?.length && hasEnrichments(baseType)) {
+      const dynamic = buildFieldDefinitions(baseType, fmxSyncData.systemFields);
+      if (dynamic) return dynamic;
+    }
+    // Fallback: hardcoded field schema
+    if (hasApiFields && FMX_API_STANDARD_FIELDS[baseType]) return FMX_API_STANDARD_FIELDS[baseType];
+    return schema?.fields || [];
+  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields, schema]);
 
   const allFields = schemaType ? [
     ...baseFields,
@@ -224,7 +232,7 @@ export default function App() {
     ]),
     // FMX custom fields from live sync (always appended; empty when no credentials)
     ...(fmxSyncData.customFields || []).map(cf => ({
-      name: cf.name, required: false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
+      name: cf.name, required: cf.isRequired || false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
       isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
     })),
   ] : [];

@@ -39,9 +39,9 @@ function coerceCustomFieldValue(value, fieldType) {
 // idCache: { "Building:Main Campus": 42 }
 // customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
-export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = []) {
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null) {
   const baseType = getBaseSchemaType(schemaType);
-  const fieldMap = FMX_FIELD_MAP[baseType] || {};
+  const fieldMap = fieldMapOverride || FMX_FIELD_MAP[baseType] || {};
   const payload = {};
   const customFields = [];
 
@@ -91,7 +91,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   }
 
   // Resolve ID lookup fields (Building → buildingID, etc.)
-  const lookups = FMX_ID_LOOKUP_FIELDS[baseType] || {};
+  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[baseType] || {};
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
     const value = row[fmxField];
     if (!value) return;
@@ -138,8 +138,9 @@ function buildDepLookup(items, nameField = 'name') {
 // Returns an idCache map: { "Building:Main Campus": 42, ... }
 // If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
 // and only falls back to individual API calls for cache misses.
-export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = []) {
-  const lookups = FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
+// lookupFieldsOverride: optional dynamic lookup map from deriveFieldMap() — overrides static FMX_ID_LOOKUP_FIELDS.
+export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
+  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
   const idCache = {};
 
   // Index dependency caches by key for quick access

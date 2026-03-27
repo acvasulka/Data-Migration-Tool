@@ -113,6 +113,7 @@ export default function StepExport({
           fmxModules={selectedProject?.fmx_modules || {}}
           customFieldIdMap={customFieldIdMap || {}}
           customFieldMetadata={customFieldMetadata || []}
+          allFields={allFields}
           onClose={() => setShowFMXModal(false)}
           onSuccess={() => { setShowFMXModal(false); runPersistence(); }}
         />
