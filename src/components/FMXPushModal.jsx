@@ -4,6 +4,7 @@ import Modal from "./Modal";
 import { resolveEndpoint } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
 import { decodeCredentials } from "../fmxSync";
+import { getAllDependencyCaches } from "../db";
 
 const ANIM = `
   @keyframes fmx-check-draw {
@@ -122,11 +123,12 @@ export default function FMXPushModal({
       let failCount = 0;
       const failures = [];
 
-      // Step 1: Build ID cache
+      // Step 1: Build ID cache (use dependency caches for speed if available)
       setStatusMsg('Preparing — resolving reference IDs…');
       let idCache = {};
       try {
-        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw);
+        const depCaches = projectId ? await getAllDependencyCaches(projectId) : [];
+        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw, depCaches);
       } catch {}
 
       if (cancelledRef.current) return;

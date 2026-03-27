@@ -119,6 +119,41 @@ export async function saveFmxReferenceCache(projectId, schemaType, customFields,
   }
 }
 
+// --- DEPENDENCY CACHE ---
+
+export async function saveDependencyCache(projectId, depKey, items, totalCount) {
+  try {
+    const { error } = await supabase
+      .from('fmx_reference_cache')
+      .upsert({
+        project_id: projectId,
+        schema_type: depKey,
+        record_type: 'dependency_cache',
+        fmx_name: '__dep_cache__',
+        fmx_id: null,
+        extra: { items, totalCount },
+        cached_at: new Date().toISOString(),
+      }, { onConflict: 'project_id,schema_type,record_type,fmx_name' });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function getAllDependencyCaches(projectId) {
+  try {
+    const { data, error } = await supabase
+      .from('fmx_reference_cache')
+      .select('schema_type, extra, cached_at')
+      .eq('project_id', projectId)
+      .eq('record_type', 'dependency_cache');
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
 export async function getCacheAge(projectId, schemaType) {
   try {
     const cached = await getFmxReferenceCache(projectId, schemaType);

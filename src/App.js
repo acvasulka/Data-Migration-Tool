@@ -653,6 +653,7 @@ export default function App() {
         {mainTab === 'dependencies' && (
           <DependenciesView
             projectId={selectedProject?.id}
+            project={selectedProject}
             refreshKey={checklistRefreshKey}
           />
         )}
