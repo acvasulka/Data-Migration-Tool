@@ -34,6 +34,7 @@ export default function StepValidate({
     'request-types':   'Request Type',
     'inventory-types': 'Inventory Type',
     'inventory':       'Inventory',
+    'user-types':      'User Type',
   };
 
   useEffect(() => {

@@ -5,7 +5,7 @@ import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMappi
 import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows } from "./db";
-import { syncFmxDataForProject } from "./fmxSync";
+import { syncFmxDataForProject, fetchAllDependencies } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
@@ -253,6 +253,12 @@ export default function App() {
     setWStep(1);
     setMainTab('wizard');
     handleFmxSync(t);
+    // Auto-update dependencies in background so validation data is fresh
+    if (selectedProject?.fmx_connection_verified) {
+      fetchAllDependencies(selectedProject)
+        .then(() => setChecklistRefreshKey(k => k + 1))
+        .catch(() => {});
+    }
   };
 
   const processCSV = async (csvStr, info) => {

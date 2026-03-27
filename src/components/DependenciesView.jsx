@@ -24,6 +24,7 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState({}); // { [depKey]: { status, count } }
   const [syncError, setSyncError] = useState(null);
+  const [searchTerms, setSearchTerms] = useState({}); // { [depKey]: string }
 
   const loadCaches = useCallback(async () => {
     if (!projectId) return;
@@ -64,7 +65,7 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
   }
 
   return (
-    <div style={{ maxWidth: 960 }}>
+    <div style={{ maxWidth: 1200 }}>
       {/* Header area */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
         <button
@@ -110,12 +111,14 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
       </p>
 
       {/* Dependency cards grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
         {DEPENDENCY_TYPES.map(dep => {
           const cache = depCaches[dep.key];
           const progress = syncProgress[dep.key];
-          const items = cache?.items || [];
-          const count = cache?.totalCount ?? items.length;
+          const allItems = cache?.items || [];
+          const count = cache?.totalCount ?? allItems.length;
+          const search = (searchTerms[dep.key] || '').toLowerCase();
+          const items = search ? allItems.filter(i => (i.name || '').toLowerCase().includes(search) || (i.email || '').toLowerCase().includes(search)) : allItems;
           const age = timeAgo(cache?.cachedAt);
           const isFetching = syncing && !progress && currentType?.key === dep.key;
           const isDone = progress?.status === 'done';
@@ -164,11 +167,38 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
                 </div>
               </div>
 
+              {/* Search bar */}
+              {allItems.length > 0 && (
+                <div style={{ padding: '8px 14px 0' }}>
+                  <input
+                    type="text"
+                    placeholder="Search…"
+                    value={searchTerms[dep.key] || ''}
+                    onChange={e => setSearchTerms(prev => ({ ...prev, [dep.key]: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '5px 10px',
+                      fontSize: 12,
+                      border: '1px solid #E5E7EB',
+                      borderRadius: 5,
+                      outline: 'none',
+                      color: '#374151',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  {search && (
+                    <span style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2, display: 'block' }}>
+                      {items.length} of {allItems.length} shown
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Values list */}
-              <div style={{ padding: '10px 20px 14px', maxHeight: 280, overflowY: 'auto' }}>
+              <div style={{ padding: '10px 20px 14px', maxHeight: 240, overflowY: 'auto' }}>
                 {items.length === 0 ? (
                   <p style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', margin: '4px 0' }}>
-                    {cache ? 'No records found in FMX' : 'Click "Update Dependencies" to fetch'}
+                    {cache ? (search ? 'No matches' : 'No records found in FMX') : 'Click "Update Dependencies" to fetch'}
                   </p>
                 ) : (
                   items.map((item, idx) => (
