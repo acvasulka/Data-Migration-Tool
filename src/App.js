@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
 import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
 import { syncFmxDataForProject, fetchAllDependencies } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import DataPreviewModal from "./components/DataPreviewModal";
@@ -138,7 +138,10 @@ export default function App() {
   const [memoryMatches, setMemoryMatches] = useState({});
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
-  const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
+  // persistentRefs kept for legacy compatibility (no longer used for validation)
+  const [persistentRefs, setPersistentRefs] = useState(null); // eslint-disable-line no-unused-vars
+  const [depCacheMap, setDepCacheMap] = useState({}); // { [crossSheetType]: string[] } from FMX live dep cache
+  const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
   const [activeImportId, setActiveImportId] = useState(null);
@@ -226,7 +229,7 @@ export default function App() {
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
-  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, persistentRefs ?? importedData) : {};
+  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, schemaType, depCacheMap) : {};
   const hasErrors = Object.values(cellErrors).some(v => v === "error");
 
   const groupedFields = {};
@@ -246,6 +249,35 @@ export default function App() {
     setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
   };
 
+  // Maps dependency cache keys to crossSheet field labels used in allFields
+  const DEP_KEY_TO_CROSS_SHEET = {
+    'buildings':       'Building',
+    'equipment-types': 'Equipment Type',
+    'resources':       'Resource',
+    'equipment':       'Equipment',
+    'users':           'User',
+    'request-types':   'Request Type',
+    'inventory-types': 'Inventory Type',
+    'inventory':       'Inventory',
+    'user-types':      'User Type',
+  };
+
+  const loadDepCacheMap = useCallback(async () => {
+    if (!selectedProject?.id) return;
+    const rows = await getAllDependencyCaches(selectedProject.id);
+    const map = {};
+    for (const row of rows) {
+      const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
+      if (crossSheet && row.extra?.items?.length) {
+        map[crossSheet] = row.extra.items.map(i => i.name).filter(Boolean);
+      }
+    }
+    setDepCacheMap(map);
+  }, [selectedProject?.id]); // dep: selectedProject.id is the only relevant change trigger
+
+  // Load dep cache whenever selected project changes
+  useEffect(() => { loadDepCacheMap(); }, [loadDepCacheMap]);
+
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
     setTransformRules({}); setCertified(false); setFileInfo(null);
@@ -253,11 +285,13 @@ export default function App() {
     setWStep(1);
     setMainTab('wizard');
     handleFmxSync(t);
-    // Auto-update dependencies in background so validation data is fresh
+    // Auto-refresh all dependency caches in the background so StepValidate has fresh data
     if (selectedProject?.fmx_connection_verified) {
-      fetchAllDependencies(selectedProject)
-        .then(() => setChecklistRefreshKey(k => k + 1))
-        .catch(() => {});
+      setDepAutoSyncing(true);
+      fetchAllDependencies(selectedProject, () => {})
+        .then(() => loadDepCacheMap())
+        .catch(() => {})
+        .finally(() => setDepAutoSyncing(false));
     }
   };
 
@@ -662,7 +696,6 @@ export default function App() {
         {mainTab === 'dependencies' && (
           <DependenciesView
             projectId={selectedProject?.id}
-            project={selectedProject}
             refreshKey={checklistRefreshKey}
           />
         )}
@@ -745,8 +778,9 @@ export default function App() {
                 applyNLEdit={applyNLEdit}
                 onRowsUpdated={(rows) => setMappedRows(rows)}
                 projectId={selectedProject?.id}
-                importedData={importedData}
-                onRefsLoaded={handleRefsLoaded}
+                schemaType={schemaType}
+                depCacheMap={depCacheMap}
+                depAutoSyncing={depAutoSyncing}
               />
             )}
 

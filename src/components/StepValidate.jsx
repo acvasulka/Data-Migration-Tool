@@ -1,8 +1,10 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { C } from "../theme";
 import NLEditPanel from "./NLEditPanel";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
-import { getReferenceValues, getAllDependencyCaches } from "../db";
+import DepResolveModal from "./DepResolveModal";
+
+const SPIN = `@keyframes _sv_spin { to { transform: rotate(360deg); } }`;
 
 export default function StepValidate({
   mappedHeaders,
@@ -16,68 +18,37 @@ export default function StepValidate({
   applyNLEdit,
   onRowsUpdated,
   projectId,
-  importedData,
-  onRefsLoaded,
+  schemaType,
+  depCacheMap,      // { [crossSheetType]: string[] }
+  depAutoSyncing,   // bool — background dep sync in progress
 }) {
   const [jumpIdx, setJumpIdx] = useState(-1);
   const [noMoreMsg, setNoMoreMsg] = useState(false);
   const [focusCell, setFocusCell] = useState(null);
-  const [refCounts, setRefCounts] = useState(null); // { building, equipType }
 
-  // Dependency cache key → crossSheet schema type mapping
-  const DEP_KEY_TO_CROSS_SHEET = {
-    'buildings':       'Building',
-    'equipment-types': 'Equipment Type',
-    'resources':       'Resource',
-    'equipment':       'Equipment',
-    'users':           'User',
-    'request-types':   'Request Type',
-    'inventory-types': 'Inventory Type',
-    'inventory':       'Inventory',
-    'user-types':      'User Type',
-  };
+  // Which dep field to resolve (column header string) — null means "all"
+  const [depResolveHeader, setDepResolveHeader] = useState(null);
+  const [showDepModal, setShowDepModal] = useState(false);
 
+  // Toast: detect when depAutoSyncing transitions false → show "Updated ✓"
+  const prevSyncingRef = useRef(false);
+  const [syncDoneToast, setSyncDoneToast] = useState(false);
   useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    (async () => {
-      const [buildingRefs, equipTypeRefs, depCaches] = await Promise.all([
-        getReferenceValues(projectId, 'Building'),
-        getReferenceValues(projectId, 'Equipment Type'),
-        getAllDependencyCaches(projectId),
-      ]);
-      if (cancelled) return;
+    if (prevSyncingRef.current && !depAutoSyncing) {
+      setSyncDoneToast(true);
+      const t = setTimeout(() => setSyncDoneToast(false), 3000);
+      return () => clearTimeout(t);
+    }
+    prevSyncingRef.current = depAutoSyncing;
+  }, [depAutoSyncing]);
 
-      const buildingNames = buildingRefs?.Name ?? [];
-      const equipTypeNames = equipTypeRefs?.Name ?? [];
+  // Count dep_error cells
+  const depErrorCount = useMemo(
+    () => Object.values(cellErrors).filter(v => v === "dep_error").length,
+    [cellErrors]
+  );
 
-      // Start with dependency cache data (FMX live data)
-      const fromDeps = {};
-      for (const row of depCaches) {
-        const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
-        if (crossSheet && row.extra?.items?.length) {
-          fromDeps[crossSheet] = row.extra.items.map(i => i.name);
-        }
-      }
-
-      // Merge: dependency cache → import-based refs → in-session data (highest priority)
-      const merged = {
-        ...fromDeps,
-        ...(buildingNames.length ? { 'Building': buildingNames } : {}),
-        ...(equipTypeNames.length ? { 'Equipment Type': equipTypeNames } : {}),
-        ...importedData, // in-session data overrides
-      };
-
-      if (buildingNames.length > 0 || equipTypeNames.length > 0) {
-        setRefCounts({ building: buildingNames.length, equipType: equipTypeNames.length });
-      }
-
-      onRefsLoaded(merged);
-    })();
-    return () => { cancelled = true; };
-  }, [projectId]); // intentionally only re-runs when projectId changes
-
-  // Sorted list of all error cells: [{ri, header}]
+  // Sorted list of hard-error cells for jump-to
   const errorCells = useMemo(() => {
     return Object.entries(cellErrors)
       .filter(([, v]) => v === "error")
@@ -101,27 +72,113 @@ export default function StepValidate({
     setFocusCell({ ...errorCells[next], _t: Date.now() });
   };
 
+  const hasCacheData = Object.keys(depCacheMap || {}).length > 0;
+
+  const handleDepColumnClick = (header) => {
+    setDepResolveHeader(header);
+    setShowDepModal(true);
+  };
+
+  const handleFixAll = () => {
+    setDepResolveHeader(null); // null = all dep-errored fields
+    setShowDepModal(true);
+  };
+
+  // Apply bulk replacements from DepResolveModal: { [fieldName]: { [sourceVal]: targetVal } }
+  const handleApplyDepReplacements = (replacementsByField) => {
+    setMappedRows(rows => rows.map(row => {
+      const newRow = { ...row };
+      for (const [fieldName, reps] of Object.entries(replacementsByField)) {
+        const curr = row[fieldName];
+        if (curr && reps[curr] !== undefined) {
+          newRow[fieldName] = reps[curr];
+        }
+      }
+      return newRow;
+    }));
+  };
+
   return (
     <div>
-      {/* Toolbar */}
+      <style>{SPIN}</style>
+
+      {/* ── No-cache banner ── */}
+      {!hasCacheData && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '9px 14px', marginBottom: 14,
+          background: '#FFFBE6', border: `1px solid ${C.warnBorder}`, borderRadius: 8,
+          fontSize: 12, color: C.warnText,
+        }}>
+          <span style={{ fontSize: 16 }}>⚠</span>
+          <span>
+            <strong>Dependency validation is inactive.</strong> Go to the{' '}
+            <strong>Dependencies tab</strong> and click <strong>Update Dependencies</strong>{' '}
+            to validate cross-field references against live FMX data.
+          </span>
+        </div>
+      )}
+
+      {/* ── Toolbar ── */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: "1rem", flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <NLEditPanel headers={mappedHeaders} onApply={applyNLEdit} />
         </div>
+
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, paddingTop: 2 }}>
-          <button
-            onClick={jumpToNextError}
-            disabled={errorCells.length === 0}
-            style={{
-              fontSize: 13, padding: "7px 14px", borderRadius: 6, cursor: errorCells.length === 0 ? "not-allowed" : "pointer",
-              background: errorCells.length === 0 ? C.bgPage : C.errBg,
-              color: errorCells.length === 0 ? C.textLight : C.errText,
-              border: `1px solid ${errorCells.length === 0 ? C.border : C.errBorder}`,
-              whiteSpace: "nowrap", transition: "all 0.15s ease",
-            }}
-          >
-            Jump to next error ↓
-          </button>
+          {/* Dep sync status */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
+            {depAutoSyncing && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textMid }}>
+                <div style={{
+                  width: 12, height: 12, border: `2px solid ${C.border}`,
+                  borderTopColor: C.orange, borderRadius: '50%',
+                  animation: '_sv_spin 0.8s linear infinite', flexShrink: 0,
+                }} />
+                Refreshing dependencies…
+              </span>
+            )}
+            {syncDoneToast && !depAutoSyncing && (
+              <span style={{ fontSize: 11, color: '#2E7D32', fontWeight: 600 }}>
+                ✓ Dependencies updated
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            {/* Fix Dependency Issues button */}
+            {depErrorCount > 0 && (
+              <button
+                onClick={handleFixAll}
+                style={{
+                  fontSize: 12, padding: "7px 13px", borderRadius: 6, cursor: "pointer",
+                  background: C.warnBg, color: C.warnText,
+                  border: `1px solid ${C.warnBorder}`,
+                  whiteSpace: "nowrap", fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}
+              >
+                ⚠ Fix {depErrorCount} dependency issue{depErrorCount !== 1 ? 's' : ''}
+              </button>
+            )}
+
+            {/* Jump to hard error */}
+            <button
+              onClick={jumpToNextError}
+              disabled={errorCells.length === 0}
+              style={{
+                fontSize: 13, padding: "7px 14px", borderRadius: 6,
+                cursor: errorCells.length === 0 ? "not-allowed" : "pointer",
+                background: errorCells.length === 0 ? C.bgPage : C.errBg,
+                color: errorCells.length === 0 ? C.textLight : C.errText,
+                border: `1px solid ${errorCells.length === 0 ? C.border : C.errBorder}`,
+                whiteSpace: "nowrap", transition: "all 0.15s ease",
+              }}
+            >
+              Jump to next error ↓
+            </button>
+          </div>
+
           {noMoreMsg && (
             <span style={{ fontSize: 12, color: C.textMid, fontStyle: "italic" }}>No more errors</span>
           )}
@@ -134,17 +191,11 @@ export default function StepValidate({
         cellErrors={cellErrors}
         allFields={allFields}
         focusCell={focusCell}
+        onDepColumnClick={handleDepColumnClick}
         onChange={rows => { setMappedRows(rows); if (onRowsUpdated) onRowsUpdated(rows); }}
       />
 
-      {refCounts && (
-        <p style={{ fontSize: 12, color: C.textLight, fontStyle: "italic", margin: "8px 0 0" }}>
-          Cross-sheet validation loaded{refCounts.building > 0 ? ` ${refCounts.building} building name${refCounts.building !== 1 ? 's' : ''}` : ''}
-          {refCounts.building > 0 && refCounts.equipType > 0 ? ' and' : ''}
-          {refCounts.equipType > 0 ? ` ${refCounts.equipType} equipment type${refCounts.equipType !== 1 ? 's' : ''}` : ''} from project history
-        </p>
-      )}
-
+      {/* ── Status bar ── */}
       <div style={{ marginTop: "1rem" }}>
         {hasErrors && (
           <div style={{ padding: "12px 14px", background: C.errBg, border: `1px solid ${C.errBorder}`, borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -160,10 +211,30 @@ export default function StepValidate({
         )}
         {!hasErrors && (
           <div style={{ padding: "12px 14px", background: C.okBg, border: `1px solid ${C.okBorder}`, borderRadius: 8 }}>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.okText }}>No errors — all required fields are filled.</p>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.okText }}>
+              No errors — all required fields are filled.
+              {depErrorCount > 0 && (
+                <span style={{ color: C.warnText, fontWeight: 400, marginLeft: 8 }}>
+                  ({depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''} — review or fix above)
+                </span>
+              )}
+            </p>
           </div>
         )}
       </div>
+
+      {/* ── Dep Resolve Modal ── */}
+      {showDepModal && (
+        <DepResolveModal
+          targetHeader={depResolveHeader}
+          rows={mappedRows}
+          cellErrors={cellErrors}
+          allFields={allFields}
+          depCacheMap={depCacheMap}
+          onApply={handleApplyDepReplacements}
+          onClose={() => setShowDepModal(false)}
+        />
+      )}
     </div>
   );
 }
