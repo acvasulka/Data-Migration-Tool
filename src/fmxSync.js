@@ -1,6 +1,6 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
 import { fmxFetch } from './apiClient';
-import { resolvePostOptionsEndpoint } from './fmxEndpoints';
+import { resolvePostOptionsEndpoint, resolveGetOptionsEndpoint } from './fmxEndpoints';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -131,6 +131,35 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   }
 }
 
+async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
+  const endpoint = resolveGetOptionsEndpoint(schemaType, modules);
+  if (!endpoint) return { customFields: [] };
+
+  try {
+    const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
+    if (!res.ok) return { customFields: [] };
+    const data = await res.json();
+
+    console.log('[FMX get-options] raw response for', schemaType, '→ keys:', Object.keys(data), 'customFields sample:', JSON.stringify((data.customFields || []).slice(0, 2)));
+
+    const customFields = (data.customFields || [])
+      .filter(cf => cf.key || cf.id || cf.customFieldID)
+      .map(cf => ({
+        id: cf.key || cf.id || cf.customFieldID,
+        name: cf.label || cf.name || cf.displayName || `Custom Field ${cf.key || cf.id}`,
+        fieldType: cf.fieldTypeName || cf.fieldType || 'Text',
+        isRequired: cf.isRequired || false,
+      }));
+
+    console.log('[FMX get-options] parsed', customFields.length, 'custom fields');
+
+    return { customFields, raw: data };
+  } catch (e) {
+    console.warn('[FMX get-options] fetch failed:', e);
+    return { customFields: [] };
+  }
+}
+
 // Auto-fetch module arrays from the FMX organization endpoint.
 // Returns { workRequestModules, scheduleRequestModules, workTaskModules } each as [{slug,label}].
 // Falls back to single-entry defaults if the org endpoint fails or returns no data.
@@ -216,7 +245,19 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   const siteUrl = project.fmx_site_url;
 
   try {
-    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType, modules);
+    // Fetch both /post-options (system field metadata) and /get-options (custom fields + dep values) in parallel
+    const [postOpts, getOpts] = await Promise.all([
+      fetchPostOptions(siteUrl, email, password, schemaType, modules),
+      fetchGetOptions(siteUrl, email, password, schemaType, modules),
+    ]);
+
+    const { systemFields } = postOpts;
+
+    // Merge custom fields: prefer /get-options (has actual IDs needed for POST payload),
+    // fall back to /post-options if /get-options returned nothing.
+    const customFields = getOpts.customFields.length > 0
+      ? getOpts.customFields
+      : postOpts.customFields;
 
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
