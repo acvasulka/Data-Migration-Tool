@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { C } from "../theme";
+import { callClaude } from "../claudeClient";
 import Modal from "./Modal";
 
 export default function TransformModal({ fieldName, csvHeaders, currentRule, savedRule, onSave, onClose }) {
@@ -12,16 +13,12 @@ export default function TransformModal({ fieldName, csvHeaders, currentRule, sav
     if (!instruction.trim()) return;
     setLoading(true); setErr("");
     try {
-      const res = await fetch("/api/claude", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 500,
-          messages: [{ role: "user", content: `You are a JavaScript code generator for a data migration tool. Write a function body (no declaration) that receives a "row" object (keys = CSV column names) and returns the computed string value for FMX field "${fieldName}". Available columns: ${JSON.stringify(csvHeaders)}. Instruction: "${instruction}". Return ONLY raw JS, no markdown, no explanation.` }]
-        })
+      const data = await callClaude({
+        model: "claude-sonnet-4-20250514", max_tokens: 500,
+        messages: [{ role: "user", content: `You are a JavaScript code generator for a data migration tool. Write a function body (no declaration) that receives a "row" object (keys = CSV column names) and returns the computed string value for FMX field "${fieldName}". Available columns: ${JSON.stringify(csvHeaders)}. Instruction: "${instruction}". Return ONLY raw JS, no markdown, no explanation.` }]
       });
-      const data = await res.json();
       setCode((data.content?.[0]?.text || "").replace(/```javascript|```js|```/g, "").trim());
-    } catch { setErr("Generation failed — check connection."); }
+    } catch (e) { setErr(e.status ? e.message : "Generation failed — check connection."); }
     setLoading(false);
   };
 
