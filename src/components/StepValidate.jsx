@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { C } from "../theme";
 import NLEditPanel from "./NLEditPanel";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
-import { getReferenceValues } from "../db";
+import { getReferenceValues, getAllDependencyCaches } from "../db";
 
 export default function StepValidate({
   mappedHeaders,
@@ -24,21 +24,44 @@ export default function StepValidate({
   const [focusCell, setFocusCell] = useState(null);
   const [refCounts, setRefCounts] = useState(null); // { building, equipType }
 
+  // Dependency cache key → crossSheet schema type mapping
+  const DEP_KEY_TO_CROSS_SHEET = {
+    'buildings':       'Building',
+    'equipment-types': 'Equipment Type',
+    'resources':       'Resource',
+    'equipment':       'Equipment',
+    'users':           'User',
+    'request-types':   'Request Type',
+    'inventory-types': 'Inventory Type',
+    'inventory':       'Inventory',
+  };
+
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
     (async () => {
-      const [buildingRefs, equipTypeRefs] = await Promise.all([
+      const [buildingRefs, equipTypeRefs, depCaches] = await Promise.all([
         getReferenceValues(projectId, 'Building'),
         getReferenceValues(projectId, 'Equipment Type'),
+        getAllDependencyCaches(projectId),
       ]);
       if (cancelled) return;
 
       const buildingNames = buildingRefs?.Name ?? [];
       const equipTypeNames = equipTypeRefs?.Name ?? [];
 
-      // Merge into the shape computeCellErrors expects: { [schemaType]: [values] }
+      // Start with dependency cache data (FMX live data)
+      const fromDeps = {};
+      for (const row of depCaches) {
+        const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
+        if (crossSheet && row.extra?.items?.length) {
+          fromDeps[crossSheet] = row.extra.items.map(i => i.name);
+        }
+      }
+
+      // Merge: dependency cache → import-based refs → in-session data (highest priority)
       const merged = {
+        ...fromDeps,
         ...(buildingNames.length ? { 'Building': buildingNames } : {}),
         ...(equipTypeNames.length ? { 'Equipment Type': equipTypeNames } : {}),
         ...importedData, // in-session data overrides
