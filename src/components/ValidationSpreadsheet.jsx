@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
 import { getTooltipText } from "../fmxFieldTypes";
 
-export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell }) {
+export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFields, onChange, focusCell, onDepColumnClick }) {
   const [editCell, setEditCell] = useState(null);
   const [editVal, setEditVal] = useState("");
   const [widths, setWidths] = useState(() => Object.fromEntries(headers.map(h => [h, 130])));
@@ -44,15 +44,24 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
   const getCellBg = (ri, h) => {
     const key = `${ri}-${h}`;
     if (cellErrors[key] === "error") return C.errBg;
-    if (cellErrors[key] === "warning") return C.warnBg;
+    if (cellErrors[key] === "dep_error") return C.warnBg;
     return ri % 2 === 0 ? C.white : C.bgPage;
   };
   const getCellColor = (ri, h) => {
     const key = `${ri}-${h}`;
     if (cellErrors[key] === "error") return C.errText;
-    if (cellErrors[key] === "warning") return C.warnText;
+    if (cellErrors[key] === "dep_error") return C.warnText;
     return C.textDark;
   };
+
+  // Count dep_errors per column header for the ⚠ badge
+  const depErrorsByCol = {};
+  Object.entries(cellErrors).forEach(([key, val]) => {
+    if (val === "dep_error") {
+      const h = key.slice(key.indexOf('-') + 1);
+      depErrorsByCol[h] = (depErrorsByCol[h] || 0) + 1;
+    }
+  });
 
   const startResize = useCallback((e, h) => {
     e.preventDefault();
@@ -71,20 +80,23 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
   }, [widths]);
 
   const errorCount = Object.values(cellErrors).filter(v => v === "error").length;
-  const warnCount = Object.values(cellErrors).filter(v => v === "warning").length;
+  const depErrCount = Object.values(cellErrors).filter(v => v === "dep_error").length;
 
   return (
     <div>
-      {(errorCount > 0 || warnCount > 0) && (
+      {(errorCount > 0 || depErrCount > 0) && (
         <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
           {errorCount > 0 && (
             <span style={{ fontSize: 12, padding: "4px 10px", background: C.errBg, color: C.errText, border: `1px solid ${C.errBorder}`, borderRadius: 6 }}>
               {errorCount} cell{errorCount > 1 ? "s" : ""} with errors (red)
             </span>
           )}
-          {warnCount > 0 && (
-            <span style={{ fontSize: 12, padding: "4px 10px", background: C.warnBg, color: C.warnText, border: `1px solid ${C.warnBorder}`, borderRadius: 6 }}>
-              {warnCount} cross-sheet warning{warnCount > 1 ? "s" : ""} (yellow)
+          {depErrCount > 0 && (
+            <span style={{ fontSize: 12, padding: "4px 10px", background: C.warnBg, color: C.warnText, border: `1px solid ${C.warnBorder}`, borderRadius: 6, cursor: onDepColumnClick ? 'pointer' : undefined }}
+              onClick={() => onDepColumnClick?.('__all__')}
+              title="Click column ⚠ badges to fix dependency mismatches"
+            >
+              {depErrCount} dependency mismatch{depErrCount > 1 ? "es" : ""} (yellow) — click ⚠ to fix
             </span>
           )}
           <span style={{ fontSize: 12, color: C.textLight, padding: "4px 0" }}>Click any cell to edit inline</span>
@@ -99,10 +111,29 @@ export default function ValidationSpreadsheet({ headers, rows, cellErrors, allFi
                 const f = allFields?.find(f => f.name === h);
                 const w = widths[h] || 130;
                 const tooltip = getTooltipText(f);
+                const depCount = depErrorsByCol[h] || 0;
                 return (
                   <th key={h} title={tooltip || undefined} style={{ padding: "7px 10px", textAlign: "left", fontWeight: 600, borderBottom: `1px solid ${C.border}`, borderRight: "1px solid rgba(255,255,255,0.15)", whiteSpace: "nowrap", width: w, minWidth: w, overflow: "hidden", textOverflow: "ellipsis", color: C.white, position: "relative", userSelect: "none", cursor: tooltip ? 'help' : undefined }}>
-                    {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
-                    {f?.isCustomField && <span style={{ fontSize: 8, color: '#C4B5FD', marginLeft: 4, verticalAlign: 'super' }}>CF</span>}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
+                        {f?.isCustomField && <span style={{ fontSize: 8, color: '#C4B5FD', marginLeft: 4, verticalAlign: 'super' }}>CF</span>}
+                      </span>
+                      {depCount > 0 && (
+                        <span
+                          onClick={e => { e.stopPropagation(); onDepColumnClick?.(h); }}
+                          title={`${depCount} dependency mismatch${depCount !== 1 ? 'es' : ''} — click to fix`}
+                          style={{
+                            flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '1px 5px',
+                            background: C.warnBg, color: C.warnText,
+                            border: `1px solid ${C.warnBorder}`, borderRadius: 4,
+                            cursor: 'pointer', lineHeight: 1.4,
+                          }}
+                        >
+                          ⚠ {depCount}
+                        </span>
+                      )}
+                    </span>
                     {/* Resize handle */}
                     <div
                       onMouseDown={e => startResize(e, h)}

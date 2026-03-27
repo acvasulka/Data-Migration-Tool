@@ -20,6 +20,10 @@ export default async function handler(req, res) {
     catch { data = { status: response.status }; }
     console.log('FMX response status:', response.status);
     console.log('FMX response body:', JSON.stringify(data));
+    const totalCount = response.headers.get('FMX-Total-Count');
+    if (totalCount) {
+      res.setHeader('FMX-Total-Count', totalCount);
+    }
     res.status(response.status).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
