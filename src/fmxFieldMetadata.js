@@ -122,6 +122,8 @@ const FMX_FIELD_ENRICHMENTS = {
     isContact:                 { label: 'Is contact' },
     isSupplier:                { label: 'Is supplier' },
     canBeDriver:               { label: 'Can be a driver' },
+    password:                  { label: 'Password' },
+    requirePasswordChange:     { label: 'Require password change' },
     assignedEquipmentItemIDs:  { label: 'Assigned Equipment', lookup: { endpoint: '/v1/equipment', searchParam: 'search', isArray: true } },
   },
 

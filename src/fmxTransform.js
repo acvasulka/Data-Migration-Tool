@@ -1,8 +1,16 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType } from './schemas';
+import { fmxFetch } from './apiClient';
 
 // Equipment assetCondition is an integer enum in the FMX API
+function generateDefaultPassword() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
+  let pw = '';
+  for (let i = 0; i < 16; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+  return pw;
+}
+
 const ASSET_CONDITION_MAP = {
   'unknown': 0, 'excellent': 1, 'good': 2, 'fair': 3, 'poor': 4, 'retired': 5,
 };
@@ -93,29 +101,77 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     }
   });
 
-  console.warn('Payload:', JSON.stringify(payload));
+  if (baseType === 'User' && !payload.password) {
+    payload.password = generateDefaultPassword();
+    payload.requirePasswordChange = true;
+  }
+
   return payload;
+}
+
+// Maps FMX API endpoints to dependency cache keys
+const ENDPOINT_TO_DEP_KEY = {
+  '/v1/buildings':        'buildings',
+  '/v1/resources':        'resources',
+  '/v1/users':            'users',
+  '/v1/equipment-types':  'equipment-types',
+  '/v1/equipment':        'equipment',
+  '/v1/inventory-types':  'inventory-types',
+  '/v1/inventory':        'inventory',
+  '/v1/request-types':    'request-types',
+  '/v1/resource-types':   'resources',   // resource-types map to resources cache as fallback
+  '/v1/user-types':       'user-types',
+};
+
+// Build a name→ID lookup from dependency cache items.
+// nameField defaults to 'name'; for equipment it's 'tag'.
+function buildDepLookup(items, nameField = 'name') {
+  const map = {};
+  for (const item of items) {
+    const key = nameField === 'name' ? item.name : item[nameField] || item.name;
+    if (key) map[key] = item.id;
+  }
+  return map;
 }
 
 // Pre-fetch IDs for all unique reference values in the dataset.
 // Returns an idCache map: { "Building:Main Campus": 42, ... }
-export async function buildIdCache(rows, schemaType, siteUrl, email, password, lookupFieldsOverride = null) {
+// If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
+// and only falls back to individual API calls for cache misses.
+// lookupFieldsOverride: optional dynamic lookup map from deriveFieldMap() — overrides static FMX_ID_LOOKUP_FIELDS.
+export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
   const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
   const idCache = {};
 
+  // Index dependency caches by key for quick access
+  const depByKey = {};
+  for (const row of dependencyCaches) {
+    if (row.extra?.items) {
+      depByKey[row.schema_type] = row.extra.items;
+    }
+  }
+
   for (const [fmxField, lookup] of Object.entries(lookups)) {
     const uniqueValues = [...new Set(rows.map(r => r[fmxField]).filter(Boolean))];
+
+    // Try to resolve from dependency cache first
+    const depKey = ENDPOINT_TO_DEP_KEY[lookup.endpoint];
+    const depItems = depKey ? depByKey[depKey] : null;
+    const depLookup = depItems ? buildDepLookup(depItems, depKey === 'equipment' ? 'tag' : 'name') : {};
+
     for (const value of uniqueValues) {
+      // Check dependency cache
+      if (depLookup[value] !== undefined) {
+        idCache[`${fmxField}:${value}`] = depLookup[value];
+        continue;
+      }
+
+      // Fall back to individual API search
       try {
-        const res = await fetch('/api/fmx', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            siteUrl, email, password,
-            endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
-            method: 'GET',
-            payload: null,
-          }),
+        const res = await fmxFetch({
+          siteUrl, email, password,
+          endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
+          method: 'GET',
         });
         const data = await res.json();
         const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);

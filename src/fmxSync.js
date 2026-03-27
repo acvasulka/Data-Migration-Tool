@@ -1,4 +1,6 @@
-import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge } from './db';
+import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
+import { fmxFetch } from './apiClient';
+import { resolvePostOptionsEndpoint } from './fmxEndpoints';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -17,14 +19,9 @@ export function decodeCredentials(encoded) {
 
 export async function testFmxConnection(siteUrl, email, password) {
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl: siteUrl.trim(), email: email.trim(), password,
-        endpoint: '/v1/buildings?limit=1',
-        method: 'GET', payload: null,
-      }),
+    const res = await fmxFetch({
+      siteUrl: siteUrl.trim(), email: email.trim(), password,
+      endpoint: '/v1/buildings?limit=1', method: 'GET',
     });
     if (res.ok || res.status === 200) {
       return { success: true, message: `Connected to ${siteUrl.trim()}` };
@@ -35,20 +32,6 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-// Resolve post-options endpoint — handles static strings, module functions, and
-// module-qualified schema types like "Work Request:maintenance".
-function resolvePostOptionsEndpoint(schemaType, modules) {
-  // Module-qualified types carry the slug in the key itself
-  if (schemaType.startsWith('Work Request:'))
-    return `/v1/${schemaType.split(':')[1]}-requests/post-options`;
-  if (schemaType.startsWith('Schedule Request:'))
-    return `/v1/${schemaType.split(':')[1]}/requests/post-options`;
-  if (schemaType.startsWith('Work Task:'))
-    return `/v1/${schemaType.split(':')[1]}/tasks/post-options`;
-  const ep = POST_OPTIONS_ENDPOINTS[schemaType];
-  if (!ep) return null;
-  return typeof ep === 'function' ? ep(modules) : ep;
-}
 
 // Convert any fmx_modules shape to the canonical new format:
 //   { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}], workTaskModules:[{slug,label}] }
@@ -116,37 +99,14 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
-const POST_OPTIONS_ENDPOINTS = {
-  'Building':               '/v1/buildings/post-options',
-  'Equipment':              '/v1/equipment/post-options',
-  'Inventory':              '/v1/inventory/post-options',
-  'Resource':               '/v1/resources/post-options',
-  'User':                   '/v1/users/post-options',
-  'Equipment Type':         '/v1/equipment-types/post-options',
-  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests/post-options`,
-  'Schedule Request':       (m) => `/v1/${m?.scheduling || 'scheduling'}/requests/post-options`,
-  'Work Task':              (m) => `/v1/${m?.workTask || 'maintenance'}/tasks/post-options`,
-  'Transportation Request': '/v1/transportation-requests/post-options',
-  'Accounting Account':     '/v1/accounting-accounts/post-options',
-};
-
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
 
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl, email, password,
-        endpoint,
-        method: 'GET', payload: null,
-      }),
-    });
+    const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
     if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
-    console.log('FMX post-options response:', data);
 
     const customFields = (data.customFields || [])
       .filter(cf => cf.key && cf.label)
@@ -165,7 +125,6 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       maximumLength: sf.maximumLength || null,
     }));
 
-    console.log('Custom fields found:', customFields);
     return { customFields, systemFields };
   } catch {
     return { customFields: [], systemFields: [] };
@@ -187,18 +146,12 @@ export async function fetchFmxModules(siteUrl, email, password) {
     workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
   };
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl: siteUrl.trim(), email: email.trim(), password,
-        endpoint: '/v1/organization',
-        method: 'GET', payload: null,
-      }),
+    const res = await fmxFetch({
+      siteUrl: siteUrl.trim(), email: email.trim(), password,
+      endpoint: '/v1/organization', method: 'GET',
     });
     if (!res.ok) return defaults;
     const data = await res.json();
-    console.log('FMX organization response:', data);
 
     const modules = { ...defaults };
 
@@ -227,16 +180,13 @@ export async function fetchFmxModules(siteUrl, email, password) {
     }
 
     return modules;
-  } catch (e) {
-    console.warn('fetchFmxModules failed, using defaults:', e);
+  } catch {
     return defaults;
   }
 }
 
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
-  console.log('FMX sync triggered for:', schemaType);
-  console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
     return { customFields: [], systemFields: [], fromCache: false };
   }
@@ -276,4 +226,121 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   } catch {
     return { customFields: [], systemFields: [], fromCache: false };
   }
+}
+
+// --- Dependency update system ---
+
+export const DEPENDENCY_TYPES = [
+  { key: 'buildings',       endpoint: '/v1/buildings',        label: 'Buildings',             nameField: 'name' },
+  { key: 'resources',       endpoint: '/v1/resources',        label: 'Resources & Locations', nameField: 'name' },
+  { key: 'users',           endpoint: '/v1/users',            label: 'Users',                 nameField: 'name', extraFields: ['email'] },
+  { key: 'equipment-types', endpoint: '/v1/equipment-types',  label: 'Equipment Types',       nameField: 'name' },
+  { key: 'equipment',       endpoint: '/v1/equipment',        label: 'Equipment Names',       nameField: 'tag' },
+  { key: 'inventory-types', endpoint: '/v1/inventory-types',  label: 'Inventory Types',       nameField: 'name' },
+  { key: 'inventory',       endpoint: '/v1/inventory',        label: 'Inventory Names',       nameField: 'name' },
+  { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name' },
+  { key: 'user-types',      endpoint: '/v1/user-types',       label: 'User Types',            nameField: 'name' },
+];
+
+// Generic paginated fetcher — collects all pages from an FMX list endpoint.
+async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,name', limit = 100) {
+  const allItems = [];
+  let offset = 0;
+  let totalCount = null;
+
+  while (true) {
+    const sep = endpoint.includes('?') ? '&' : '?';
+    const url = `${endpoint}${sep}offset=${offset}&limit=${limit}&fields=${encodeURIComponent(fields)}`;
+    const res = await fmxFetch({ siteUrl, email, password, endpoint: url, method: 'GET' });
+    if (!res.ok) throw new Error(`FMX returned ${res.status} for ${endpoint}`);
+
+    const headerTotal = res.headers.get('FMX-Total-Count');
+    if (headerTotal !== null && totalCount === null) {
+      totalCount = parseInt(headerTotal, 10);
+    }
+
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
+    allItems.push(...items);
+
+    if (items.length < limit) break;        // last page
+    if (totalCount !== null && allItems.length >= totalCount) break;
+    offset += limit;
+  }
+
+  return { items: allItems, totalCount: totalCount ?? allItems.length };
+}
+
+// Which dep keys each schema base type needs for cross-field validation.
+// null = not in map = fetch all (safe default for unknown types).
+const SCHEMA_DEP_KEYS = {
+  'Building':               [],
+  'Resource':               ['buildings'],
+  'User':                   ['buildings', 'user-types'],
+  'Equipment Type':         [],
+  'Equipment':              ['buildings', 'equipment-types'],
+  'Inventory Type':         [],
+  'Inventory':              ['buildings', 'inventory-types'],
+  'Work Request':           ['buildings', 'users', 'resources', 'request-types'],
+  'Schedule Request':       ['buildings', 'resources'],
+  'Work Task':              ['buildings', 'users', 'equipment'],
+  'Transportation Request': ['buildings', 'resources'],
+  'Accounting Account':     [],
+};
+
+/** Returns the dep keys needed for a given schema type, or null if unknown (fetch all). */
+export function getDepKeysForSchema(schemaType) {
+  if (!schemaType) return null;
+  const base = schemaType.indexOf(':') === -1 ? schemaType : schemaType.slice(0, schemaType.indexOf(':'));
+  const keys = SCHEMA_DEP_KEYS[base];
+  return Array.isArray(keys) ? keys : null; // null = unknown type → fetch all
+}
+
+// Fetch dependencies for a project in parallel.
+// depKeys: optional string[] to limit which types are fetched (schema-aware auto-sync).
+// Calls onTypeProgress(depKey, 'done'|'error', count) as each type completes.
+export async function fetchAllDependencies(project, onTypeProgress, depKeys = null) {
+  if (!project?.fmx_credentials || !project?.fmx_site_url) {
+    throw new Error('Missing FMX credentials');
+  }
+
+  const { email, password } = decodeCredentials(project.fmx_credentials);
+  const siteUrl = project.fmx_site_url;
+  const projectId = project.id;
+
+  // Filter to only the requested types; if depKeys is empty array, nothing to fetch
+  const depsToFetch = depKeys === null
+    ? DEPENDENCY_TYPES
+    : DEPENDENCY_TYPES.filter(d => depKeys.includes(d.key));
+
+  if (depsToFetch.length === 0) return {};
+
+  const settled = await Promise.allSettled(
+    depsToFetch.map(async dep => {
+      try {
+        const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
+        const { items, totalCount } = await fetchAllPages(siteUrl, email, password, dep.endpoint, fields);
+
+        const cleaned = items.map(item => {
+          const entry = { id: item.id, name: item[dep.nameField] };
+          for (const ef of (dep.extraFields || [])) entry[ef] = item[ef];
+          return entry;
+        });
+
+        await saveDependencyCache(projectId, dep.key, cleaned, totalCount);
+        if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);
+        return { key: dep.key, count: totalCount, status: 'done' };
+      } catch (e) {
+        console.warn(`Failed to fetch dependency "${dep.key}":`, e);
+        if (onTypeProgress) onTypeProgress(dep.key, 'error', 0);
+        return { key: dep.key, count: 0, status: 'error', error: e.message };
+      }
+    })
+  );
+
+  const results = {};
+  for (const r of settled) {
+    if (r.status === 'fulfilled') results[r.value.key] = r.value;
+  }
+  return results;
 }

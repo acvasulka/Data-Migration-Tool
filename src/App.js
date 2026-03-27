@@ -1,13 +1,14 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
 import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
 import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows } from "./db";
-import { syncFmxDataForProject } from "./fmxSync";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
+import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
+import { claudeFetch, parseClaudeText } from "./apiClient";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -139,7 +140,10 @@ export default function App() {
   const [memoryMatches, setMemoryMatches] = useState({});
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
-  const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
+  // persistentRefs kept for legacy compatibility (no longer used for validation)
+  const [persistentRefs, setPersistentRefs] = useState(null); // eslint-disable-line no-unused-vars
+  const [depCacheMap, setDepCacheMap] = useState({}); // { [crossSheetType]: string[] } from FMX live dep cache
+  const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
   const [activeImportId, setActiveImportId] = useState(null);
@@ -234,7 +238,7 @@ export default function App() {
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
-  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, persistentRefs ?? importedData) : {};
+  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, schemaType, depCacheMap) : {};
   const hasErrors = Object.values(cellErrors).some(v => v === "error");
 
   const groupedFields = {};
@@ -247,12 +251,40 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   const handleFmxSync = async (type) => {
-    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
     if (!selectedProject?.fmx_credentials) return;
     setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);
     setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
   };
+
+  // Maps dependency cache keys to crossSheet field labels used in allFields
+  const DEP_KEY_TO_CROSS_SHEET = {
+    'buildings':       'Building',
+    'equipment-types': 'Equipment Type',
+    'resources':       'Resource',
+    'equipment':       'Equipment',
+    'users':           'User',
+    'request-types':   'Request Type',
+    'inventory-types': 'Inventory Type',
+    'inventory':       'Inventory',
+    'user-types':      'User Type',
+  };
+
+  const loadDepCacheMap = useCallback(async () => {
+    if (!selectedProject?.id) return;
+    const rows = await getAllDependencyCaches(selectedProject.id);
+    const map = {};
+    for (const row of rows) {
+      const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
+      if (crossSheet && row.extra?.items?.length) {
+        map[crossSheet] = row.extra.items.map(i => i.name).filter(Boolean);
+      }
+    }
+    setDepCacheMap(map);
+  }, [selectedProject?.id]); // dep: selectedProject.id is the only relevant change trigger
+
+  // Load dep cache whenever selected project changes
+  useEffect(() => { loadDepCacheMap(); }, [loadDepCacheMap]);
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
@@ -261,6 +293,17 @@ export default function App() {
     setWStep(1);
     setMainTab('wizard');
     handleFmxSync(t);
+    // Auto-refresh only the dep types this schema actually needs (parallel, schema-aware)
+    if (selectedProject?.fmx_connection_verified) {
+      const depKeys = getDepKeysForSchema(t); // [] for self-imports, null = all
+      if (depKeys === null || depKeys.length > 0) {
+        setDepAutoSyncing(true);
+        fetchAllDependencies(selectedProject, () => {}, depKeys)
+          .then(() => loadDepCacheMap())
+          .catch(() => {})
+          .finally(() => setDepAutoSyncing(false));
+      }
+    }
   };
 
   const processCSV = async (csvStr, info) => {
@@ -271,13 +314,10 @@ export default function App() {
     const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
-        fetch("/api/claude", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 1000,
-            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-          })
-        }).then(r => r.json()).catch(() => null),
+        claudeFetch({
+          max_tokens: 1000,
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+        }).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
         getSavedRulesForSchema(schemaType),
       ]);
@@ -285,7 +325,7 @@ export default function App() {
       // Parse AI result
       let aiResult = {};
       if (aiRes) {
-        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        const clean = parseClaudeText(aiRes) || "{}";
         try { aiResult = JSON.parse(clean); } catch {}
       }
 
@@ -654,6 +694,9 @@ export default function App() {
             onViewImport={handleViewFromWizard}
             history={history}
             fmxModules={selectedProject?.fmx_modules}
+            cardSettings={selectedProject?.card_settings || {}}
+            projectId={selectedProject?.id}
+            onProjectUpdated={(u) => setSelectedProject(u)}
           />
         )}
 
@@ -743,8 +786,9 @@ export default function App() {
                 applyNLEdit={applyNLEdit}
                 onRowsUpdated={(rows) => setMappedRows(rows)}
                 projectId={selectedProject?.id}
-                importedData={importedData}
-                onRefsLoaded={handleRefsLoaded}
+                schemaType={schemaType}
+                depCacheMap={depCacheMap}
+                depAutoSyncing={depAutoSyncing}
               />
             )}
 

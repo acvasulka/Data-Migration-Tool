@@ -1,82 +1,62 @@
 import { supabase } from './supabase';
 import { IMPORT_ORDER } from './schemas';
 
+async function dbQuery(queryFn, fallback) {
+  try {
+    const { data, error } = await queryFn();
+    if (error) return fallback;
+    return data ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function dbMutate(mutationFn) {
+  try {
+    const { error } = await mutationFn();
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 // --- PROJECTS ---
 
 export async function getProjects() {
-  try {
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .order('updated_at', { ascending: false });
-    if (error) {
-      console.error('getProjects error:', error);
-      return [];
-    }
-    return data || [];
-  } catch (e) {
-    console.error('getProjects exception:', e);
-    return [];
-  }
+  return dbQuery(
+    () => supabase.from('projects').select('*').order('updated_at', { ascending: false }),
+    []
+  );
 }
 
 export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false) {
-  try {
-    const { data, error } = await supabase
-      .from('projects')
-      .insert({
-        name: name,
-        description: description || null,
-        fmx_site_url: fmxSiteUrl || null,
-        fmx_credentials: encodedCredentials || null,
-        fmx_connection_verified: connectionVerified,
-      })
-      .select()
-      .single();
-    if (error) {
-      console.error('createProject error:', error);
-      return null;
-    }
-    return data;
-  } catch (e) {
-    console.error('createProject exception:', e);
-    return null;
-  }
+  return dbQuery(
+    () => supabase.from('projects').insert({
+      name,
+      description: description || null,
+      fmx_site_url: fmxSiteUrl || null,
+      fmx_credentials: encodedCredentials || null,
+      fmx_connection_verified: connectionVerified,
+    }).select().single(),
+    null
+  );
 }
 
 export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
-  try {
-    const { data, error } = await supabase
-      .from('projects')
-      .update({
-        fmx_credentials: encodedCredentials,
-        fmx_connection_verified: connectionVerified,
-      })
-      .eq('id', projectId)
-      .select()
-      .single();
-    if (error) { console.error('saveProjectCredentials error:', error); return null; }
-    return data;
-  } catch (e) {
-    console.error('saveProjectCredentials exception:', e);
-    return null;
-  }
+  return dbQuery(
+    () => supabase.from('projects').update({
+      fmx_credentials: encodedCredentials,
+      fmx_connection_verified: connectionVerified,
+    }).eq('id', projectId).select().single(),
+    null
+  );
 }
 
 export async function updateProjectModules(projectId, modules) {
-  try {
-    const { data, error } = await supabase
-      .from('projects')
-      .update({ fmx_modules: modules })
-      .eq('id', projectId)
-      .select()
-      .single();
-    if (error) { console.error('updateProjectModules error:', error); return null; }
-    return data;
-  } catch (e) {
-    console.error('updateProjectModules exception:', e);
-    return null;
-  }
+  return dbQuery(
+    () => supabase.from('projects').update({ fmx_modules: modules }).eq('id', projectId).select().single(),
+    null
+  );
 }
 
 // Cache uses a single sentinel row per (project_id, schema_type):
@@ -84,38 +64,64 @@ export async function updateProjectModules(projectId, modules) {
 //   extra = { customFields: [...] }
 
 export async function getFmxReferenceCache(projectId, schemaType) {
-  try {
-    const { data, error } = await supabase
-      .from('fmx_reference_cache')
+  return dbQuery(
+    () => supabase.from('fmx_reference_cache')
       .select('fmx_name, fmx_id, extra, record_type, cached_at')
       .eq('project_id', projectId)
       .eq('schema_type', schemaType)
       .eq('record_type', 'custom_fields_cache')
       .eq('fmx_name', '__cache__')
-      .single();
-    if (error) return null;
-    return data;
-  } catch {
-    return null;
-  }
+      .single(),
+    null
+  );
 }
 
 export async function saveFmxReferenceCache(projectId, schemaType, customFields, systemFields = []) {
+  return dbMutate(
+    () => supabase.from('fmx_reference_cache').upsert({
+      project_id: projectId,
+      schema_type: schemaType,
+      record_type: 'custom_fields_cache',
+      fmx_name: '__cache__',
+      fmx_id: null,
+      extra: { customFields, systemFields },
+      cached_at: new Date().toISOString(),
+    }, { onConflict: 'project_id,schema_type,record_type,fmx_name' })
+  );
+}
+
+// --- DEPENDENCY CACHE ---
+
+export async function saveDependencyCache(projectId, depKey, items, totalCount) {
   try {
     const { error } = await supabase
       .from('fmx_reference_cache')
       .upsert({
         project_id: projectId,
-        schema_type: schemaType,
-        record_type: 'custom_fields_cache',
-        fmx_name: '__cache__',
+        schema_type: depKey,
+        record_type: 'dependency_cache',
+        fmx_name: '__dep_cache__',
         fmx_id: null,
-        extra: { customFields, systemFields },
+        extra: { items, totalCount },
         cached_at: new Date().toISOString(),
       }, { onConflict: 'project_id,schema_type,record_type,fmx_name' });
     return !error;
   } catch {
     return false;
+  }
+}
+
+export async function getAllDependencyCaches(projectId) {
+  try {
+    const { data, error } = await supabase
+      .from('fmx_reference_cache')
+      .select('schema_type, extra, cached_at')
+      .eq('project_id', projectId)
+      .eq('record_type', 'dependency_cache');
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
   }
 }
 
@@ -131,45 +137,46 @@ export async function getCacheAge(projectId, schemaType) {
 }
 
 export async function updateProject(projectId, updates) {
+  return dbQuery(
+    () => supabase.from('projects').update(updates).eq('id', projectId).select().single(),
+    null
+  );
+}
+
+export async function updateCardSetting(projectId, schemaType, settingKey, value) {
   try {
-    const { data, error } = await supabase
-      .from('projects')
-      .update(updates)
-      .eq('id', projectId)
-      .select()
-      .single();
-    if (error) return null;
-    return data;
-  } catch {
+    const { data: project } = await supabase
+      .from('projects').select('card_settings').eq('id', projectId).single();
+    const current = project?.card_settings || {};
+    const entry = current[schemaType] || {};
+    const updated = { ...current, [schemaType]: { ...entry, [settingKey]: value } };
+    return updateProject(projectId, { card_settings: updated });
+  } catch (e) {
+    console.error('updateCardSetting exception:', e);
     return null;
   }
 }
 
 export async function deleteProject(projectId) {
-  try {
-    const { error } = await supabase
-      .from('projects')
-      .delete()
-      .eq('id', projectId);
-    return !error;
-  } catch {
-    return false;
-  }
+  return dbMutate(
+    () => supabase.from('projects').delete().eq('id', projectId)
+  );
 }
 
 // --- PROJECT STATUS ---
 
 export async function getProjectStatus(projectId) {
   try {
-    const { data, error } = await supabase
-      .from('project_imports')
-      .select('schema_type, row_count, completed_at')
-      .eq('project_id', projectId)
-      .order('completed_at', { ascending: false });
-    if (error) return {};
+    const data = await dbQuery(
+      () => supabase.from('project_imports')
+        .select('schema_type, row_count, completed_at')
+        .eq('project_id', projectId)
+        .order('completed_at', { ascending: false }),
+      []
+    );
 
     const byType = {};
-    for (const row of data ?? []) {
+    for (const row of data) {
       if (!byType[row.schema_type]) {
         byType[row.schema_type] = {
           complete: true,
@@ -193,15 +200,16 @@ export async function getProjectStatus(projectId) {
 
 export async function getMappingSuggestions(schemaType, headers) {
   try {
-    const { data, error } = await supabase
-      .from('mapping_memory')
-      .select('source_header, fmx_field, confidence')
-      .eq('schema_type', schemaType)
-      .in('source_header', headers);
-    if (error) return {};
+    const data = await dbQuery(
+      () => supabase.from('mapping_memory')
+        .select('source_header, fmx_field, confidence')
+        .eq('schema_type', schemaType)
+        .in('source_header', headers),
+      []
+    );
 
     const result = {};
-    for (const row of data ?? []) {
+    for (const row of data) {
       result[row.source_header] = {
         fmxField: row.fmx_field,
         confidence: row.confidence,
@@ -214,117 +222,89 @@ export async function getMappingSuggestions(schemaType, headers) {
 }
 
 export async function saveMappings(schemaType, mappings) {
-  try {
-    const rows = Object.entries(mappings).map(([fmxField, sourceHeader]) => ({
-      schema_type: schemaType,
-      source_header: sourceHeader,
-      fmx_field: fmxField,
-      confidence: 1,
-      last_used_at: new Date().toISOString(),
-    }));
-
-    if (rows.length === 0) return true;
-
-    const { error } = await supabase
-      .from('mapping_memory')
-      .upsert(rows, {
-        onConflict: 'schema_type,source_header',
-        ignoreDuplicates: false,
-      });
-    return !error;
-  } catch {
-    return false;
-  }
+  const rows = Object.entries(mappings).map(([fmxField, sourceHeader]) => ({
+    schema_type: schemaType,
+    source_header: sourceHeader,
+    fmx_field: fmxField,
+    confidence: 1,
+    last_used_at: new Date().toISOString(),
+  }));
+  if (rows.length === 0) return true;
+  return dbMutate(
+    () => supabase.from('mapping_memory').upsert(rows, {
+      onConflict: 'schema_type,source_header',
+      ignoreDuplicates: false,
+    })
+  );
 }
 
 // --- RULE MEMORY ---
 
 export async function getSavedRule(schemaType, fmxField) {
-  try {
-    const { data, error } = await supabase
-      .from('rule_memory')
-      .select('*')
+  return dbQuery(
+    () => supabase.from('rule_memory').select('*')
       .eq('schema_type', schemaType)
       .eq('fmx_field', fmxField)
       .limit(1)
-      .single();
-    if (error) return null;
-    return data;
-  } catch {
-    return null;
-  }
+      .single(),
+    null
+  );
 }
 
 export async function saveRule(schemaType, fmxField, instruction, code) {
-  try {
-    const { error } = await supabase
-      .from('rule_memory')
-      .upsert(
-        {
-          schema_type: schemaType,
-          fmx_field: fmxField,
-          instruction,
-          generated_code: code,
-          use_count: 1,
-          last_used_at: new Date().toISOString(),
-        },
-        { onConflict: 'schema_type,fmx_field' }
-      );
-    return !error;
-  } catch {
-    return false;
-  }
+  return dbMutate(
+    () => supabase.from('rule_memory').upsert({
+      schema_type: schemaType,
+      fmx_field: fmxField,
+      instruction,
+      generated_code: code,
+      use_count: 1,
+      last_used_at: new Date().toISOString(),
+    }, { onConflict: 'schema_type,fmx_field' })
+  );
 }
 
 // --- DATA PATTERNS ---
 
 export async function getDataPatterns(schemaType, fmxField) {
-  try {
-    const { data, error } = await supabase
-      .from('data_pattern_memory')
+  const data = await dbQuery(
+    () => supabase.from('data_pattern_memory')
       .select('sample_values, pattern_hint')
       .eq('schema_type', schemaType)
       .eq('fmx_field', fmxField)
       .limit(1)
-      .single();
-    if (error) return null;
-    return { sampleValues: data.sample_values, patternHint: data.pattern_hint };
-  } catch {
-    return null;
-  }
+      .single(),
+    null
+  );
+  if (!data) return null;
+  return { sampleValues: data.sample_values, patternHint: data.pattern_hint };
 }
 
 export async function saveDataPatterns(schemaType, fieldPatterns) {
-  try {
-    const rows = fieldPatterns.map(({ fmxField, sampleValues, patternHint }) => ({
-      schema_type: schemaType,
-      fmx_field: fmxField,
-      sample_values: sampleValues,
-      pattern_hint: patternHint,
-      confidence: 1,
-      last_used_at: new Date().toISOString(),
-    }));
-
-    if (rows.length === 0) return true;
-
-    const { error } = await supabase
-      .from('data_pattern_memory')
-      .upsert(rows, { onConflict: 'schema_type,fmx_field' });
-    return !error;
-  } catch {
-    return false;
-  }
+  const rows = fieldPatterns.map(({ fmxField, sampleValues, patternHint }) => ({
+    schema_type: schemaType,
+    fmx_field: fmxField,
+    sample_values: sampleValues,
+    pattern_hint: patternHint,
+    confidence: 1,
+    last_used_at: new Date().toISOString(),
+  }));
+  if (rows.length === 0) return true;
+  return dbMutate(
+    () => supabase.from('data_pattern_memory').upsert(rows, { onConflict: 'schema_type,fmx_field' })
+  );
 }
 
 export async function getSavedRulesForSchema(schemaType) {
   try {
-    const { data, error } = await supabase
-      .from('rule_memory')
-      .select('fmx_field, instruction, generated_code')
-      .eq('schema_type', schemaType);
-    if (error) return {};
+    const data = await dbQuery(
+      () => supabase.from('rule_memory')
+        .select('fmx_field, instruction, generated_code')
+        .eq('schema_type', schemaType),
+      []
+    );
     const result = {};
-    for (const row of data ?? []) {
+    for (const row of data) {
       result[row.fmx_field] = { instruction: row.instruction, code: row.generated_code };
     }
     return result;
@@ -337,15 +317,15 @@ export async function getSavedRulesForSchema(schemaType) {
 
 export async function getReferenceValues(projectId, schemaType) {
   try {
-    const { data, error } = await supabase
-      .from('project_reference_values')
-      .select('field_name, value')
-      .eq('project_id', projectId)
-      .eq('schema_type', schemaType);
-    if (error) return {};
-
+    const data = await dbQuery(
+      () => supabase.from('project_reference_values')
+        .select('field_name, value')
+        .eq('project_id', projectId)
+        .eq('schema_type', schemaType),
+      []
+    );
     const result = {};
-    for (const row of data ?? []) {
+    for (const row of data) {
       if (!result[row.field_name]) result[row.field_name] = [];
       result[row.field_name].push(row.value);
     }
@@ -424,56 +404,35 @@ export async function completeImport(
 }
 
 export async function getProjectImports(projectId) {
-  try {
-    const { data, error } = await supabase
-      .from('project_imports')
+  return dbQuery(
+    () => supabase.from('project_imports')
       .select('id, schema_type, import_name, row_count, row_count_stored, completed_at, source_filename, truncated, mapping_snapshot')
       .eq('project_id', projectId)
-      .order('completed_at', { ascending: false });
-    if (error) return [];
-    return data ?? [];
-  } catch {
-    return [];
-  }
+      .order('completed_at', { ascending: false }),
+    []
+  );
 }
 
 export async function getImportRows(importId) {
-  try {
-    const { data, error } = await supabase
-      .from('project_imports')
-      .select('rows_data')
-      .eq('id', importId)
-      .single();
-    if (error) return [];
-    return data?.rows_data ?? [];
-  } catch {
-    return [];
-  }
+  const data = await dbQuery(
+    () => supabase.from('project_imports').select('rows_data').eq('id', importId).single(),
+    null
+  );
+  return data?.rows_data ?? [];
 }
 
 export async function renameImport(importId, newName) {
-  try {
-    const { error } = await supabase
-      .from('project_imports')
-      .update({ import_name: newName })
-      .eq('id', importId);
-    return !error;
-  } catch {
-    return false;
-  }
+  return dbMutate(
+    () => supabase.from('project_imports').update({ import_name: newName }).eq('id', importId)
+  );
 }
 
 export async function getAllReferenceValues(projectId) {
-  try {
-    const { data, error } = await supabase
-      .from('project_reference_values')
+  return dbQuery(
+    () => supabase.from('project_reference_values')
       .select('schema_type, field_name, value')
       .eq('project_id', projectId)
-      .order('schema_type');
-    if (error) { console.error('getAllReferenceValues error:', error); return []; }
-    return data || [];
-  } catch (e) {
-    console.error('getAllReferenceValues exception:', e);
-    return [];
-  }
+      .order('schema_type'),
+    []
+  );
 }

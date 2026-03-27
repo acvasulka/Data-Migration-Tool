@@ -30,6 +30,11 @@ export function resolveEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
+export function resolvePostOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/post-options` : null;
+}
+
 // DEPRECATED: Use deriveFieldMap() from fmxFieldMetadata.js for dynamic field mapping.
 // Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_FIELD_MAP = {
@@ -123,6 +128,8 @@ const FMX_FIELD_MAP = {
     'Is contact':                 'isContact',
     'Is supplier':                'isSupplier',
     'Can be a driver':            'canBeDriver',
+    'Password':                   'password',
+    'Require password change':    'requirePasswordChange',
     // User type is now an ID lookup (userTypeID)
     // Building access is now an ID lookup (accessibleBuildingIDs)
     // Assigned Equipment is now an ID lookup (assignedEquipmentItemIDs)
