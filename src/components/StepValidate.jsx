@@ -7,22 +7,42 @@ import DepResolveModal from "./DepResolveModal";
 const SPIN = `@keyframes _sv_spin { to { transform: rotate(360deg); } }`;
 const PAGE_SIZE = 100;
 
-// Inline dismissible chip for active filters
+// SVG donut ring — shows % of clean rows
+function DonutRing({ cleanPct }) {
+  const R = 34, CX = 44, CY = 44, SW = 10;
+  const circumference = 2 * Math.PI * R;
+  const dashOffset = circumference * (1 - cleanPct);
+  const pct = Math.round(cleanPct * 100);
+  const color = cleanPct === 1 ? C.okText : cleanPct > 0.8 ? C.warnText : C.errText;
+  return (
+    <svg width={88} height={88} viewBox="0 0 88 88" style={{ flexShrink: 0 }}>
+      <circle cx={CX} cy={CY} r={R} fill="none" stroke={C.border} strokeWidth={SW} />
+      <circle
+        cx={CX} cy={CY} r={R} fill="none"
+        stroke={C.okText} strokeWidth={SW}
+        strokeDasharray={circumference}
+        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${CX} ${CY})`}
+        style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+      />
+      <text x={CX} y={CY + 5} textAnchor="middle" fontSize={15} fontWeight={700} fill={color}>
+        {pct}%
+      </text>
+    </svg>
+  );
+}
+
+// Inline dismissible chip
 const FilterChip = ({ label, onRemove }) => (
   <span style={{
     display: 'inline-flex', alignItems: 'center', gap: 4,
     fontSize: 11, padding: '3px 8px 3px 10px', borderRadius: 20,
-    background: C.navyTint, color: C.navy,
-    border: `1px solid ${C.border}`,
+    background: C.navyTint, color: C.navy, border: `1px solid ${C.border}`,
     whiteSpace: 'nowrap',
   }}>
     {label}
-    <button
-      onClick={onRemove}
-      style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMid, padding: '0 0 0 2px', fontSize: 13, lineHeight: 1, display: 'flex', alignItems: 'center' }}
-    >
-      ×
-    </button>
+    <button onClick={onRemove} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMid, padding: '0 0 0 2px', fontSize: 13, lineHeight: 1, display: 'flex', alignItems: 'center' }}>×</button>
   </span>
 );
 
@@ -39,8 +59,8 @@ export default function StepValidate({
   onRowsUpdated,
   projectId,
   schemaType,
-  depCacheMap,      // { [crossSheetType]: string[] }
-  depAutoSyncing,   // bool — background dep sync in progress
+  depCacheMap,
+  depAutoSyncing,
 }) {
   const [jumpIdx, setJumpIdx] = useState(-1);
   const [noMoreMsg, setNoMoreMsg] = useState(false);
@@ -49,35 +69,33 @@ export default function StepValidate({
   const [showOnlyErrors, setShowOnlyErrors] = useState(false);
   const [colMenuOpen, setColMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
-  const [columnFilters, setColumnFilters] = useState({});  // { [col]: string[] }
-  const [nlEditScope, setNlEditScope] = useState('all');   // 'all' | 'filtered'
+  const [columnFilters, setColumnFilters] = useState({});
+  const [nlEditScope, setNlEditScope] = useState('all');
+  const [errorColFilter, setErrorColFilter] = useState(null);  // column name to filter by error
+  const [undoSnapshot, setUndoSnapshot] = useState(null);      // single-level undo
+  const [suggestions, setSuggestions] = useState(null);        // null=loading, []=none, [...]= ready
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
-  // Dep modal state
+  // Dep modal
   const [depResolveHeader, setDepResolveHeader] = useState(null);
   const [showDepModal, setShowDepModal] = useState(false);
 
   // Column visibility — persisted to localStorage per schema type
   const [hiddenCols, setHiddenCols] = useState(() => {
     const saved = schemaType ? localStorage.getItem(`sv-cols-${schemaType}`) : null;
-    if (saved) {
-      try { return new Set(JSON.parse(saved)); } catch { /* ignore */ }
-    }
+    if (saved) { try { return new Set(JSON.parse(saved)); } catch { /* ignore */ } }
     return new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h])));
   });
 
-  // Re-initialize hidden cols on schema type change
   const prevSchemaRef = useRef(schemaType);
   useEffect(() => {
     if (prevSchemaRef.current === schemaType) return;
     prevSchemaRef.current = schemaType;
     const saved = schemaType ? localStorage.getItem(`sv-cols-${schemaType}`) : null;
-    if (saved) {
-      try { setHiddenCols(new Set(JSON.parse(saved))); return; } catch { /* ignore */ }
-    }
+    if (saved) { try { setHiddenCols(new Set(JSON.parse(saved))); return; } catch { /* ignore */ } }
     setHiddenCols(new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h]))));
   }, [schemaType, mappedHeaders, mappedRows]);
 
-  // Persist column visibility
   useEffect(() => {
     if (schemaType) localStorage.setItem(`sv-cols-${schemaType}`, JSON.stringify([...hiddenCols]));
   }, [hiddenCols, schemaType]);
@@ -94,52 +112,82 @@ export default function StepValidate({
     prevSyncingRef.current = depAutoSyncing;
   }, [depAutoSyncing]);
 
+  // Auto-fetch bulk-edit suggestions on mount
+  useEffect(() => {
+    if (Object.keys(cellErrors).length === 0) { setSuggestions([]); return; }
+    setSuggestionsLoading(true);
+    setSuggestions(null);
+    const errColCounts = {};
+    for (const [key, val] of Object.entries(cellErrors)) {
+      if (val !== 'error') continue;
+      const col = key.slice(key.indexOf('-') + 1);
+      errColCounts[col] = (errColCounts[col] || 0) + 1;
+    }
+    const topCols = Object.entries(errColCounts)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([col, n]) => `"${col}": ${n} cells missing`)
+      .join('\n');
+    const prompt = `You are analyzing data import quality. Generate 2-3 concise, actionable bulk-edit suggestions to fix missing required fields.\n\nSchema type: ${schemaType || 'unknown'}\nTotal rows: ${mappedRows.length}\nFields with missing required data:\n${topCols || '(none)'}\n\nReturn ONLY a JSON array, max 3 items, each with: { "text": "plain English instruction for the bulk edit field", "affectedCount": N }\nInstructions should be copy-pasteable into a bulk edit box. No markdown, no explanation.`;
+    fetch('/api/claude', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 300, messages: [{ role: 'user', content: prompt }] }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        const raw = (data.content?.[0]?.text || '[]').replace(/```json|```/g, '').trim();
+        setSuggestions(JSON.parse(raw));
+      })
+      .catch(() => setSuggestions([]))
+      .finally(() => setSuggestionsLoading(false));
+  }, []); // intentional mount-only
+
   // Error counts across ALL rows
-  const errorCount = useMemo(
-    () => Object.values(cellErrors).filter(v => v === "error").length,
-    [cellErrors]
-  );
-  const depErrorCount = useMemo(
-    () => Object.values(cellErrors).filter(v => v === "dep_error").length,
-    [cellErrors]
-  );
+  const errorCount = useMemo(() => Object.values(cellErrors).filter(v => v === "error").length, [cellErrors]);
+  const depErrorCount = useMemo(() => Object.values(cellErrors).filter(v => v === "dep_error").length, [cellErrors]);
 
   // Global row indices with any error
   const errorRowSet = useMemo(() => {
     const s = new Set();
     Object.keys(cellErrors).forEach(k => {
       const dashIdx = k.indexOf('-');
-      if (dashIdx > 0) {
-        const ri = parseInt(k.slice(0, dashIdx), 10);
-        if (!isNaN(ri)) s.add(ri);
-      }
+      if (dashIdx > 0) { const ri = parseInt(k.slice(0, dashIdx), 10); if (!isNaN(ri)) s.add(ri); }
     });
     return s;
   }, [cellErrors]);
 
-  // Unique values per column — computed from full dataset for filter dropdowns
+  // Errors by column (top 6, sorted descending)
+  const errorsByColumn = useMemo(() => {
+    const counts = {};
+    for (const [key, val] of Object.entries(cellErrors)) {
+      if (val !== 'error' && val !== 'dep_error') continue;
+      const col = key.slice(key.indexOf('-') + 1);
+      counts[col] = (counts[col] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [cellErrors]);
+
+  // Donut values
+  const totalRows = mappedRows.length;
+  const cleanRows = totalRows - errorRowSet.size;
+  const cleanPct = totalRows > 0 ? cleanRows / totalRows : 1;
+
+  // Unique values per column
   const colUniqueValues = useMemo(() => {
     const map = {};
     for (const h of mappedHeaders) {
-      const vals = new Set();
-      let hasBlank = false;
-      for (const row of mappedRows) {
-        const v = row[h] ?? '';
-        if (v) vals.add(v); else hasBlank = true;
-      }
+      const vals = new Set(); let hasBlank = false;
+      for (const row of mappedRows) { const v = row[h] ?? ''; if (v) vals.add(v); else hasBlank = true; }
       const sorted = [...vals].sort((a, b) => a.localeCompare(b));
       map[h] = hasBlank ? ['(blank)', ...sorted] : sorted;
     }
     return map;
   }, [mappedRows, mappedHeaders]);
 
-  // Active rows: apply all filters (errors, global search, column filters)
+  // Active rows: all filters combined
   const [activeRows, activeGlobalIndices] = useMemo(() => {
     let pairs = mappedRows.map((r, i) => ({ r, i }));
-
-    if (showOnlyErrors) {
-      pairs = pairs.filter(({ i }) => errorRowSet.has(i));
-    }
+    if (showOnlyErrors) pairs = pairs.filter(({ i }) => errorRowSet.has(i));
+    if (errorColFilter) pairs = pairs.filter(({ i }) => cellErrors[`${i}-${errorColFilter}`] !== undefined);
     if (globalSearch.trim()) {
       const q = globalSearch.trim().toLowerCase();
       pairs = pairs.filter(({ r }) => Object.values(r).some(v => (v || '').toLowerCase().includes(q)));
@@ -148,53 +196,32 @@ export default function StepValidate({
       if (!vals || vals.length === 0) continue;
       const valSet = new Set(vals);
       const hasBlank = valSet.has('(blank)');
-      pairs = pairs.filter(({ r }) => {
-        const v = r[col] ?? '';
-        return v ? valSet.has(v) : hasBlank;
-      });
+      pairs = pairs.filter(({ r }) => { const v = r[col] ?? ''; return v ? valSet.has(v) : hasBlank; });
     }
-
     return [pairs.map(({ r }) => r), pairs.map(({ i }) => i)];
-  }, [mappedRows, showOnlyErrors, errorRowSet, globalSearch, columnFilters]);
+  }, [mappedRows, showOnlyErrors, errorRowSet, errorColFilter, globalSearch, columnFilters, cellErrors]);
 
-  const hasActiveFilters = !!globalSearch.trim() || showOnlyErrors ||
+  const hasActiveFilters = !!globalSearch.trim() || showOnlyErrors || !!errorColFilter ||
     Object.values(columnFilters).some(v => v && v.length > 0);
 
   const clearAllFilters = () => {
-    setGlobalSearch('');
-    setColumnFilters({});
-    setShowOnlyErrors(false);
-    setPage(0);
+    setGlobalSearch(''); setColumnFilters({}); setShowOnlyErrors(false); setErrorColFilter(null); setPage(0);
   };
 
   const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages - 1);
 
-  const pageRows = useMemo(
-    () => activeRows.slice(clampedPage * PAGE_SIZE, (clampedPage + 1) * PAGE_SIZE),
-    [activeRows, clampedPage]
-  );
-  const pageGlobalIndices = useMemo(
-    () => activeGlobalIndices.slice(clampedPage * PAGE_SIZE, (clampedPage + 1) * PAGE_SIZE),
-    [activeGlobalIndices, clampedPage]
-  );
+  const pageRows = useMemo(() => activeRows.slice(clampedPage * PAGE_SIZE, (clampedPage + 1) * PAGE_SIZE), [activeRows, clampedPage]);
+  const pageGlobalIndices = useMemo(() => activeGlobalIndices.slice(clampedPage * PAGE_SIZE, (clampedPage + 1) * PAGE_SIZE), [activeGlobalIndices, clampedPage]);
+  const visibleHeaders = useMemo(() => mappedHeaders.filter(h => !hiddenCols.has(h)), [mappedHeaders, hiddenCols]);
 
-  const visibleHeaders = useMemo(
-    () => mappedHeaders.filter(h => !hiddenCols.has(h)),
-    [mappedHeaders, hiddenCols]
-  );
-
-  // Reset page on filter changes
-  useEffect(() => { setPage(0); }, [showOnlyErrors, globalSearch, columnFilters]);
+  useEffect(() => { setPage(0); }, [showOnlyErrors, globalSearch, columnFilters, errorColFilter]);
 
   // Sorted hard-error cells for jump-to
   const errorCells = useMemo(() => {
     return Object.entries(cellErrors)
       .filter(([, v]) => v === "error")
-      .map(([key]) => {
-        const dashIdx = key.indexOf("-");
-        return { ri: parseInt(key.slice(0, dashIdx), 10), header: key.slice(dashIdx + 1) };
-      })
+      .map(([key]) => { const d = key.indexOf("-"); return { ri: parseInt(key.slice(0, d), 10), header: key.slice(d + 1) }; })
       .sort((a, b) => a.ri !== b.ri ? a.ri - b.ri : mappedHeaders.indexOf(a.header) - mappedHeaders.indexOf(b.header));
   }, [cellErrors, mappedHeaders]);
 
@@ -202,47 +229,29 @@ export default function StepValidate({
     if (errorCells.length === 0) return;
     const next = jumpIdx + 1;
     if (next >= errorCells.length) {
-      setNoMoreMsg(true);
-      setTimeout(() => setNoMoreMsg(false), 2000);
-      setJumpIdx(-1);
-      return;
+      setNoMoreMsg(true); setTimeout(() => setNoMoreMsg(false), 2000); setJumpIdx(-1); return;
     }
     setJumpIdx(next);
     const { ri: globalRi, header } = errorCells[next];
     const localRi = activeGlobalIndices.indexOf(globalRi);
-    if (localRi >= 0) {
-      setPage(Math.floor(localRi / PAGE_SIZE));
-    } else {
-      // Error row not in current filtered view — clear filters to reveal it
-      setShowOnlyErrors(false);
-      setGlobalSearch('');
-      setColumnFilters({});
-      setPage(Math.floor(globalRi / PAGE_SIZE));
-    }
+    if (localRi >= 0) { setPage(Math.floor(localRi / PAGE_SIZE)); }
+    else { setShowOnlyErrors(false); setGlobalSearch(''); setColumnFilters({}); setErrorColFilter(null); setPage(Math.floor(globalRi / PAGE_SIZE)); }
     setFocusCell({ ri: globalRi, header, _t: Date.now() });
   };
 
   const hasCacheData = Object.keys(depCacheMap || {}).length > 0;
 
-  const handleDepColumnClick = (header) => {
-    setDepResolveHeader(header === '__all__' ? null : header);
-    setShowDepModal(true);
-  };
+  const handleDepColumnClick = (header) => { setDepResolveHeader(header === '__all__' ? null : header); setShowDepModal(true); };
+  const handleFixAll = () => { setDepResolveHeader(null); setShowDepModal(true); };
 
-  const handleFixAll = () => {
-    setDepResolveHeader(null);
-    setShowDepModal(true);
-  };
-
-  // NL Edit apply — respects scope (all vs filtered)
+  // NL Edit — snapshot for undo, then apply
   const handleNLEditApply = (field, code) => {
+    setUndoSnapshot([...mappedRows]);
     if (nlEditScope === 'filtered' && activeGlobalIndices.length < mappedRows.length) {
       setMappedRows(prev => {
         const next = [...prev];
         const fn = new Function('row', code);
-        activeGlobalIndices.forEach(gi => {
-          try { next[gi] = { ...next[gi], [field]: fn(next[gi]) }; } catch { /* skip bad rows */ }
-        });
+        activeGlobalIndices.forEach(gi => { try { next[gi] = { ...next[gi], [field]: fn(next[gi]) }; } catch { /* skip */ } });
         if (onRowsUpdated) onRowsUpdated(next);
         return next;
       });
@@ -251,7 +260,13 @@ export default function StepValidate({
     }
   };
 
-  // Merge updated page rows back into full mappedRows
+  const handleUndo = () => {
+    if (!undoSnapshot) return;
+    setMappedRows(undoSnapshot);
+    if (onRowsUpdated) onRowsUpdated(undoSnapshot);
+    setUndoSnapshot(null);
+  };
+
   const handlePageChange = (updatedPageRows) => {
     setMappedRows(prev => {
       const next = [...prev];
@@ -283,11 +298,7 @@ export default function StepValidate({
 
   const handleColumnFilterChange = (col, values) => {
     setColumnFilters(prev => {
-      if (values.length === 0) {
-        const next = { ...prev };
-        delete next[col];
-        return next;
-      }
+      if (values.length === 0) { const next = { ...prev }; delete next[col]; return next; }
       return { ...prev, [col]: values };
     });
     setPage(0);
@@ -302,18 +313,9 @@ export default function StepValidate({
 
       {/* ── No-cache banner ── */}
       {!hasCacheData && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '9px 14px', marginBottom: 14,
-          background: C.warnBg, border: `1px solid ${C.warnBorder}`, borderRadius: 8,
-          fontSize: 12, color: C.warnText,
-        }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', marginBottom: 14, background: C.warnBg, border: `1px solid ${C.warnBorder}`, borderRadius: 8, fontSize: 12, color: C.warnText }}>
           <span style={{ fontSize: 15, flexShrink: 0 }}>⚠</span>
-          <span>
-            <strong>Dependency validation is inactive.</strong> Go to the{' '}
-            <strong>Dependencies tab</strong> and click <strong>Update Dependencies</strong>{' '}
-            to validate cross-field references against live FMX data.
-          </span>
+          <span><strong>Dependency validation is inactive.</strong> Go to the <strong>Dependencies tab</strong> and click <strong>Update Dependencies</strong> to validate cross-field references against live FMX data.</span>
         </div>
       )}
 
@@ -329,111 +331,94 @@ export default function StepValidate({
             onToggleScope={() => setNlEditScope(s => s === 'all' ? 'filtered' : 'all')}
             filteredCount={activeRows.length}
             totalCount={mappedRows.length}
+            suggestions={suggestions}
+            suggestionsLoading={suggestionsLoading}
+            canUndo={!!undoSnapshot}
+            onUndo={handleUndo}
           />
         </div>
 
         {/* Right: Data Quality panel */}
-        <div style={{
-          width: '42%', flexShrink: 0,
-          border: `1px solid ${C.border}`, borderRadius: 8,
-          padding: '14px 16px', background: C.white,
-          display: 'flex', flexDirection: 'column', gap: 10,
-        }}>
+        <div style={{ width: '42%', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 16px', background: C.white, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: C.navy, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Data Quality</p>
 
-          {/* Counts */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: errorCount > 0 ? C.errText : C.okText }} />
-              <span style={{ fontSize: 12, color: errorCount > 0 ? C.errText : C.okText }}>
-                {errorCount} cell{errorCount !== 1 ? 's' : ''} with missing required data
+          {/* Donut ring + counts */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <DonutRing cleanPct={cleanPct} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, justifyContent: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: C.textDark }}>
+                {cleanRows} of {totalRows} rows clean
               </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: depErrorCount > 0 ? C.warnText : C.okText }} />
-              <span style={{ fontSize: 12, color: depErrorCount > 0 ? C.warnText : C.okText }}>
-                {depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: errorCount > 0 ? C.errText : C.okText }} />
+                <span style={{ fontSize: 11, color: errorCount > 0 ? C.errText : C.okText }}>
+                  {errorCount} missing required data
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: depErrorCount > 0 ? C.warnText : C.okText }} />
+                <span style={{ fontSize: 11, color: depErrorCount > 0 ? C.warnText : C.okText }}>
+                  {depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''}
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Action buttons */}
+          {/* Errors by column */}
+          {errorsByColumn.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
+              <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 600, color: C.textLight, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                Errors by column
+              </p>
+              {errorsByColumn.map(([col, count]) => {
+                const isActive = errorColFilter === col;
+                return (
+                  <button
+                    key={col}
+                    onClick={() => { setErrorColFilter(isActive ? null : col); setPage(0); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      width: '100%', padding: '4px 8px', marginBottom: 2, borderRadius: 5,
+                      border: 'none', cursor: 'pointer', textAlign: 'left',
+                      background: isActive ? C.warnBg : 'transparent',
+                      transition: 'background 0.15s ease',
+                    }}
+                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = C.bgPage; }}
+                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span style={{ fontSize: 11, color: isActive ? C.warnText : C.textDark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {isActive ? '▶ ' : ''}{col}
+                    </span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 4, marginLeft: 8, flexShrink: 0, background: isActive ? C.warnText : C.errBg, color: isActive ? C.white : C.errText }}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Action buttons row */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* Show only error rows */}
-            <button
-              className={`fmx-btn-xs-rule${showOnlyErrors ? ' active' : ''}`}
-              onClick={() => setShowOnlyErrors(v => !v)}
-              disabled={errorRowSet.size === 0}
-              title={errorRowSet.size === 0 ? 'No rows with errors' : undefined}
-              style={{ opacity: errorRowSet.size === 0 ? 0.5 : 1 }}
-            >
-              {showOnlyErrors ? '✓ Error rows only' : 'Show error rows'}
-            </button>
-
-            {/* Jump to hard error */}
-            <button
-              className="fmx-btn-xs"
-              onClick={jumpToNextError}
-              disabled={errorCells.length === 0}
-              style={{
-                color: errorCells.length > 0 ? C.errText : undefined,
-                borderColor: errorCells.length > 0 ? C.errBorder : undefined,
-                background: errorCells.length > 0 ? C.errBg : undefined,
-              }}
-            >
-              Jump to error ↓
-            </button>
-
             {/* Fix dep issues */}
             {depErrorCount > 0 && (
-              <button
-                className="fmx-btn-xs"
-                onClick={handleFixAll}
-                style={{ color: C.warnText, borderColor: C.warnBorder, background: C.warnBg, fontWeight: 600 }}
-              >
+              <button className="fmx-btn-xs" onClick={handleFixAll} style={{ color: C.warnText, borderColor: C.warnBorder, background: C.warnBg, fontWeight: 600 }}>
                 ⚠ Fix {depErrorCount} dep issue{depErrorCount !== 1 ? 's' : ''}
               </button>
             )}
 
             {/* Column visibility */}
             <div style={{ position: 'relative', marginLeft: 'auto' }}>
-              <button className="fmx-btn-xs" onClick={() => setColMenuOpen(v => !v)}>
-                Columns ▾
-              </button>
+              <button className="fmx-btn-xs" onClick={() => setColMenuOpen(v => !v)}>Columns ▾</button>
               {colMenuOpen && (
-                <div style={{
-                  position: 'absolute', right: 0, top: '100%', marginTop: 4,
-                  background: C.white, border: `1px solid ${C.border}`, borderRadius: 8,
-                  padding: '6px 0', zIndex: 100, minWidth: 210, maxHeight: 320,
-                  overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)',
-                }}>
+                <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 0', zIndex: 100, minWidth: 210, maxHeight: 320, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)' }}>
                   <div style={{ padding: '4px 14px 8px', borderBottom: `1px solid ${C.border}`, marginBottom: 2, display: 'flex', justifyContent: 'space-between' }}>
-                    <button
-                      onClick={() => setHiddenCols(new Set())}
-                      style={{ fontSize: 11, color: C.navy, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}
-                    >
-                      Show all
-                    </button>
-                    <button
-                      onClick={() => setHiddenCols(new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h]))))}
-                      style={{ fontSize: 11, color: C.textMid, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                    >
-                      Reset defaults
-                    </button>
+                    <button onClick={() => setHiddenCols(new Set())} style={{ fontSize: 11, color: C.navy, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}>Show all</button>
+                    <button onClick={() => setHiddenCols(new Set(mappedHeaders.filter(h => !mappedRows.some(r => r[h]))))} style={{ fontSize: 11, color: C.textMid, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>Reset defaults</button>
                   </div>
                   {mappedHeaders.map(h => (
                     <label key={h} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 14px', cursor: 'pointer', fontSize: 12, color: C.textDark }}>
-                      <input
-                        type="checkbox"
-                        checked={!hiddenCols.has(h)}
-                        onChange={e => {
-                          setHiddenCols(prev => {
-                            const next = new Set(prev);
-                            e.target.checked ? next.delete(h) : next.add(h);
-                            return next;
-                          });
-                        }}
-                      />
+                      <input type="checkbox" checked={!hiddenCols.has(h)} onChange={e => { setHiddenCols(prev => { const next = new Set(prev); e.target.checked ? next.delete(h) : next.add(h); return next; }); }} />
                       {h}
                     </label>
                   ))}
@@ -442,8 +427,8 @@ export default function StepValidate({
             </div>
           </div>
 
-          {/* Dep sync status + toast + no-more message */}
-          {(depAutoSyncing || syncDoneToast || noMoreMsg) && (
+          {/* Dep sync status + toast */}
+          {(depAutoSyncing || syncDoneToast) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 18 }}>
               {depAutoSyncing && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textMid }}>
@@ -454,54 +439,53 @@ export default function StepValidate({
               {syncDoneToast && !depAutoSyncing && (
                 <span style={{ fontSize: 11, color: C.okText, fontWeight: 600 }}>✓ Dependencies updated</span>
               )}
-              {noMoreMsg && (
-                <span style={{ fontSize: 11, color: C.textMid, fontStyle: 'italic' }}>No more errors</span>
-              )}
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Error filter row (above search) ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button
+          className={`fmx-btn-xs-rule${showOnlyErrors ? ' active' : ''}`}
+          onClick={() => setShowOnlyErrors(v => !v)}
+          disabled={errorRowSet.size === 0}
+          style={{ opacity: errorRowSet.size === 0 ? 0.5 : 1 }}
+        >
+          {showOnlyErrors ? '✓ Showing error rows only' : 'Show only error rows'}
+        </button>
+        <button
+          className="fmx-btn-xs"
+          onClick={jumpToNextError}
+          disabled={errorCells.length === 0}
+          style={{ color: errorCells.length > 0 ? C.errText : undefined, borderColor: errorCells.length > 0 ? C.errBorder : undefined, background: errorCells.length > 0 ? C.errBg : undefined }}
+        >
+          Jump to error ↓
+        </button>
+        {noMoreMsg && <span style={{ fontSize: 11, color: C.textMid, fontStyle: 'italic' }}>No more errors</span>}
       </div>
 
       {/* ── Global search bar ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{ flex: 1, position: 'relative' }}>
           <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textLight, fontSize: 15, pointerEvents: 'none', lineHeight: 1 }}>⌕</span>
-          <input
-            className="fmx-input"
-            style={{ width: '100%', paddingLeft: 30, boxSizing: 'border-box' }}
-            placeholder="Search all columns…"
-            value={globalSearch}
-            onChange={e => { setGlobalSearch(e.target.value); setPage(0); }}
-          />
+          <input className="fmx-input" style={{ width: '100%', paddingLeft: 30, boxSizing: 'border-box' }} placeholder="Search all columns…" value={globalSearch} onChange={e => { setGlobalSearch(e.target.value); setPage(0); }} />
         </div>
-        {hasActiveFilters && (
-          <button className="fmx-btn-xs" onClick={clearAllFilters} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-            Clear all filters
-          </button>
-        )}
+        {hasActiveFilters && <button className="fmx-btn-xs" onClick={clearAllFilters} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>Clear all filters</button>}
         <span style={{ fontSize: 12, color: C.textMid, whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {activeRows.length === mappedRows.length
-            ? `${mappedRows.length} row${mappedRows.length !== 1 ? 's' : ''}`
-            : `${activeRows.length} of ${mappedRows.length} rows`}
+          {activeRows.length === mappedRows.length ? `${mappedRows.length} row${mappedRows.length !== 1 ? 's' : ''}` : `${activeRows.length} of ${mappedRows.length} rows`}
         </span>
       </div>
 
-      {/* ── Active filter chip bar ── */}
+      {/* ── Filter chip bar ── */}
       {hasActiveFilters && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-          {globalSearch.trim() && (
-            <FilterChip label={`Search: "${globalSearch}"`} onRemove={() => setGlobalSearch('')} />
-          )}
-          {showOnlyErrors && (
-            <FilterChip label="Errors only" onRemove={() => setShowOnlyErrors(false)} />
-          )}
+          {globalSearch.trim() && <FilterChip label={`Search: "${globalSearch}"`} onRemove={() => setGlobalSearch('')} />}
+          {showOnlyErrors && <FilterChip label="Errors only" onRemove={() => setShowOnlyErrors(false)} />}
+          {errorColFilter && <FilterChip label={`Errors in: ${errorColFilter}`} onRemove={() => setErrorColFilter(null)} />}
           {Object.entries(columnFilters).map(([col, vals]) =>
             vals && vals.length > 0 ? (
-              <FilterChip
-                key={col}
-                label={`${col}: ${vals.length === 1 ? vals[0] : `${vals.length} selected`}`}
-                onRemove={() => handleColumnFilterChange(col, [])}
-              />
+              <FilterChip key={col} label={`${col}: ${vals.length === 1 ? vals[0] : `${vals.length} selected`}`} onRemove={() => handleColumnFilterChange(col, [])} />
             ) : null
           )}
         </div>
@@ -528,34 +512,16 @@ export default function StepValidate({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
         {totalPages > 1 && (
           <>
-            <button
-              className="fmx-btn-xs"
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={clampedPage === 0}
-            >
-              ← Prev
-            </button>
-            <span style={{ fontSize: 12, fontWeight: 500, color: C.textDark }}>
-              Page {clampedPage + 1} of {totalPages}
-            </span>
-            <button
-              className="fmx-btn-xs"
-              onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-              disabled={clampedPage === totalPages - 1}
-            >
-              Next →
-            </button>
-            <span style={{ fontSize: 12, color: C.textLight }}>
-              rows {pageStart}–{pageEnd} of {activeRows.length}{hasActiveFilters ? ' filtered' : ''}
-            </span>
+            <button className="fmx-btn-xs" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={clampedPage === 0}>← Prev</button>
+            <span style={{ fontSize: 12, fontWeight: 500, color: C.textDark }}>Page {clampedPage + 1} of {totalPages}</span>
+            <button className="fmx-btn-xs" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={clampedPage === totalPages - 1}>Next →</button>
+            <span style={{ fontSize: 12, color: C.textLight }}>rows {pageStart}–{pageEnd} of {activeRows.length}{hasActiveFilters ? ' filtered' : ''}</span>
           </>
         )}
         {activeRows.length === 0 && hasActiveFilters && (
           <span style={{ fontSize: 12, color: C.textLight, fontStyle: 'italic' }}>
             No rows match current filters —{' '}
-            <button onClick={clearAllFilters} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.navy, fontSize: 12, padding: 0, textDecoration: 'underline' }}>
-              clear filters
-            </button>
+            <button onClick={clearAllFilters} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.navy, fontSize: 12, padding: 0, textDecoration: 'underline' }}>clear filters</button>
           </span>
         )}
       </div>
@@ -578,11 +544,7 @@ export default function StepValidate({
           <div style={{ padding: '12px 14px', background: C.okBg, border: `1px solid ${C.okBorder}`, borderRadius: 8 }}>
             <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.okText }}>
               ✓ No errors — all required fields are filled.
-              {depErrorCount > 0 && (
-                <span style={{ color: C.warnText, fontWeight: 400, marginLeft: 8 }}>
-                  ({depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''} — review or fix above)
-                </span>
-              )}
+              {depErrorCount > 0 && <span style={{ color: C.warnText, fontWeight: 400, marginLeft: 8 }}>({depErrorCount} dependency mismatch{depErrorCount !== 1 ? 'es' : ''} — review or fix above)</span>}
             </p>
           </div>
         )}
