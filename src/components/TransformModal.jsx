@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { callClaude } from "../claudeClient";
 import Modal from "./Modal";
+import { claudeFetch, parseClaudeText } from "../apiClient";
 
 export default function TransformModal({ fieldName, csvHeaders, currentRule, savedRule, onSave, onClose }) {
   const [instruction, setInstruction] = useState(currentRule?.instruction || savedRule?.instruction || "");
@@ -13,11 +13,11 @@ export default function TransformModal({ fieldName, csvHeaders, currentRule, sav
     if (!instruction.trim()) return;
     setLoading(true); setErr("");
     try {
-      const data = await callClaude({
-        model: "claude-sonnet-4-20250514", max_tokens: 500,
+      const data = await claudeFetch({
+        max_tokens: 500,
         messages: [{ role: "user", content: `You are a JavaScript code generator for a data migration tool. Write a function body (no declaration) that receives a "row" object (keys = CSV column names) and returns the computed string value for FMX field "${fieldName}". Available columns: ${JSON.stringify(csvHeaders)}. Instruction: "${instruction}". Return ONLY raw JS, no markdown, no explanation.` }]
       });
-      setCode((data.content?.[0]?.text || "").replace(/```javascript|```js|```/g, "").trim());
+      setCode(parseClaudeText(data));
     } catch (e) { setErr(e.status ? e.message : "Generation failed — check connection."); }
     setLoading(false);
   };

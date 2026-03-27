@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { callClaude } from "../claudeClient";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
 import { saveMappings, saveRule, saveDataPatterns, completeImport } from "../db";
 import FMXPushModal from "./FMXPushModal";
+import { claudeFetch, parseClaudeText } from "../apiClient";
 
 export default function StepExport({
   schemaType,
@@ -57,8 +57,7 @@ export default function StepExport({
           try {
             const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000));
             const data = await Promise.race([
-              callClaude({
-                model: "claude-sonnet-4-20250514",
+              claudeFetch({
                 max_tokens: 1000,
                 messages: [{
                   role: "user",
@@ -67,7 +66,7 @@ export default function StepExport({
               }),
               timeout,
             ]);
-            const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+            const clean = parseClaudeText(data) || "{}";
             const hints = JSON.parse(clean);
             fieldPatterns = Object.entries(fieldSamples).map(([fmxField, sampleValues]) => ({
               fmxField, sampleValues, patternHint: hints[fmxField] || null,

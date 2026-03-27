@@ -1,4 +1,6 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
+import { fmxFetch } from './apiClient';
+import { resolvePostOptionsEndpoint } from './fmxEndpoints';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -17,14 +19,9 @@ export function decodeCredentials(encoded) {
 
 export async function testFmxConnection(siteUrl, email, password) {
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl: siteUrl.trim(), email: email.trim(), password,
-        endpoint: '/v1/buildings?limit=1',
-        method: 'GET', payload: null,
-      }),
+    const res = await fmxFetch({
+      siteUrl: siteUrl.trim(), email: email.trim(), password,
+      endpoint: '/v1/buildings?limit=1', method: 'GET',
     });
     if (res.ok || res.status === 200) {
       return { success: true, message: `Connected to ${siteUrl.trim()}` };
@@ -35,20 +32,6 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-// Resolve post-options endpoint — handles static strings, module functions, and
-// module-qualified schema types like "Work Request:maintenance".
-function resolvePostOptionsEndpoint(schemaType, modules) {
-  // Module-qualified types carry the slug in the key itself
-  if (schemaType.startsWith('Work Request:'))
-    return `/v1/${schemaType.split(':')[1]}-requests/post-options`;
-  if (schemaType.startsWith('Schedule Request:'))
-    return `/v1/${schemaType.split(':')[1]}/requests/post-options`;
-  if (schemaType.startsWith('Work Task:'))
-    return `/v1/${schemaType.split(':')[1]}/tasks/post-options`;
-  const ep = POST_OPTIONS_ENDPOINTS[schemaType];
-  if (!ep) return null;
-  return typeof ep === 'function' ? ep(modules) : ep;
-}
 
 // Convert any fmx_modules shape to the canonical new format:
 //   { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}], workTaskModules:[{slug,label}] }
@@ -116,37 +99,14 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
-const POST_OPTIONS_ENDPOINTS = {
-  'Building':               '/v1/buildings/post-options',
-  'Equipment':              '/v1/equipment/post-options',
-  'Inventory':              '/v1/inventory/post-options',
-  'Resource':               '/v1/resources/post-options',
-  'User':                   '/v1/users/post-options',
-  'Equipment Type':         '/v1/equipment-types/post-options',
-  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests/post-options`,
-  'Schedule Request':       (m) => `/v1/${m?.scheduling || 'scheduling'}/requests/post-options`,
-  'Work Task':              (m) => `/v1/${m?.workTask || 'maintenance'}/tasks/post-options`,
-  'Transportation Request': '/v1/transportation-requests/post-options',
-  'Accounting Account':     '/v1/accounting-accounts/post-options',
-};
-
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
 
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl, email, password,
-        endpoint,
-        method: 'GET', payload: null,
-      }),
-    });
+    const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
     if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
-    console.log('FMX post-options response:', data);
 
     const customFields = (data.customFields || [])
       .filter(cf => cf.key && cf.label)
@@ -165,7 +125,6 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       maximumLength: sf.maximumLength || null,
     }));
 
-    console.log('Custom fields found:', customFields);
     return { customFields, systemFields };
   } catch {
     return { customFields: [], systemFields: [] };
@@ -187,18 +146,12 @@ export async function fetchFmxModules(siteUrl, email, password) {
     workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
   };
   try {
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        siteUrl: siteUrl.trim(), email: email.trim(), password,
-        endpoint: '/v1/organization',
-        method: 'GET', payload: null,
-      }),
+    const res = await fmxFetch({
+      siteUrl: siteUrl.trim(), email: email.trim(), password,
+      endpoint: '/v1/organization', method: 'GET',
     });
     if (!res.ok) return defaults;
     const data = await res.json();
-    console.log('FMX organization response:', data);
 
     const modules = { ...defaults };
 
@@ -227,16 +180,13 @@ export async function fetchFmxModules(siteUrl, email, password) {
     }
 
     return modules;
-  } catch (e) {
-    console.warn('fetchFmxModules failed, using defaults:', e);
+  } catch {
     return defaults;
   }
 }
 
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
-  console.log('FMX sync triggered for:', schemaType);
-  console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
     return { customFields: [], systemFields: [], fromCache: false };
   }
@@ -301,11 +251,7 @@ async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,na
   while (true) {
     const sep = endpoint.includes('?') ? '&' : '?';
     const url = `${endpoint}${sep}offset=${offset}&limit=${limit}&fields=${encodeURIComponent(fields)}`;
-    const res = await fetch('/api/fmx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteUrl, email, password, endpoint: url, method: 'GET', payload: null }),
-    });
+    const res = await fmxFetch({ siteUrl, email, password, endpoint: url, method: 'GET' });
     if (!res.ok) throw new Error(`FMX returned ${res.status} for ${endpoint}`);
 
     const headerTotal = res.headers.get('FMX-Total-Count');

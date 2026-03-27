@@ -6,8 +6,8 @@ import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
 import { syncFmxDataForProject, fetchAllDependencies } from "./fmxSync";
-import { callClaude } from "./claudeClient";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
+import { claudeFetch, parseClaudeText } from "./apiClient";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -243,7 +243,6 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   const handleFmxSync = async (type) => {
-    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
     if (!selectedProject?.fmx_credentials) return;
     setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);
@@ -304,8 +303,8 @@ export default function App() {
     const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
-        callClaude({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
+        claudeFetch({
+          max_tokens: 1000,
           messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
         }).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
@@ -315,7 +314,7 @@ export default function App() {
       // Parse AI result
       let aiResult = {};
       if (aiRes) {
-        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        const clean = parseClaudeText(aiRes) || "{}";
         try { aiResult = JSON.parse(clean); } catch {}
       }
 

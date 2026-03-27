@@ -4,6 +4,8 @@ import Modal from "./Modal";
 import { resolveEndpoint } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache } from "../fmxTransform";
 import { decodeCredentials } from "../fmxSync";
+import { fmxFetch } from "../apiClient";
+import { downloadCSV } from "../utils";
 import { getAllDependencyCaches } from "../db";
 
 const ANIM = `
@@ -16,23 +18,6 @@ const ANIM = `
     to   { opacity: 1; transform: scale(1); }
   }
 `;
-
-function downloadCsv(filename, rows) {
-  if (!rows.length) return;
-  const headers = Object.keys(rows[0]);
-  const lines = [headers.join(','), ...rows.map(r =>
-    headers.map(h => {
-      const v = String(r[h] ?? '');
-      return v.includes(',') || v.includes('"') || v.includes('\n')
-        ? `"${v.replace(/"/g, '""')}"` : v;
-    }).join(',')
-  )];
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
 
 export default function FMXPushModal({
   schemaType,
@@ -85,14 +70,9 @@ export default function FMXPushModal({
   const testConnection = async () => {
     setConnLoading(true); setConnStatus(null);
     try {
-      const res = await fetch('/api/fmx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword,
-          endpoint: '/v1/buildings?limit=1',
-          method: 'GET', payload: null,
-        }),
+      const res = await fmxFetch({
+        siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword,
+        endpoint: '/v1/buildings?limit=1', method: 'GET',
       });
       if (res.ok || res.status === 200) {
         setConnStatus('ok');
@@ -144,13 +124,7 @@ export default function FMXPushModal({
         let ok = false;
         try {
           const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || []);
-          const res = await fetch('/api/fmx', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ siteUrl: url, email: em, password: pw, endpoint, payload }),
-          });
-          const responseText = await res.clone().text();
-          console.warn('FMX API raw response:', res.status, responseText);
+          const res = await fmxFetch({ siteUrl: url, email: em, password: pw, endpoint, payload });
           ok = res.ok || res.status === 200 || res.status === 201;
         } catch {}
 
@@ -337,7 +311,7 @@ export default function FMXPushModal({
 
           {failedRows.length > 0 && (
             <button
-              onClick={() => downloadCsv(`${schemaType.replace(/\s+/g,'_')}_failed_rows.csv`, failedRows)}
+              onClick={() => downloadCSV(`${schemaType.replace(/\s+/g,'_')}_failed_rows.csv`, Object.keys(failedRows[0]), failedRows)}
               style={{ display: 'block', fontSize: 12, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', marginBottom: 12, padding: 0 }}
             >
               Download {failedRows.length} failed row{failedRows.length !== 1 ? 's' : ''} as CSV

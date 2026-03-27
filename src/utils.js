@@ -89,9 +89,11 @@ export function toCSV(headers, rows) {
 }
 
 export function downloadCSV(filename, headers, rows) {
+  const blob = new Blob([toCSV(headers, rows)], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(toCSV(headers, rows));
-  a.download = filename; a.click();
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function suggestMapping(headers, fields) {

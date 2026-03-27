@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { callClaude } from "../claudeClient";
+import { claudeFetch, parseClaudeText } from "../apiClient";
 
 export default function NLEditPanel({ headers, onApply }) {
   const [instruction, setInstruction] = useState("");
@@ -11,11 +11,11 @@ export default function NLEditPanel({ headers, onApply }) {
     if (!instruction.trim()) return;
     setLoading(true); setErr("");
     try {
-      const data = await callClaude({
-        model: "claude-sonnet-4-20250514", max_tokens: 400,
+      const data = await claudeFetch({
+        max_tokens: 400,
         messages: [{ role: "user", content: `You are a data transformation assistant. The user wants to update rows in a table. Available FMX fields: ${JSON.stringify(headers)}. Instruction: "${instruction}". Return ONLY a JSON object with two keys: "field" (the FMX field name to update) and "code" (a JS function body that receives a "row" object and returns the new value for that field, or null to skip the row). No markdown, no explanation.` }]
       });
-      const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+      const clean = parseClaudeText(data) || "{}";
       const { field, code } = JSON.parse(clean);
       if (field && code) onApply(field, code);
       setInstruction("");
