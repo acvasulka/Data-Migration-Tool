@@ -18,8 +18,6 @@ export default async function handler(req, res) {
     let data;
     try { data = await response.json(); }
     catch { data = { status: response.status }; }
-    console.log('FMX response status:', response.status);
-    console.log('FMX response body:', JSON.stringify(data));
     res.status(response.status).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

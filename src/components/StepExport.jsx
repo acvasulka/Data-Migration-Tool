@@ -3,6 +3,7 @@ import { C } from "../theme";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
 import { saveMappings, saveRule, saveDataPatterns, completeImport } from "../db";
 import FMXPushModal from "./FMXPushModal";
+import { claudeFetch, parseClaudeText } from "../apiClient";
 
 export default function StepExport({
   schemaType,
@@ -54,20 +55,14 @@ export default function StepExport({
         let fieldPatterns = [];
         if (Object.keys(fieldSamples).length > 0) {
           try {
-            const res = await fetch("/api/claude", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 1000,
-                messages: [{
-                  role: "user",
-                  content: `Analyze these data samples from an FMX ${schemaType} import. For each field, give a ONE sentence pattern hint describing the data format. Return ONLY a JSON object where keys are field names and values are pattern hint strings. Data samples: ${JSON.stringify(fieldSamples)}`
-                }]
-              })
+            const data = await claudeFetch({
+              max_tokens: 1000,
+              messages: [{
+                role: "user",
+                content: `Analyze these data samples from an FMX ${schemaType} import. For each field, give a ONE sentence pattern hint describing the data format. Return ONLY a JSON object where keys are field names and values are pattern hint strings. Data samples: ${JSON.stringify(fieldSamples)}`
+              }]
             });
-            const data = await res.json();
-            const clean = (data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+            const clean = parseClaudeText(data) || "{}";
             const hints = JSON.parse(clean);
             fieldPatterns = Object.entries(fieldSamples).map(([fmxField, sampleValues]) => ({
               fmxField, sampleValues, patternHint: hints[fmxField] || null,

@@ -30,6 +30,11 @@ export function resolveEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
+export function resolvePostOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/post-options` : null;
+}
+
 // Maps FMX import schema field names → FMX API property names (non-lookup fields only)
 const FMX_FIELD_MAP = {
   'Building': {

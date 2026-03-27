@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { updateProject, saveProjectCredentials, updateProjectModules } from "../db";
-import { encodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
+import { encodeCredentials, decodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -101,16 +101,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   };
 
   const handleAutoDetectModules = async () => {
-    const { email, password } = (() => {
-      try {
-        if (!selectedProject?.fmx_credentials) return { email: '', password: '' };
-        const decoded = atob(selectedProject.fmx_credentials);
-        const idx = decoded.indexOf(':');
-        return idx === -1
-          ? { email: '', password: '' }
-          : { email: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
-      } catch { return { email: '', password: '' }; }
-    })();
+    const { email, password } = decodeCredentials(selectedProject?.fmx_credentials || '');
     const url = selectedProject?.fmx_site_url;
     if (!url || !email) { setModulesMsg('Site URL and credentials are required.'); return; }
     setModulesDetecting(true);

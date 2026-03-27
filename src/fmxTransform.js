@@ -1,6 +1,7 @@
 import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType } from './schemas';
+import { fmxFetch } from './apiClient';
 
 // Equipment assetCondition is an integer enum in the FMX API
 const ASSET_CONDITION_MAP = {
@@ -93,7 +94,6 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     }
   });
 
-  console.warn('Payload:', JSON.stringify(payload));
   return payload;
 }
 
@@ -107,15 +107,10 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
     const uniqueValues = [...new Set(rows.map(r => r[fmxField]).filter(Boolean))];
     for (const value of uniqueValues) {
       try {
-        const res = await fetch('/api/fmx', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            siteUrl, email, password,
-            endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
-            method: 'GET',
-            payload: null,
-          }),
+        const res = await fmxFetch({
+          siteUrl, email, password,
+          endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
+          method: 'GET',
         });
         const data = await res.json();
         const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
