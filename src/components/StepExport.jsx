@@ -20,6 +20,7 @@ export default function StepExport({
   userEmail,
   customFieldIdMap,
   customFieldMetadata,
+  systemFieldMetadata,
   fileInfo,
 }) {
   const [exportFormat, setExportFormat] = useState("csv");
@@ -113,6 +114,7 @@ export default function StepExport({
           fmxModules={selectedProject?.fmx_modules || {}}
           customFieldIdMap={customFieldIdMap || {}}
           customFieldMetadata={customFieldMetadata || []}
+          systemFieldMetadata={systemFieldMetadata || []}
           allFields={allFields}
           onClose={() => setShowFMXModal(false)}
           onSuccess={() => { setShowFMXModal(false); runPersistence(); }}

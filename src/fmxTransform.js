@@ -52,9 +52,18 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     if (customFieldIdMap[fieldName] !== undefined) {
       const cfId = customFieldIdMap[fieldName];
       const cfMeta = customFieldMetadata.find(cf => cf.id === cfId);
-      const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
-      if (coerced !== null) {
-        customFields.push({ customFieldID: cfId, value: coerced });
+
+      // Multi-select dropdown: split delimited value into array
+      if (cfMeta?.allowMultipleSelections) {
+        const parts = String(value).split(/[;,]/).map(s => s.trim()).filter(Boolean);
+        if (parts.length > 0) {
+          customFields.push({ customFieldID: cfId, values: parts });
+        }
+      } else {
+        const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
+        if (coerced !== null) {
+          customFields.push({ customFieldID: cfId, value: coerced });
+        }
       }
       return;
     }
@@ -109,6 +118,38 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   return payload;
 }
 
+// Fetch all records from an endpoint using paginated requests.
+// Used by update-mode to resolve existing entity IDs by name/tag.
+export async function fetchAllRecords(siteUrl, email, password, endpoint, fields) {
+  const allItems = [];
+  let offset = 0;
+  const limit = 100;
+  let totalCount = Infinity;
+
+  while (offset < totalCount) {
+    const qs = `?fields=${encodeURIComponent(fields)}&offset=${offset}&limit=${limit}`;
+    const res = await fmxFetch({
+      siteUrl, email, password,
+      endpoint: `${endpoint}${qs}`,
+      method: 'GET',
+    });
+
+    const headerTotal = res.headers.get('FMX-Total-Count');
+    if (headerTotal) totalCount = parseInt(headerTotal, 10);
+
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
+    if (!Array.isArray(items) || items.length === 0) break;
+
+    allItems.push(...items);
+    offset += limit;
+
+    if (!headerTotal && items.length < limit) break;
+  }
+
+  return allItems;
+}
+
 // Maps FMX API endpoints to dependency cache keys
 const ENDPOINT_TO_DEP_KEY = {
   '/v1/buildings':        'buildings',
@@ -119,12 +160,11 @@ const ENDPOINT_TO_DEP_KEY = {
   '/v1/inventory-types':  'inventory-types',
   '/v1/inventory':        'inventory',
   '/v1/request-types':    'request-types',
-  '/v1/resource-types':   'resources',   // resource-types map to resources cache as fallback
+  '/v1/resource-types':   'resources',
   '/v1/user-types':       'user-types',
 };
 
 // Build a name→ID lookup from dependency cache items.
-// nameField defaults to 'name'; for equipment it's 'tag'.
 function buildDepLookup(items, nameField = 'name') {
   const map = {};
   for (const item of items) {
@@ -134,14 +174,24 @@ function buildDepLookup(items, nameField = 'name') {
   return map;
 }
 
+// Match an input value against a dep lookup using case-insensitive + trimmed matching.
+function matchDepLookup(value, depLookup) {
+  if (depLookup[value] !== undefined) return depLookup[value];
+  const lower = String(value).toLowerCase().trim();
+  for (const [key, id] of Object.entries(depLookup)) {
+    if (String(key).toLowerCase().trim() === lower) return id;
+  }
+  return undefined;
+}
+
 // Pre-fetch IDs for all unique reference values in the dataset.
-// Returns an idCache map: { "Building:Main Campus": 42, ... }
+// Returns { idCache: { "Building:Main Campus": 42, ... }, unresolved: [...] }
 // If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
 // and only falls back to individual API calls for cache misses.
-// lookupFieldsOverride: optional dynamic lookup map from deriveFieldMap() — overrides static FMX_ID_LOOKUP_FIELDS.
 export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
   const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
   const idCache = {};
+  const unresolved = [];
 
   // Index dependency caches by key for quick access
   const depByKey = {};
@@ -160,28 +210,36 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
     const depLookup = depItems ? buildDepLookup(depItems, depKey === 'equipment' ? 'tag' : 'name') : {};
 
     for (const value of uniqueValues) {
-      // Check dependency cache
-      if (depLookup[value] !== undefined) {
-        idCache[`${fmxField}:${value}`] = depLookup[value];
+      const cacheKey = `${fmxField}:${value}`;
+
+      // Check dependency cache (with case-insensitive matching)
+      const depId = matchDepLookup(value, depLookup);
+      if (depId !== undefined) {
+        idCache[cacheKey] = depId;
         continue;
       }
 
       // Fall back to individual API search
       try {
+        const searchParam = lookup.searchParam || 'search';
         const res = await fmxFetch({
           siteUrl, email, password,
-          endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
+          endpoint: `${lookup.endpoint}?${searchParam}=${encodeURIComponent(value)}&limit=1`,
           method: 'GET',
         });
         const data = await res.json();
         const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
         if (Array.isArray(items) && items.length > 0) {
-          idCache[`${fmxField}:${value}`] = items[0].id;
+          idCache[cacheKey] = items[0].id;
+        } else {
+          unresolved.push(cacheKey);
         }
       } catch (e) {
         console.warn(`Could not resolve ID for ${fmxField}:${value}`, e);
+        unresolved.push(cacheKey);
       }
     }
   }
-  return idCache;
+
+  return { idCache, unresolved };
 }

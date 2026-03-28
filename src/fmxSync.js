@@ -1,6 +1,6 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
 import { fmxFetch } from './apiClient';
-import { resolvePostOptionsEndpoint, resolveGetOptionsEndpoint } from './fmxEndpoints';
+import { resolveEndpoint, resolvePostOptionsEndpoint, resolveGetOptionsEndpoint } from './fmxEndpoints';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -99,6 +99,13 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
+// Resolve put-options endpoint for an existing entity.
+// Uses resolveEndpoint to get the base path, then appends /{entityId}/put-options.
+export function resolvePutOptionsEndpoint(schemaType, entityId, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/${entityId}/put-options` : null;
+}
+
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
@@ -115,6 +122,11 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
         name: cf.label,
         fieldType: cf.fieldTypeName,
         isRequired: cf.isRequired || false,
+        options: cf.options || [],
+        allowMultipleSelections: cf.allowMultipleSelections || false,
+        allowOtherOption: cf.allowOtherOption || false,
+        description: cf.description || '',
+        defaults: cf.defaults || [],
       }));
 
     const systemFields = (data.systemFields || []).map(sf => ({
@@ -123,6 +135,12 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       isRequired: sf.isRequired || false,
       isPermitted: sf.isPermitted !== false,
       maximumLength: sf.maximumLength || null,
+      minimumLength: sf.minimumLength || null,
+      minimumValue: sf.minimumValue ?? null,
+      maximumValue: sf.maximumValue ?? null,
+      defaultValue: sf.defaultValue ?? null,
+      defaultValues: sf.defaultValues || null,
+      options: sf.options || null,
     }));
 
     return { customFields, systemFields };
@@ -234,6 +252,11 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
           name: cf.name,
           fieldType: cf.fieldType,
           isRequired: cf.isRequired || false,
+          options: cf.options || [],
+          allowMultipleSelections: cf.allowMultipleSelections || false,
+          allowOtherOption: cf.allowOtherOption || false,
+          description: cf.description || '',
+          defaults: cf.defaults || [],
         }));
         const systemFields = cached.extra.systemFields || [];
         return { customFields, systemFields, fromCache: true };
