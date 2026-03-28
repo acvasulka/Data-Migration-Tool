@@ -18,8 +18,6 @@ export default async function handler(req, res) {
     let data;
     try { data = await response.json(); }
     catch { data = { status: response.status }; }
-    console.log('FMX response status:', response.status);
-    console.log('FMX response body:', JSON.stringify(data));
     // Forward FMX-* headers (e.g. FMX-Total-Count for pagination)
     for (const [key, value] of response.headers.entries()) {
       if (key.toLowerCase().startsWith('fmx-')) {

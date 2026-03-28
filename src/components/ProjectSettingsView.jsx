@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { updateProject, saveProjectCredentials, updateProjectModules } from "../db";
-import { encodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
+import { updateProject, saveProjectCredentials, updateProjectModules, updateCardSetting } from "../db";
+import { encodeCredentials, decodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
+import { getImportOrder, getSchemaDisplayName } from "../schemas";
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -101,16 +102,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   };
 
   const handleAutoDetectModules = async () => {
-    const { email, password } = (() => {
-      try {
-        if (!selectedProject?.fmx_credentials) return { email: '', password: '' };
-        const decoded = atob(selectedProject.fmx_credentials);
-        const idx = decoded.indexOf(':');
-        return idx === -1
-          ? { email: '', password: '' }
-          : { email: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
-      } catch { return { email: '', password: '' }; }
-    })();
+    const { email, password } = decodeCredentials(selectedProject?.fmx_credentials || '');
     const url = selectedProject?.fmx_site_url;
     if (!url || !email) { setModulesMsg('Site URL and credentials are required.'); return; }
     setModulesDetecting(true);
@@ -444,6 +436,48 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
           )}
         </div>
       )}
+
+      {/* Card Visibility */}
+      <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '20px 24px' }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 10 }}>
+          Card Visibility
+        </label>
+        <p style={{ margin: '0 0 12px', fontSize: 12, color: '#6B7280' }}>
+          Toggle cards off to hide them from the Overview tab.
+        </p>
+        {(() => {
+          const mods = normalizeModules(selectedProject?.fmx_modules);
+          const order = getImportOrder(mods);
+          const settings = selectedProject?.card_settings || {};
+          return order.map(schema => {
+            const isHidden = settings[schema]?.hidden || false;
+            return (
+              <div key={schema} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F3F4F6' }}>
+                <span style={{ fontSize: 13, color: isHidden ? '#9CA3AF' : NAVY, fontWeight: 500 }}>
+                  {getSchemaDisplayName(schema)}
+                </span>
+                <button
+                  onClick={async () => {
+                    const updated = await updateCardSetting(selectedProject.id, schema, 'hidden', !isHidden);
+                    if (updated) onProjectUpdated(updated);
+                  }}
+                  style={{
+                    width: 36, height: 20, borderRadius: 10, border: 'none', cursor: 'pointer',
+                    background: isHidden ? '#D1D5DB' : GREEN,
+                    position: 'relative', transition: 'background 0.2s', padding: 0, flexShrink: 0,
+                  }}
+                >
+                  <div style={{
+                    width: 16, height: 16, borderRadius: '50%', background: '#fff',
+                    position: 'absolute', top: 2,
+                    left: isHidden ? 2 : 18, transition: 'left 0.2s',
+                  }} />
+                </button>
+              </div>
+            );
+          });
+        })()}
+      </div>
     </div>
   );
 }

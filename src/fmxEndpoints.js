@@ -30,7 +30,18 @@ export function resolveEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
-// Maps FMX import schema field names → FMX API property names (non-lookup fields only)
+export function resolvePostOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/post-options` : null;
+}
+
+export function resolveGetOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/get-options` : null;
+}
+
+// DEPRECATED: Use deriveFieldMap() from fmxFieldMetadata.js for dynamic field mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_FIELD_MAP = {
   'Building': {
     'Name':                       'name',
@@ -122,6 +133,8 @@ const FMX_FIELD_MAP = {
     'Is contact':                 'isContact',
     'Is supplier':                'isSupplier',
     'Can be a driver':            'canBeDriver',
+    'Password':                   'password',
+    'Require password change':    'requirePasswordChange',
     // User type is now an ID lookup (userTypeID)
     // Building access is now an ID lookup (accessibleBuildingIDs)
     // Assigned Equipment is now an ID lookup (assignedEquipmentItemIDs)
@@ -154,7 +167,8 @@ const FMX_FIELD_MAP = {
   },
 };
 
-// Fields requiring an ID lookup before pushing.
+// DEPRECATED: Use deriveLookupFields() from fmxFieldMetadata.js for dynamic lookup mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
 // nameField: which response property to match input values against (default: 'name').
 const FMX_ID_LOOKUP_FIELDS = {
   'Equipment': {
