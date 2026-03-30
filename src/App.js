@@ -118,7 +118,6 @@ export default function App() {
   const [resetMsg, setResetMsg] = useState('');
 
   // --- Wizard state ---
-  const [importedData, setImportedData] = useState({});
   const [history, setHistory] = useState([]);
   const [wStep, setWStep] = useState(0);
   const [schemaType, setSchemaType] = useState("");
@@ -138,13 +137,10 @@ export default function App() {
   const [memoryMatches, setMemoryMatches] = useState({});
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
-  // persistentRefs kept for legacy compatibility (no longer used for validation)
-  const [persistentRefs, setPersistentRefs] = useState(null); // eslint-disable-line no-unused-vars
   const [depCacheMap, setDepCacheMap] = useState({}); // { [crossSheetType]: string[] } from FMX live dep cache
   const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
-  const [activeImportId, setActiveImportId] = useState(null);
 
   // Overview / tab routing
   const [mainTab, setMainTab] = useState('overview'); // 'overview' | 'dependencies' | 'settings' | 'wizard'
@@ -242,7 +238,6 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   const handleFmxSync = async (type) => {
-    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
     if (!selectedProject?.fmx_credentials) return;
     setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);

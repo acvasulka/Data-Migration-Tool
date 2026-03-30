@@ -146,8 +146,6 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
     });
     if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
-    console.log('FMX post-options response:', data);
-
     const customFields = (data.customFields || [])
       .filter(cf => cf.key && cf.label)
       .map(cf => ({
@@ -165,7 +163,6 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       maximumLength: sf.maximumLength || null,
     }));
 
-    console.log('Custom fields found:', customFields);
     return { customFields, systemFields };
   } catch {
     return { customFields: [], systemFields: [] };
@@ -198,8 +195,6 @@ export async function fetchFmxModules(siteUrl, email, password) {
     });
     if (!res.ok) return defaults;
     const data = await res.json();
-    console.log('FMX organization response:', data);
-
     const modules = { ...defaults };
 
     // Work request modules — data.workRequestSettings is an array
@@ -235,8 +230,6 @@ export async function fetchFmxModules(siteUrl, email, password) {
 
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
-  console.log('FMX sync triggered for:', schemaType);
-  console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
     return { customFields: [], systemFields: [], fromCache: false };
   }

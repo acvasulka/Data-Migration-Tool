@@ -93,7 +93,6 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     }
   });
 
-  console.warn('Payload:', JSON.stringify(payload));
   return payload;
 }
 
