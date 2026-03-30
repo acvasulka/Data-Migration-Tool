@@ -41,15 +41,18 @@ function coerceCustomFieldValue(value, fieldType) {
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
 export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null) {
   const baseType = getBaseSchemaType(schemaType);
-  const fieldMap = fieldMapOverride || FMX_FIELD_MAP[baseType] || {};
+  const fieldMap = (fieldMapOverride && Object.keys(fieldMapOverride).length > 0)
+    ? fieldMapOverride
+    : (FMX_FIELD_MAP[baseType] || {});
   const payload = {};
   const customFields = [];
   const droppedFields = [];
 
   // Build a set of lookup field names so we don't report them as "dropped"
-  const lookupFieldNames = new Set(
-    Object.keys(lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[baseType] || {})
-  );
+  const effectiveLookups = (lookupFieldsOverride && Object.keys(lookupFieldsOverride).length > 0)
+    ? lookupFieldsOverride
+    : (FMX_ID_LOOKUP_FIELDS[baseType] || {});
+  const lookupFieldNames = new Set(Object.keys(effectiveLookups));
 
   Object.entries(row).forEach(([fieldName, value]) => {
     if (value === null || value === undefined || value === '') return;
@@ -119,7 +122,7 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   }
 
   // Resolve ID lookup fields (Building → buildingID, etc.)
-  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[baseType] || {};
+  const lookups = effectiveLookups;
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
     const value = row[fmxField];
     if (!value) return;
@@ -210,7 +213,9 @@ function matchDepLookup(value, depLookup) {
 // If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
 // and only falls back to individual API calls for cache misses.
 export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
-  const lookups = lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
+  const lookups = (lookupFieldsOverride && Object.keys(lookupFieldsOverride).length > 0)
+    ? lookupFieldsOverride
+    : (FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {});
   const idCache = {};
   const unresolved = [];
 

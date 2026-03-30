@@ -336,7 +336,21 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
         isRequired: false,
         isPermitted: true,
       }));
-    const systemFields = [...postOpts.systemFields, ...syntheticFields];
+    // Also add enrichment fields that have a lookup but aren't in post-options systemFields.
+    // This ensures lookup fields like Building (buildingID) always appear as mappable fields.
+    const lookupSyntheticFields = Object.entries(enrichments)
+      .filter(([key, enrich]) =>
+        enrich.lookup &&
+        !existingSystemFieldKeys.has(key) &&
+        !syntheticFields.find(s => s.key === key)
+      )
+      .map(([key, enrich]) => ({
+        key,
+        label: enrich.label || key,
+        isRequired: false,
+        isPermitted: true,
+      }));
+    const systemFields = [...postOpts.systemFields, ...syntheticFields, ...lookupSyntheticFields];
 
     // Merge custom fields: /post-options is the authoritative source (has full metadata: id via cf.key,
     // label, fieldType, options, allowMultipleSelections, etc.). /get-options only has a name map and
