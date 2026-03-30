@@ -112,6 +112,15 @@ export const FMX_API_STANDARD_FIELDS = {
     { name: 'On Behalf Of', apiKey: null, required: false, type: 'string' },       // ID lookup → onBehalfOfUserID
     { name: 'Equipment Items', apiKey: null, required: false, type: 'string' },    // Array ID lookup → equipmentItemIDs
     { name: 'Due Date', apiKey: 'dueDate', required: false, type: 'date' },
+    { name: 'Latitude', apiKey: 'latitude', required: false, type: 'number' },
+    { name: 'Longitude', apiKey: 'longitude', required: false, type: 'number' },
+    { name: 'Parent Request', apiKey: null, required: false, type: 'string' },    // ID lookup → parentRequestID
+    { name: 'Child Requests', apiKey: null, required: false, type: 'string' },    // Array ID lookup → childRequestIDs
+    { name: 'Blocked By', apiKey: null, required: false, type: 'string' },        // Array ID lookup → blockedByRequestIDs
+    { name: 'Blocking', apiKey: null, required: false, type: 'string' },          // Array ID lookup → blockingRequestIDs
+    { name: 'Scheduled Time Block', apiKey: 'scheduledTimeBlock', required: false, type: 'string' },
+    { name: 'Following Users', apiKey: null, required: false, type: 'string' },   // Array ID lookup → followingUserIDs
+    { name: 'Signature', apiKey: 'signature', required: false, type: 'string' },
     { name: 'Assigned Users', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
     { name: 'Priority Level', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
   ],

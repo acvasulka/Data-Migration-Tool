@@ -143,6 +143,10 @@ const FMX_FIELD_MAP = {
     'Name':                       'name',
     'Other Location':             'otherLocation',
     'Due Date':                   'dueDate',
+    'Latitude':                   'latitude',
+    'Longitude':                  'longitude',
+    'Scheduled Time Block':       'scheduledTimeBlock',
+    'Signature':                  'signature',
   },
   'Schedule Request': {
     'Name':                       'name',
@@ -198,6 +202,11 @@ const FMX_ID_LOOKUP_FIELDS = {
     'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          nameField: 'tag',  isArray: true },
     'On Behalf Of':      { endpoint: '/v1/users',           idField: 'onBehalfOfUserID',          nameField: 'name' },
     'Assigned Users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',           nameField: 'name', isArray: true },
+    'Parent Request':    { endpoint: '/v1/maintenance-requests', idField: 'parentRequestID',      nameField: 'name' },
+    'Child Requests':    { endpoint: '/v1/maintenance-requests', idField: 'childRequestIDs',      nameField: 'name', isArray: true },
+    'Blocked By':        { endpoint: '/v1/maintenance-requests', idField: 'blockedByRequestIDs',  nameField: 'name', isArray: true },
+    'Blocking':          { endpoint: '/v1/maintenance-requests', idField: 'blockingRequestIDs',   nameField: 'name', isArray: true },
+    'Following Users':   { endpoint: '/v1/users',           idField: 'followingUserIDs',          nameField: 'name', isArray: true },
   },
   'Schedule Request': {
     'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               nameField: 'name', isArray: true },

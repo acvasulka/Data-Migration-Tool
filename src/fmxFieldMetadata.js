@@ -133,9 +133,18 @@ const FMX_FIELD_ENRICHMENTS = {
     requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
     locationResourceID:{ label: 'Location', lookup: { endpoint: '/v1/resources', searchParam: 'search' } },
     otherLocation:     { label: 'Other Location' },
+    latitude:          { label: 'Latitude', type: 'number' },
+    longitude:         { label: 'Longitude', type: 'number' },
     onBehalfOfUserID:  { label: 'On Behalf Of', lookup: { endpoint: '/v1/users', searchParam: 'search' } },
     equipmentItemIDs:  { label: 'Equipment Items', lookup: { endpoint: '/v1/equipment', searchParam: 'search', isArray: true } },
     dueDate:           { label: 'Due Date', type: 'date' },
+    parentRequestID:   { label: 'Parent Request', lookup: { endpoint: '/v1/maintenance-requests', searchParam: 'search' } },
+    childRequestIDs:   { label: 'Child Requests', lookup: { endpoint: '/v1/maintenance-requests', searchParam: 'search', isArray: true } },
+    blockedByRequestIDs: { label: 'Blocked By', lookup: { endpoint: '/v1/maintenance-requests', searchParam: 'search', isArray: true } },
+    blockingRequestIDs:  { label: 'Blocking', lookup: { endpoint: '/v1/maintenance-requests', searchParam: 'search', isArray: true } },
+    scheduledTimeBlock:  { label: 'Scheduled Time Block' },
+    followingUserIDs:  { label: 'Following Users', lookup: { endpoint: '/v1/users', searchParam: 'search', isArray: true } },
+    signature:         { label: 'Signature' },
   },
 
   'Schedule Request': {
@@ -192,6 +201,7 @@ const CROSS_SHEET_TO_DEP_KEY = {
   'Inventory Type':  'inventory-types',
   'Inventory':       'inventory',
   'User Type':       'user-types',
+  'Resource Type':   'resource-types',
 };
 
 // --- Builder ---
