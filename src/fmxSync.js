@@ -120,7 +120,7 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       .map(cf => ({
         id: cf.key,
         name: cf.label,
-        fieldType: cf.fieldTypeName,
+        fieldType: cf.fieldTypeName || cf.fieldType || 'Text',
         isRequired: cf.isRequired || false,
         options: cf.options || [],
         allowMultipleSelections: cf.allowMultipleSelections || false,
@@ -158,18 +158,15 @@ async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
     if (!res.ok) return { customFields: [] };
     const data = await res.json();
 
-    console.log('[FMX get-options] raw response for', schemaType, '→ keys:', Object.keys(data), 'customFields sample:', JSON.stringify((data.customFields || []).slice(0, 2)));
-
-    const customFields = (data.customFields || [])
-      .filter(cf => cf.key || cf.id || cf.customFieldID)
-      .map(cf => ({
-        id: cf.key || cf.id || cf.customFieldID,
-        name: cf.label || cf.name || cf.displayName || `Custom Field ${cf.key || cf.id}`,
-        fieldType: cf.fieldTypeName || cf.fieldType || 'Text',
-        isRequired: cf.isRequired || false,
-      }));
-
-    console.log('[FMX get-options] parsed', customFields.length, 'custom fields');
+    // get-options returns customFields as map<id, name>, not an array
+    const cfMap = (data.customFields && typeof data.customFields === 'object' && !Array.isArray(data.customFields))
+      ? data.customFields : {};
+    const customFields = Object.entries(cfMap).map(([id, name]) => ({
+      id: parseInt(id, 10),
+      name: String(name),
+      fieldType: 'Text',
+      isRequired: false,
+    }));
 
     return { customFields, raw: data };
   } catch (e) {
@@ -246,7 +243,7 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     const age = await getCacheAge(projectId, schemaType);
     if (age < 24) {
       const cached = await getFmxReferenceCache(projectId, schemaType);
-      if (cached?.extra?.customFields) {
+      if (cached?.extra?.customFields?.length > 0) {
         const customFields = cached.extra.customFields.map(cf => ({
           id: cf.id,
           name: cf.name,
@@ -276,28 +273,14 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
 
     const { systemFields } = postOpts;
 
-    // Merge custom fields: use /get-options as base (has actual IDs needed for POST payload),
-    // but enrich each field with richer metadata from /post-options (options, allowMultipleSelections, etc.)
-    // that /get-options doesn't return. Fall back to /post-options entirely if /get-options returned nothing.
-    let customFields;
-    if (getOpts.customFields.length > 0) {
-      const postById = {};
-      for (const cf of postOpts.customFields) postById[cf.id] = cf;
-      customFields = getOpts.customFields.map(cf => {
-        const post = postById[cf.id];
-        if (!post) return cf;
-        return {
-          ...cf,
-          options: post.options || cf.options || [],
-          allowMultipleSelections: post.allowMultipleSelections || cf.allowMultipleSelections || false,
-          allowOtherOption: post.allowOtherOption || cf.allowOtherOption || false,
-          description: post.description || cf.description || '',
-          defaults: post.defaults || cf.defaults || [],
-        };
-      });
-    } else {
-      customFields = postOpts.customFields;
-    }
+    // Merge custom fields: /post-options is the authoritative source (has full metadata: id via cf.key,
+    // label, fieldType, options, allowMultipleSelections, etc.). /get-options only has a name map and
+    // supplements if it contains fields that post-options missed.
+    const postFields = postOpts.customFields;
+    const customFields = [
+      ...postFields,
+      ...getOpts.customFields.filter(cf => !postFields.find(p => p.id === cf.id)),
+    ];
 
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
