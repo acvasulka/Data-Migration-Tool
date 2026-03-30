@@ -1,6 +1,9 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
-import { fmxFetch } from './apiClient';
+import { fmxFetch, claudeFetch, parseClaudeText } from './apiClient';
 import { resolveEndpoint, resolvePostOptionsEndpoint, resolveGetOptionsEndpoint } from './fmxEndpoints';
+import { FMX_FIELD_TYPE_MAP } from './fmxFieldTypes';
+import { FMX_FIELD_ENRICHMENTS } from './fmxFieldMetadata';
+import { getBaseSchemaType } from './schemas';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -229,6 +232,54 @@ export async function fetchFmxModules(siteUrl, email, password) {
   }
 }
 
+// Infer custom field types using rule-based heuristics and Claude AI as a fallback.
+// Fields that already have a recognized type, have options (dropdowns), or are checkbox-like
+// are resolved without calling Claude. The remainder are batched into one Claude request.
+async function inferCustomFieldTypes(customFields) {
+  const validTypes = new Set(Object.keys(FMX_FIELD_TYPE_MAP));
+
+  const result = customFields.map(cf => {
+    // Already a recognized type — keep it
+    if (validTypes.has(cf.fieldType)) return { ...cf };
+    // Has selectable options or multi-select → DropDownList
+    if (cf.options?.length > 0 || cf.allowMultipleSelections) return { ...cf, fieldType: 'DropDownList' };
+    // Default to Text; AI will override below
+    return { ...cf, fieldType: 'Text' };
+  });
+
+  // Collect fields that fell through to Text and aren't obviously text
+  const needsAI = result.filter((cf, i) => cf.fieldType === 'Text' && !customFields[i].options?.length);
+  if (needsAI.length === 0) return result;
+
+  try {
+    const fieldList = needsAI.map(cf => `"${cf.name}"`).join(', ');
+    const typeList = Object.entries(FMX_FIELD_TYPE_MAP)
+      .map(([k, v]) => `${k}: ${v.label}`)
+      .join(', ');
+
+    const aiData = await claudeFetch({
+      max_tokens: 512,
+      system: 'You are a data field classifier. Respond ONLY with a valid JSON object, no markdown, no explanation.',
+      messages: [{
+        role: 'user',
+        content: `Given these FMX custom field names: ${fieldList}\n\nClassify each into one of these types: ${typeList}\n\nDefault to "Text" if unsure. Respond with JSON: { "Field Name": "TypeKey", ... }`,
+      }],
+    });
+
+    const text = parseClaudeText(aiData);
+    const suggestions = JSON.parse(text);
+    for (const cf of result) {
+      if (cf.fieldType === 'Text' && suggestions[cf.name] && validTypes.has(suggestions[cf.name])) {
+        cf.fieldType = suggestions[cf.name];
+      }
+    }
+  } catch (e) {
+    console.warn('[inferCustomFieldTypes] AI inference failed, defaulting to Text:', e);
+  }
+
+  return result;
+}
+
 // Main sync entry point — takes full project object and schemaType string
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
@@ -271,16 +322,33 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
       fetchGetOptions(siteUrl, email, password, schemaType, modules),
     ]);
 
-    const { systemFields } = postOpts;
+    // Supplement systemFields with any fields that appear in get-options sortKeys but are absent
+    // from post-options (e.g. Equipment lifespan fields like estimatedEndOfLife).
+    const sortKeys = getOpts.raw?.sortKeys || {};
+    const baseType = getBaseSchemaType(schemaType);
+    const enrichments = FMX_FIELD_ENRICHMENTS[baseType] || {};
+    const existingSystemFieldKeys = new Set(postOpts.systemFields.map(sf => sf.key));
+    const syntheticFields = Object.keys(sortKeys)
+      .filter(k => enrichments[k] && !existingSystemFieldKeys.has(k))
+      .map(k => ({
+        key: k,
+        label: enrichments[k].label || sortKeys[k],
+        isRequired: false,
+        isPermitted: true,
+      }));
+    const systemFields = [...postOpts.systemFields, ...syntheticFields];
 
     // Merge custom fields: /post-options is the authoritative source (has full metadata: id via cf.key,
     // label, fieldType, options, allowMultipleSelections, etc.). /get-options only has a name map and
     // supplements if it contains fields that post-options missed.
     const postFields = postOpts.customFields;
-    const customFields = [
+    const mergedCustomFields = [
       ...postFields,
       ...getOpts.customFields.filter(cf => !postFields.find(p => p.id === cf.id)),
     ];
+
+    // Infer/assign field types via rules + AI
+    const customFields = await inferCustomFieldTypes(mergedCustomFields);
 
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
