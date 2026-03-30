@@ -276,11 +276,28 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
 
     const { systemFields } = postOpts;
 
-    // Merge custom fields: prefer /get-options (has actual IDs needed for POST payload),
-    // fall back to /post-options if /get-options returned nothing.
-    const customFields = getOpts.customFields.length > 0
-      ? getOpts.customFields
-      : postOpts.customFields;
+    // Merge custom fields: use /get-options as base (has actual IDs needed for POST payload),
+    // but enrich each field with richer metadata from /post-options (options, allowMultipleSelections, etc.)
+    // that /get-options doesn't return. Fall back to /post-options entirely if /get-options returned nothing.
+    let customFields;
+    if (getOpts.customFields.length > 0) {
+      const postById = {};
+      for (const cf of postOpts.customFields) postById[cf.id] = cf;
+      customFields = getOpts.customFields.map(cf => {
+        const post = postById[cf.id];
+        if (!post) return cf;
+        return {
+          ...cf,
+          options: post.options || cf.options || [],
+          allowMultipleSelections: post.allowMultipleSelections || cf.allowMultipleSelections || false,
+          allowOtherOption: post.allowOtherOption || cf.allowOtherOption || false,
+          description: post.description || cf.description || '',
+          defaults: post.defaults || cf.defaults || [],
+        };
+      });
+    } else {
+      customFields = postOpts.customFields;
+    }
 
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
@@ -304,6 +321,7 @@ export const DEPENDENCY_TYPES = [
   { key: 'inventory',       endpoint: '/v1/inventory',        label: 'Inventory Names',       nameField: 'name' },
   { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name' },
   { key: 'user-types',      endpoint: '/v1/user-types',       label: 'User Types',            nameField: 'name' },
+  { key: 'resource-types', endpoint: '/v1/resource-types',   label: 'Resource Types',        nameField: 'name' },
 ];
 
 // Generic paginated fetcher — collects all pages from an FMX list endpoint.
@@ -339,7 +357,7 @@ async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,na
 // null = not in map = fetch all (safe default for unknown types).
 const SCHEMA_DEP_KEYS = {
   'Building':               [],
-  'Resource':               ['buildings'],
+  'Resource':               ['buildings', 'resource-types'],
   'User':                   ['buildings', 'user-types'],
   'Equipment Type':         [],
   'Equipment':              ['buildings', 'equipment-types'],

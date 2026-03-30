@@ -44,6 +44,12 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   const fieldMap = fieldMapOverride || FMX_FIELD_MAP[baseType] || {};
   const payload = {};
   const customFields = [];
+  const droppedFields = [];
+
+  // Build a set of lookup field names so we don't report them as "dropped"
+  const lookupFieldNames = new Set(
+    Object.keys(lookupFieldsOverride || FMX_ID_LOOKUP_FIELDS[baseType] || {})
+  );
 
   Object.entries(row).forEach(([fieldName, value]) => {
     if (value === null || value === undefined || value === '') return;
@@ -92,8 +98,21 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
 
     // Standard field
     const apiKey = fieldMap[fieldName];
-    if (apiKey) payload[apiKey] = value;
+    if (apiKey) {
+      payload[apiKey] = value;
+      return;
+    }
+
+    // If it's a lookup field, it'll be handled below — don't flag as dropped
+    if (lookupFieldNames.has(fieldName)) return;
+
+    // Field matched no path — track for logging
+    droppedFields.push(fieldName);
   });
+
+  if (droppedFields.length > 0) {
+    console.warn(`[FMX Transform] ${droppedFields.length} unmapped field(s) for ${baseType}:`, droppedFields);
+  }
 
   if (customFields.length > 0) {
     payload.customFields = customFields;
@@ -107,6 +126,8 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     const cacheKey = `${fmxField}:${value}`;
     if (idCache[cacheKey]) {
       payload[lookup.idField] = lookup.isArray ? [idCache[cacheKey]] : idCache[cacheKey];
+    } else {
+      console.warn(`[FMX ID Resolve] No match for "${fmxField}": "${value}" → ${lookup.idField} will be missing from payload`);
     }
   });
 
@@ -160,7 +181,7 @@ const ENDPOINT_TO_DEP_KEY = {
   '/v1/inventory-types':  'inventory-types',
   '/v1/inventory':        'inventory',
   '/v1/request-types':    'request-types',
-  '/v1/resource-types':   'resources',
+  '/v1/resource-types':   'resource-types',
   '/v1/user-types':       'user-types',
 };
 
