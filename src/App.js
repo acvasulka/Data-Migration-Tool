@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
 import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
+import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
 import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
+import { claudeFetch, parseClaudeText } from "./apiClient";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -201,11 +203,18 @@ export default function App() {
 
   // Use API-driven field list when credentials are present and sync has completed
   const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
-  const baseFields = schemaType
-    ? (hasApiFields && FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
-        ? FMX_API_STANDARD_FIELDS[getBaseSchemaType(schemaType)]
-        : (schema?.fields || []))
-    : [];
+  const baseType = schemaType ? getBaseSchemaType(schemaType) : null;
+  const baseFields = useMemo(() => {
+    if (!schemaType) return [];
+    // Dynamic: merge live systemFields from /post-options with enrichment metadata
+    if (hasApiFields && fmxSyncData.systemFields?.length && hasEnrichments(baseType)) {
+      const dynamic = buildFieldDefinitions(baseType, fmxSyncData.systemFields);
+      if (dynamic) return dynamic;
+    }
+    // Fallback: hardcoded field schema
+    if (hasApiFields && FMX_API_STANDARD_FIELDS[baseType]) return FMX_API_STANDARD_FIELDS[baseType];
+    return schema?.fields || [];
+  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields, schema]);
 
   const allFields = schemaType ? [
     ...baseFields,
@@ -219,7 +228,7 @@ export default function App() {
     ]),
     // FMX custom fields from live sync (always appended; empty when no credentials)
     ...(fmxSyncData.customFields || []).map(cf => ({
-      name: cf.name, required: false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
+      name: cf.name, required: cf.isRequired || false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
       isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
     })),
   ] : [];
@@ -301,13 +310,10 @@ export default function App() {
     const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
-        fetch("/api/claude", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 1000,
-            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-          })
-        }).then(r => r.json()).catch(() => null),
+        claudeFetch({
+          max_tokens: 1000,
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+        }).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
         getSavedRulesForSchema(schemaType),
       ]);
@@ -315,7 +321,7 @@ export default function App() {
       // Parse AI result
       let aiResult = {};
       if (aiRes) {
-        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        const clean = parseClaudeText(aiRes) || "{}";
         try { aiResult = JSON.parse(clean); } catch {}
       }
 
@@ -684,6 +690,9 @@ export default function App() {
             onViewImport={handleViewFromWizard}
             history={history}
             fmxModules={selectedProject?.fmx_modules}
+            cardSettings={selectedProject?.card_settings || {}}
+            projectId={selectedProject?.id}
+            onProjectUpdated={(u) => setSelectedProject(u)}
           />
         )}
 
@@ -795,6 +804,7 @@ export default function App() {
                 userEmail={user?.email}
                 customFieldIdMap={fmxCustomFieldIdMap}
                 customFieldMetadata={fmxSyncData?.customFields || []}
+                systemFieldMetadata={fmxSyncData?.systemFields || []}
                 fileInfo={fileInfo}
               />
             )}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { C } from "../theme";
+import { callClaude } from "../claudeClient";
 
 const NAVY = '#041662';
 const ANIM = `
@@ -34,40 +35,58 @@ function collectMismatches(rows, cellErrors, allFields, targetHeader) {
   return result;
 }
 
-// ── Claude suggestion call ─────────────────────────────────────────────────
+// ── Batched Claude suggestion call ────────────────────────────────────────
 
-async function fetchSuggestions(fieldLabel, unrecognizedVals, validNames) {
-  if (!unrecognizedVals.length) return {};
-  // Cap valid list at 200 to keep prompt manageable
-  const cappedValid = validNames.slice(0, 200);
-  const prompt = `You are a data migration assistant. Match unrecognized values to the correct FMX names.
+async function fetchAllSuggestions(mismatches, allFields, depCacheMap) {
+  // Build a combined prompt for all headers in one API call
+  const sections = [];
+  const headerOrder = [];
+  for (const [header, valMap] of Object.entries(mismatches)) {
+    const crossSheet = getCrossSheet(header, allFields);
+    const validNames = (depCacheMap?.[crossSheet] ?? []).slice(0, 200);
+    const unrecognized = Object.keys(valMap);
+    if (!unrecognized.length) continue;
+    headerOrder.push(header);
+    sections.push(`Field: "${crossSheet || header}"
+Unrecognized: ${JSON.stringify(unrecognized)}
+Valid names: ${JSON.stringify(validNames)}`);
+  }
 
-Field type: "${fieldLabel}"
-Unrecognized values: ${JSON.stringify(unrecognizedVals)}
-Valid FMX names: ${JSON.stringify(cappedValid)}
+  if (!sections.length) return {};
+
+  const prompt = `You are a data migration assistant. Match unrecognized values to the correct FMX names for multiple fields.
+
+${sections.join('\n\n')}
 
 Rules:
 - Return ONLY a valid JSON object — no explanation, no markdown fences.
-- Keys are the unrecognized values exactly as provided.
-- Values are the single best-matching valid FMX name, or null if no confident match exists.
+- Top-level keys are the field names exactly as shown in the "Field:" labels above.
+- Each value is an object where keys are unrecognized values and values are the single best-matching valid name, or null if no confident match.
 - Use null when similarity is low or ambiguous.
 
-Example: {"Main Bldg": "Main Building", "Unknown-X": null}`;
+Example: {"Building": {"Main Bldg": "Main Building", "Unknown-X": null}, "Equipment Type": {"HVAC Unit": "HVAC"}}`;
 
-  const res = await fetch('/api/claude', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+  // Scale max_tokens based on number of values to match
+  const totalValues = Object.values(mismatches).reduce((sum, vm) => sum + Object.keys(vm).length, 0);
+  const maxTokens = Math.min(Math.max(500, totalValues * 50), 4000);
+
+  const data = await callClaude({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: prompt }],
   });
-  if (!res.ok) throw new Error(`Claude API error ${res.status}`);
-  const data = await res.json();
   const text = data?.content?.[0]?.text ?? '{}';
-  try { return JSON.parse(text); }
-  catch { return {}; }
+  try {
+    const parsed = JSON.parse(text);
+    // Remap from crossSheet labels back to header names
+    const result = {};
+    for (const header of headerOrder) {
+      const crossSheet = getCrossSheet(header, allFields);
+      const label = crossSheet || header;
+      result[header] = parsed[label] ?? {};
+    }
+    return result;
+  } catch { return {}; }
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -166,7 +185,7 @@ function SuggestionRow({ item, validNames, onChange }) {
 export default function DepResolveModal({ targetHeader, rows, cellErrors, allFields, depCacheMap, onApply, onClose }) {
   // items: array of { header, crossSheet, sourceVal, occurrences, suggested, overrideVal, accepted }
   const [items, setItems] = useState([]);
-  const [loadingHeaders, setLoadingHeaders] = useState(new Set());
+  const [loading, setLoading] = useState(false);
   const [aiError, setAiError] = useState(null);
 
   // Collect mismatches once on mount — snapshot only, intentionally not reactive
@@ -186,34 +205,29 @@ export default function DepResolveModal({ targetHeader, rows, cellErrors, allFie
     setItems(initial);
   }, []); // intentional mount-only
 
-  // Fetch AI suggestions per affected header — runs once on mount
+  // Fetch AI suggestions — single batched call for all headers
   useEffect(() => {
     const affectedHeaders = Object.keys(mismatches);
     if (!affectedHeaders.length) return;
 
-    setLoadingHeaders(new Set(affectedHeaders));
+    setLoading(true);
 
     (async () => {
-      for (const header of affectedHeaders) {
-        const crossSheet = getCrossSheet(header, allFields);
-        const validNames = depCacheMap?.[crossSheet] ?? [];
-        const unrecognized = Object.keys(mismatches[header]);
-        try {
-          const suggestions = await fetchSuggestions(crossSheet || header, unrecognized, validNames);
-          setItems(prev => prev.map(item =>
-            item.header === header
-              ? {
-                  ...item,
-                  suggested: suggestions[item.sourceVal] ?? null,
-                  accepted: suggestions[item.sourceVal] ? true : null,
-                }
-              : item
-          ));
-        } catch (e) {
-          setAiError(`AI suggestion failed for "${crossSheet}": ${e.message}`);
-        } finally {
-          setLoadingHeaders(prev => { const s = new Set(prev); s.delete(header); return s; });
-        }
+      try {
+        const allSuggestions = await fetchAllSuggestions(mismatches, allFields, depCacheMap);
+        setItems(prev => prev.map(item => {
+          const headerSuggestions = allSuggestions[item.header] ?? {};
+          const suggested = headerSuggestions[item.sourceVal] ?? null;
+          return {
+            ...item,
+            suggested,
+            accepted: suggested ? true : null,
+          };
+        }));
+      } catch (e) {
+        setAiError(e.status ? e.message : `AI suggestion failed: ${e.message}`);
+      } finally {
+        setLoading(false);
       }
     })();
   }, []); // intentional mount-only
@@ -264,7 +278,6 @@ export default function DepResolveModal({ targetHeader, rows, cellErrors, allFie
 
   const acceptedCount = items.filter(i => i.accepted === true).length;
   const affectedHeaders = Object.keys(grouped);
-  const isLoadingAny = loadingHeaders.size > 0;
 
   const modalTitle = targetHeader
     ? `Fix Dependency Issues — ${getCrossSheet(targetHeader, allFields) ?? targetHeader}`
@@ -310,7 +323,7 @@ export default function DepResolveModal({ targetHeader, rows, cellErrors, allFie
               onClick={() => rejectAll()}
               style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.errBorder}`, background: C.errBg, color: C.errText, cursor: 'pointer', fontWeight: 600 }}
             >✗ Reject All</button>
-            {isLoadingAny && (
+            {loading && (
               <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#6B7280' }}>
                 <Spinner /> Analyzing with AI…
               </span>
@@ -333,7 +346,6 @@ export default function DepResolveModal({ targetHeader, rows, cellErrors, allFie
             const crossSheet = getCrossSheet(header, allFields);
             const validNames = depCacheMap?.[crossSheet] ?? [];
             const headerItems = grouped[header];
-            const isLoading = loadingHeaders.has(header);
 
             return (
               <div key={header} style={{ marginTop: 20 }}>
@@ -348,7 +360,7 @@ export default function DepResolveModal({ targetHeader, rows, cellErrors, allFie
                     <span style={{ fontSize: 11, color: '#9CA3AF' }}>
                       ({headerItems.length} unique value{headerItems.length !== 1 ? 's' : ''})
                     </span>
-                    {isLoading && <Spinner />}
+                    {loading && <Spinner />}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button

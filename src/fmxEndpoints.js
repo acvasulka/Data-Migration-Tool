@@ -30,7 +30,18 @@ export function resolveEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
-// Maps FMX import schema field names → FMX API property names (non-lookup fields only)
+export function resolvePostOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/post-options` : null;
+}
+
+export function resolveGetOptionsEndpoint(schemaType, modules) {
+  const base = resolveEndpoint(schemaType, modules);
+  return base ? `${base}/get-options` : null;
+}
+
+// DEPRECATED: Use deriveFieldMap() from fmxFieldMetadata.js for dynamic field mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
 const FMX_FIELD_MAP = {
   'Building': {
     'Name':                       'name',
@@ -122,6 +133,8 @@ const FMX_FIELD_MAP = {
     'Is contact':                 'isContact',
     'Is supplier':                'isSupplier',
     'Can be a driver':            'canBeDriver',
+    'Password':                   'password',
+    'Require password change':    'requirePasswordChange',
     // User type is now an ID lookup (userTypeID)
     // Building access is now an ID lookup (accessibleBuildingIDs)
     // Assigned Equipment is now an ID lookup (assignedEquipmentItemIDs)
@@ -130,6 +143,10 @@ const FMX_FIELD_MAP = {
     'Name':                       'name',
     'Other Location':             'otherLocation',
     'Due Date':                   'dueDate',
+    'Latitude':                   'latitude',
+    'Longitude':                  'longitude',
+    'Scheduled Time Block':       'scheduledTimeBlock',
+    'Signature':                  'signature',
   },
   'Schedule Request': {
     'Name':                       'name',
@@ -154,51 +171,69 @@ const FMX_FIELD_MAP = {
   },
 };
 
-// Fields requiring an ID lookup before pushing
+// DEPRECATED: Use deriveLookupFields() from fmxFieldMetadata.js for dynamic lookup mapping.
+// Retained as fallback when systemFields from /post-options are unavailable.
+// nameField: which response property to match input values against (default: 'name').
 const FMX_ID_LOOKUP_FIELDS = {
   'Equipment': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
-    'Type':              { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID',           searchParam: 'search' },
-    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
-    'Parent Equipment':  { endpoint: '/v1/equipment',       idField: 'parentEquipmentID',         searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
+    'Type':              { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID',           nameField: 'name' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        nameField: 'name' },
+    'Parent Equipment':  { endpoint: '/v1/equipment',       idField: 'parentEquipmentID',         nameField: 'tag' },
   },
   'Inventory': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
-    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
-    'Type':              { endpoint: '/v1/inventory-types', idField: 'inventoryTypeID',           searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        nameField: 'name' },
+    'Type':              { endpoint: '/v1/inventory-types', idField: 'inventoryTypeID',           nameField: 'name' },
   },
   'Resource': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
-    'Resource type':     { endpoint: '/v1/resource-types',  idField: 'resourceTypeIDs',           searchParam: 'search', isArray: true },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
+    'Resource type':     { endpoint: '/v1/resource-types',  idField: 'resourceTypeIDs',           nameField: 'name', isArray: true },
   },
   'User': {
-    'Building access':   { endpoint: '/v1/buildings',       idField: 'accessibleBuildingIDs',     searchParam: 'search', isArray: true },
-    'User type':         { endpoint: '/v1/user-types',      idField: 'userTypeID',                searchParam: 'search' },
-    'Assigned Equipment':{ endpoint: '/v1/equipment',       idField: 'assignedEquipmentItemIDs',  searchParam: 'search', isArray: true },
+    'Building access':   { endpoint: '/v1/buildings',       idField: 'accessibleBuildingIDs',     nameField: 'name', isArray: true },
+    'User type':         { endpoint: '/v1/user-types',      idField: 'userTypeID',                nameField: 'name' },
+    'Assigned Equipment':{ endpoint: '/v1/equipment',       idField: 'assignedEquipmentItemIDs',  nameField: 'tag',  isArray: true },
   },
   'Work Request': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
-    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
-    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
-    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          searchParam: 'search', isArray: true },
-    'On Behalf Of':      { endpoint: '/v1/users',           idField: 'onBehalfOfUserID',          searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        nameField: 'name' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             nameField: 'name' },
+    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          nameField: 'tag',  isArray: true },
+    'On Behalf Of':      { endpoint: '/v1/users',           idField: 'onBehalfOfUserID',          nameField: 'name' },
+    'Assigned Users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',           nameField: 'name', isArray: true },
+    'Parent Request':    { endpoint: '/v1/maintenance-requests', idField: 'parentRequestID',      nameField: 'name' },
+    'Child Requests':    { endpoint: '/v1/maintenance-requests', idField: 'childRequestIDs',      nameField: 'name', isArray: true },
+    'Blocked By':        { endpoint: '/v1/maintenance-requests', idField: 'blockedByRequestIDs',  nameField: 'name', isArray: true },
+    'Blocking':          { endpoint: '/v1/maintenance-requests', idField: 'blockingRequestIDs',   nameField: 'name', isArray: true },
+    'Following Users':   { endpoint: '/v1/users',           idField: 'followingUserIDs',          nameField: 'name', isArray: true },
   },
   'Schedule Request': {
-    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               searchParam: 'search', isArray: true },
-    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
+    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               nameField: 'name', isArray: true },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             nameField: 'name' },
   },
   'Work Task': {
-    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               searchParam: 'search', isArray: true },
-    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        searchParam: 'search' },
-    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
-    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          searchParam: 'search', isArray: true },
-    'Assigned Users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',           searchParam: 'search', isArray: true },
+    'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               nameField: 'name', isArray: true },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        nameField: 'name' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             nameField: 'name' },
+    'Equipment Items':   { endpoint: '/v1/equipment',       idField: 'equipmentItemIDs',          nameField: 'tag',  isArray: true },
+    'Assigned Users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',           nameField: 'name', isArray: true },
   },
   'Transportation Request': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                searchParam: 'search' },
-    'Pickup Location':   { endpoint: '/v1/resources',       idField: 'pickupLocationResourceID',  searchParam: 'search' },
-    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             searchParam: 'search' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
+    'Pickup Location':   { endpoint: '/v1/resources',       idField: 'pickupLocationResourceID',  nameField: 'name' },
+    'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             nameField: 'name' },
   },
 };
 
-export { FMX_ENDPOINTS, FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS };
+// Assignment fields for Work Requests — these are separated from the main payload
+// and posted to /v1/{module}-requests/{id}/assignments after creation.
+const FMX_ASSIGNMENT_FIELDS = {
+  'Work Request': {
+    userField: 'Assigned Users',           // row field name containing user name(s)
+    userEndpoint: '/v1/users',             // endpoint to resolve user IDs
+    priorityField: 'Priority Level',       // row field name for priority
+  },
+};
+
+export { FMX_ENDPOINTS, FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS, FMX_ASSIGNMENT_FIELDS };

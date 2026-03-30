@@ -1,5 +1,5 @@
-// Standard FMX API fields per schema type — used when credentials are present.
-// These replace the hardcoded schemas.js fields for the push flow.
+// DEPRECATED: Use buildFieldDefinitions() from fmxFieldMetadata.js for dynamic field definitions.
+// Retained as fallback when systemFields from /post-options are unavailable.
 // Fields with apiKey: null are resolved via FMX_ID_LOOKUP_FIELDS in fmxEndpoints.js.
 
 export const FMX_API_STANDARD_FIELDS = {
@@ -112,6 +112,17 @@ export const FMX_API_STANDARD_FIELDS = {
     { name: 'On Behalf Of', apiKey: null, required: false, type: 'string' },       // ID lookup → onBehalfOfUserID
     { name: 'Equipment Items', apiKey: null, required: false, type: 'string' },    // Array ID lookup → equipmentItemIDs
     { name: 'Due Date', apiKey: 'dueDate', required: false, type: 'date' },
+    { name: 'Latitude', apiKey: 'latitude', required: false, type: 'number' },
+    { name: 'Longitude', apiKey: 'longitude', required: false, type: 'number' },
+    { name: 'Parent Request', apiKey: null, required: false, type: 'string' },    // ID lookup → parentRequestID
+    { name: 'Child Requests', apiKey: null, required: false, type: 'string' },    // Array ID lookup → childRequestIDs
+    { name: 'Blocked By', apiKey: null, required: false, type: 'string' },        // Array ID lookup → blockedByRequestIDs
+    { name: 'Blocking', apiKey: null, required: false, type: 'string' },          // Array ID lookup → blockingRequestIDs
+    { name: 'Scheduled Time Block', apiKey: 'scheduledTimeBlock', required: false, type: 'string' },
+    { name: 'Following Users', apiKey: null, required: false, type: 'string' },   // Array ID lookup → followingUserIDs
+    { name: 'Signature', apiKey: 'signature', required: false, type: 'string' },
+    { name: 'Assigned Users', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
+    { name: 'Priority Level', apiKey: null, required: false, type: 'string', group: 'Assignment' },  // Post-create assignment
   ],
   'Schedule Request': [
     { name: 'Name', apiKey: 'name', required: true, type: 'string' },
