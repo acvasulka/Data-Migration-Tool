@@ -61,6 +61,7 @@ export default function StepValidate({
   schemaType,
   depCacheMap,
   depAutoSyncing,
+  onCustomFieldTypeChange,
 }) {
   const [jumpIdx, setJumpIdx] = useState(-1);
   const [noMoreMsg, setNoMoreMsg] = useState(false);
@@ -530,6 +531,7 @@ export default function StepValidate({
         columnFilters={columnFilters}
         onColumnFilterChange={handleColumnFilterChange}
         colUniqueValues={colUniqueValues}
+        onCustomFieldTypeChange={onCustomFieldTypeChange}
       />
 
       {/* ── Pagination controls ── */}

@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { C } from "../theme";
-import { getFieldTypeLabel } from "../fmxFieldTypes";
+import { getFieldTypeLabel, FMX_FIELD_TYPE_MAP } from "../fmxFieldTypes";
 
 export default function StepMapFields({
   csv,
@@ -21,7 +22,9 @@ export default function StepMapFields({
   mappingSources,
   savedRules,
   fmxSyncData,
+  onCustomFieldTypeChange,
 }) {
+  const [hideEmptyUnmapped, setHideEmptyUnmapped] = useState(false);
   const getColPreview = col =>
     !csv || !col ? [] : [...new Set(csv.rows.map(r => r[col]).filter(v => v !== undefined))].slice(0, 20);
 
@@ -121,7 +124,19 @@ export default function StepMapFields({
                     <div style={{ fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.textDark }}>
                       {f.name}{f.required && <span style={{ color: C.orange }}> *</span>}
                       {f.crossSheet && <span style={{ fontSize: 10, color: C.blue, marginLeft: 5 }}>→{f.crossSheet}</span>}
-                      {getTypeLabel(f) && <span style={TYPE_LABEL_STYLE}>{getTypeLabel(f)}</span>}
+                      {f.isCustomField
+                        ? <select
+                            style={{ fontSize: 10, padding: '1px 4px', border: `1px solid ${C.border}`, borderRadius: 3, background: '#F9FAFB', color: '#6B7280', marginLeft: 6, cursor: 'pointer' }}
+                            value={f.fieldType || 'Text'}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => onCustomFieldTypeChange?.(f.customFieldId, e.target.value)}
+                          >
+                            {Object.entries(FMX_FIELD_TYPE_MAP).map(([key, { label }]) => (
+                              <option key={key} value={key}>{label}</option>
+                            ))}
+                          </select>
+                        : getTypeLabel(f) && <span style={TYPE_LABEL_STYLE}>{getTypeLabel(f)}</span>
+                      }
                     </div>
                     <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
@@ -242,29 +257,41 @@ export default function StepMapFields({
         ))}
 
       {/* Unmapped source columns */}
-      {unmappedHeaders.length > 0 && (
-        <div style={{ marginBottom: "1.5rem" }}>
-          <p style={{ fontSize: 11, fontStyle: "italic", color: C.textMid, margin: "0 0 8px" }}>Unmapped source columns</p>
-          <div style={{ background: C.bgPage, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-            {unmappedHeaders.map((h, i) => {
-              const sample = getSampleValue(h);
-              return (
-                <div key={h} style={{
-                  display: "flex", alignItems: "center", gap: 12,
-                  padding: "5px 12px", fontSize: 12, color: C.textMid,
-                  borderBottom: i < unmappedHeaders.length - 1 ? `1px solid ${C.border}` : "none",
-                  background: i % 2 === 0 ? C.bgPage : C.white,
-                }}>
-                  <span style={{ color: C.textDark, fontWeight: 500 }}>{h}</span>
-                  <span style={{ color: C.textLight, fontStyle: "italic" }}>
-                    {sample ? `e.g. "${sample}"` : "(no data)"}
-                  </span>
-                </div>
-              );
-            })}
+      {unmappedHeaders.length > 0 && (() => {
+        const emptyCount = unmappedHeaders.filter(h => !getSampleValue(h)).length;
+        const displayed = hideEmptyUnmapped ? unmappedHeaders.filter(h => getSampleValue(h) !== null) : unmappedHeaders;
+        return (
+          <div style={{ marginBottom: "1.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 8px" }}>
+              <p style={{ fontSize: 11, fontStyle: "italic", color: C.textMid, margin: 0 }}>Unmapped source columns</p>
+              {emptyCount > 0 && (
+                <label style={{ fontSize: 11, color: C.textLight, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                  <input type="checkbox" checked={hideEmptyUnmapped} onChange={e => setHideEmptyUnmapped(e.target.checked)} style={{ cursor: "pointer" }} />
+                  Hide empty ({emptyCount})
+                </label>
+              )}
+            </div>
+            <div style={{ background: C.bgPage, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+              {displayed.map((h, i) => {
+                const sample = getSampleValue(h);
+                return (
+                  <div key={h} style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    padding: "5px 12px", fontSize: 12, color: C.textMid,
+                    borderBottom: i < displayed.length - 1 ? `1px solid ${C.border}` : "none",
+                    background: i % 2 === 0 ? C.bgPage : C.white,
+                  }}>
+                    <span style={{ color: C.textDark, fontWeight: 500 }}>{h}</span>
+                    <span style={{ color: C.textLight, fontStyle: "italic" }}>
+                      {sample ? `e.g. "${sample}"` : "(no data)"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

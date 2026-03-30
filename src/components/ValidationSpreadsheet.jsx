@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../theme";
-import { getTooltipText } from "../fmxFieldTypes";
+import { getTooltipText, FMX_FIELD_TYPE_MAP } from "../fmxFieldTypes";
 
 export default function ValidationSpreadsheet({
   headers,
@@ -16,6 +16,7 @@ export default function ValidationSpreadsheet({
   columnFilters,         // { [col]: string[] } — active filters
   onColumnFilterChange,  // (col, values: string[]) => void
   colUniqueValues,       // { [col]: string[] } — unique values from full dataset
+  onCustomFieldTypeChange, // (customFieldId, newType) => void
 }) {
   const [editCell, setEditCell] = useState(null);
   const [editVal, setEditVal] = useState("");
@@ -240,6 +241,18 @@ export default function ValidationSpreadsheet({
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
                         {h}{f?.required && <span style={{ color: C.blue }}> *</span>}
                         {f?.isCustomField && <span style={{ fontSize: 8, color: '#C4B5FD', marginLeft: 4, verticalAlign: 'super' }}>CF</span>}
+                        {f?.isCustomField && (
+                          <select
+                            style={{ fontSize: 9, padding: '1px 3px', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 3, background: 'rgba(255,255,255,0.12)', color: C.white, cursor: 'pointer', marginLeft: 4 }}
+                            value={f.fieldType || 'Text'}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => { e.stopPropagation(); onCustomFieldTypeChange?.(f.customFieldId, e.target.value); }}
+                          >
+                            {Object.entries(FMX_FIELD_TYPE_MAP).map(([key, { label }]) => (
+                              <option key={key} value={key}>{label}</option>
+                            ))}
+                          </select>
+                        )}
                       </span>
                       {/* Dep error badge */}
                       {depCount > 0 && (

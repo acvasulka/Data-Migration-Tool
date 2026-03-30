@@ -5,7 +5,7 @@ import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache } from "./db";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import { claudeFetch, parseClaudeText } from "./apiClient";
@@ -265,6 +265,16 @@ export default function App() {
     'inventory':       'Inventory',
     'user-types':      'User Type',
   };
+
+  const handleCustomFieldTypeChange = useCallback(async (fieldId, newType) => {
+    const updated = (fmxSyncData.customFields || []).map(cf =>
+      cf.id === fieldId ? { ...cf, fieldType: newType } : cf
+    );
+    setFmxSyncData(prev => ({ ...prev, customFields: updated }));
+    if (selectedProject?.id && schemaType) {
+      await saveFmxReferenceCache(selectedProject.id, schemaType, updated, fmxSyncData.systemFields || []);
+    }
+  }, [fmxSyncData, selectedProject, schemaType]);
 
   const loadDepCacheMap = useCallback(async () => {
     if (!selectedProject?.id) return;
@@ -766,6 +776,7 @@ export default function App() {
                 mappingSources={mappingSources}
                 savedRules={savedRules}
                 fmxSyncData={fmxSyncData}
+                onCustomFieldTypeChange={handleCustomFieldTypeChange}
               />
             )}
 
@@ -785,6 +796,7 @@ export default function App() {
                 schemaType={schemaType}
                 depCacheMap={depCacheMap}
                 depAutoSyncing={depAutoSyncing}
+                onCustomFieldTypeChange={handleCustomFieldTypeChange}
               />
             )}
 
