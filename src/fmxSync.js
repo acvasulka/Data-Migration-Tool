@@ -1,4 +1,6 @@
-import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge } from './db';
+import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
+import { FMX_FIELD_ENRICHMENTS } from './fmxFieldMetadata';
+import { getBaseSchemaType } from './schemas';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -129,6 +131,80 @@ const POST_OPTIONS_ENDPOINTS = {
   'Transportation Request': '/v1/transportation-requests/post-options',
   'Accounting Account':     '/v1/accounting-accounts/post-options',
 };
+
+const GET_OPTIONS_ENDPOINTS = {
+  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests/get-options`,
+  'Schedule Request':       (m) => `/v1/${m?.scheduling || 'scheduling'}/requests/get-options`,
+  'Work Task':              (m) => `/v1/${m?.workTask || 'maintenance'}/tasks/get-options`,
+  'Transportation Request': '/v1/transportation-requests/get-options',
+};
+
+function resolveGetOptionsEndpoint(schemaType, modules) {
+  if (schemaType.startsWith('Work Request:'))
+    return `/v1/${schemaType.split(':')[1]}-requests/get-options`;
+  if (schemaType.startsWith('Schedule Request:'))
+    return `/v1/${schemaType.split(':')[1]}/requests/get-options`;
+  if (schemaType.startsWith('Work Task:'))
+    return `/v1/${schemaType.split(':')[1]}/tasks/get-options`;
+  const ep = GET_OPTIONS_ENDPOINTS[schemaType];
+  if (!ep) return null;
+  return typeof ep === 'function' ? ep(modules) : ep;
+}
+
+// Map GET OPTIONS response keys (camelCase) → dep cache keys (kebab-case)
+const GET_OPTS_DEP_PROPS = {
+  buildings:     'buildings',
+  requestTypes:  'request-types',
+  resources:     'resources',
+  equipment:     'equipment',
+  resourceTypes: 'resource-types',
+};
+
+async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
+  const endpoint = resolveGetOptionsEndpoint(schemaType, modules);
+  if (!endpoint) return { customFields: [], raw: null, depMaps: {} };
+
+  try {
+    const res = await fetch('/api/fmx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl, email, password,
+        endpoint,
+        method: 'GET', payload: null,
+      }),
+    });
+    if (!res.ok) return { customFields: [], raw: null, depMaps: {} };
+    const data = await res.json();
+    console.log('FMX get-options response:', data);
+
+    // Extract custom fields from id→name map
+    const cfMap = (data.customFields && typeof data.customFields === 'object' && !Array.isArray(data.customFields))
+      ? data.customFields : {};
+    const customFields = Object.entries(cfMap).map(([id, name]) => ({
+      id: parseInt(id, 10),
+      name: String(name),
+      fieldType: 'Text',
+      isRequired: false,
+    }));
+
+    // Extract dep maps (buildings, requestTypes, resources, etc.)
+    const depMaps = {};
+    for (const [prop, cacheKey] of Object.entries(GET_OPTS_DEP_PROPS)) {
+      const raw = data[prop];
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        depMaps[cacheKey] = Object.entries(raw)
+          .map(([id, name]) => ({ id: parseInt(id, 10), name: String(name) }))
+          .filter(item => item.id > 0);
+      }
+    }
+
+    return { customFields, raw: data, depMaps };
+  } catch (e) {
+    console.warn('[FMX get-options] fetch failed:', e);
+    return { customFields: [], raw: null, depMaps: {} };
+  }
+}
 
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
@@ -266,14 +342,70 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   const siteUrl = project.fmx_site_url;
 
   try {
-    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType, modules);
+    // Fetch both /post-options and /get-options in parallel
+    const [postOpts, getOpts] = await Promise.all([
+      fetchPostOptions(siteUrl, email, password, schemaType, modules),
+      fetchGetOptions(siteUrl, email, password, schemaType, modules),
+    ]);
 
-    if (projectId) {
-      await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
+    // Build synthetic fields from GET OPTIONS sortKeys + enrichments.
+    // Fields that appear in sortKeys AND have an enrichment entry become mappable
+    // system fields even if they're absent from post-options.
+    const sortKeys = getOpts.raw?.sortKeys || {};
+    const baseType = getBaseSchemaType(schemaType);
+    const enrichments = FMX_FIELD_ENRICHMENTS[baseType] || {};
+    const existingSystemFieldKeys = new Set(postOpts.systemFields.map(sf => sf.key));
+
+    // 1) SortKey-driven synthetic fields: keys in sortKeys that have a matching enrichment
+    const syntheticFields = Object.keys(sortKeys)
+      .filter(k => enrichments[k] && !existingSystemFieldKeys.has(k))
+      .map(k => ({
+        key: k,
+        label: enrichments[k].label || sortKeys[k],
+        isRequired: false,
+        isPermitted: true,
+      }));
+
+    // 2) Enrichment-driven synthetic fields: ALL enrichment entries not already covered.
+    //    This ensures non-lookup fields like dueDate and date/time fields always appear.
+    const syntheticKeys = new Set(syntheticFields.map(s => s.key));
+    const enrichmentSyntheticFields = Object.entries(enrichments)
+      .filter(([key, enrich]) =>
+        enrich.label &&
+        !existingSystemFieldKeys.has(key) &&
+        !syntheticKeys.has(key)
+      )
+      .map(([key, enrich]) => ({
+        key,
+        label: enrich.label,
+        isRequired: false,
+        isPermitted: true,
+      }));
+
+    const systemFields = [...postOpts.systemFields, ...syntheticFields, ...enrichmentSyntheticFields];
+
+    // Merge custom fields: post-options is authoritative, get-options supplements
+    const mergedCustomFields = [
+      ...postOpts.customFields,
+      ...getOpts.customFields.filter(cf => !postOpts.customFields.find(p => p.id === cf.id)),
+    ];
+
+    // Save dep maps from GET OPTIONS to dep cache
+    if (projectId && getOpts.depMaps) {
+      for (const [depKey, items] of Object.entries(getOpts.depMaps)) {
+        if (items.length > 0) {
+          await saveDependencyCache(projectId, depKey, items, items.length);
+        }
+      }
     }
 
-    return { customFields, systemFields, fromCache: false };
-  } catch {
+    if (projectId) {
+      await saveFmxReferenceCache(projectId, schemaType, mergedCustomFields, systemFields);
+    }
+
+    return { customFields: mergedCustomFields, systemFields, fromCache: false };
+  } catch (e) {
+    console.error('syncFmxDataForProject error:', e);
     return { customFields: [], systemFields: [], fromCache: false };
   }
 }
