@@ -50,19 +50,35 @@ export function buildMappedRows(rows, mapping, transformRules, allFields) {
   });
 }
 
-export function computeCellErrors(rows, allFields, importedData) {
+// depCacheMap: { [crossSheetType]: string[] } — live FMX names keyed by crossSheet label.
+// schemaType: the current import type (e.g. "Building", "Equipment") — its own type is excluded
+//             from dependency validation so a Building import doesn't flag Building fields.
+export function computeCellErrors(rows, allFields, schemaType, depCacheMap) {
+  // Strip module qualifier: "Work Request:maintenance" → "Work Request"
+  const skipCrossSheet = schemaType
+    ? (schemaType.indexOf(':') === -1 ? schemaType : schemaType.slice(0, schemaType.indexOf(':')))
+    : null;
+
   const cellMap = {};
   allFields.forEach(f => {
     rows.forEach((row, ri) => {
       const val = row[f.name] ?? "";
       const key = `${ri}-${f.name}`;
-      if (f.isCustomField) return; // custom fields are never required by the API
+      if (f.isCustomField) return;
       if (f.required && !val) { cellMap[key] = "error"; return; }
       if (!val) return;
       if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { cellMap[key] = "error"; return; }
       if (f.type === "date" && isNaN(Date.parse(val))) { cellMap[key] = "error"; return; }
       if (f.type === "number" && isNaN(Number(val))) { cellMap[key] = "error"; return; }
-      if (f.crossSheet && importedData[f.crossSheet] && !importedData[f.crossSheet].includes(val)) { cellMap[key] = "warning"; }
+      if (f.maximumLength && String(val).length > f.maximumLength) { cellMap[key] = "warning"; return; }
+      // Dependency error: crossSheet field whose value doesn't appear in FMX live cache.
+      // Skipped for the import's own entity type (e.g. Building import won't flag Building fields).
+      if (f.crossSheet && f.crossSheet !== skipCrossSheet) {
+        const validNames = depCacheMap?.[f.crossSheet];
+        if (validNames && validNames.length > 0 && !validNames.includes(val)) {
+          cellMap[key] = "dep_error";
+        }
+      }
     });
   });
   return cellMap;
@@ -74,9 +90,11 @@ export function toCSV(headers, rows) {
 }
 
 export function downloadCSV(filename, headers, rows) {
+  const blob = new Blob([toCSV(headers, rows)], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(toCSV(headers, rows));
-  a.download = filename; a.click();
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function suggestMapping(headers, fields) {

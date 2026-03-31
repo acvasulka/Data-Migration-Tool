@@ -3,6 +3,9 @@
 // enrichment layer that carries only what the API doesn't provide: field types,
 // UI groups, crossSheet relationships, lookup endpoints, and special handling.
 //
+// This replaces the fully-hardcoded FMX_API_STANDARD_FIELDS in fmxFieldSchema.js
+// and the FMX_FIELD_MAP / FMX_ID_LOOKUP_FIELDS in fmxEndpoints.js.
+//
 // Enrichment keys for synthetic fields must match GET OPTIONS sortKey names
 // so the synthetic field mechanism in syncFmxDataForProject picks them up.
 
@@ -189,9 +192,25 @@ const FMX_FIELD_ENRICHMENTS = {
     name: { label: 'Name' },
   },
 
+  // Inventory Type has no post-options endpoint in the current API but may appear.
   'Inventory Type': {
     name: { label: 'Name' },
   },
+};
+
+// --- Dependency cache key mapping ---
+// Maps crossSheet labels to the dependency cache keys used by DEPENDENCY_TYPES.
+const CROSS_SHEET_TO_DEP_KEY = {
+  'Building':        'buildings',
+  'Equipment Type':  'equipment-types',
+  'Equipment':       'equipment',
+  'Resource':        'resources',
+  'User':            'users',
+  'Request Type':    'request-types',
+  'Inventory Type':  'inventory-types',
+  'Inventory':       'inventory',
+  'User Type':       'user-types',
+  'Resource Type':   'resource-types',
 };
 
 // Which dep keys each schema base type needs for cross-field validation.
@@ -217,6 +236,109 @@ export function getDepKeysForSchema(schemaType) {
   const base = schemaType.indexOf(':') === -1 ? schemaType : schemaType.slice(0, schemaType.indexOf(':'));
   const keys = SCHEMA_DEP_KEYS[base];
   return Array.isArray(keys) ? keys : null;
+}
+
+// --- Builder ---
+
+/**
+ * Build field definitions by merging live systemFields from /post-options with
+ * static enrichments. Returns an array matching the shape used throughout the app:
+ *   { name, apiKey, required, type, crossSheet?, group?, maximumLength?,
+ *     lookupConfig?, isPermitted }
+ *
+ * @param {string} schemaType  Base schema type (no module qualifier)
+ * @param {Array}  systemFields  From /post-options: [{ key, label, isRequired, isPermitted, maximumLength }]
+ * @returns {Array} Field definitions
+ */
+export function buildFieldDefinitions(schemaType, systemFields) {
+  const enrichments = FMX_FIELD_ENRICHMENTS[schemaType];
+  if (!enrichments || !Array.isArray(systemFields) || systemFields.length === 0) return null;
+
+  const defs = [];
+
+  for (const sf of systemFields) {
+    if (sf.isPermitted === false) continue;
+
+    const enrich = enrichments[sf.key] || {};
+    const isLookup = !!enrich.lookup;
+
+    const def = {
+      name: enrich.label || sf.label,
+      apiKey: isLookup ? null : sf.key,
+      required: sf.isRequired || false,
+      type: enrich.type || 'string',
+    };
+
+    if (enrich.crossSheet) def.crossSheet = enrich.crossSheet;
+    if (enrich.group) def.group = enrich.group;
+    if (enrich.special) def.special = enrich.special;
+    if (sf.maximumLength) def.maximumLength = sf.maximumLength;
+
+    if (isLookup) {
+      def.lookupConfig = {
+        endpoint: enrich.lookup.endpoint,
+        idField: sf.key,
+        searchParam: enrich.lookup.searchParam,
+        isArray: enrich.lookup.isArray || false,
+      };
+    }
+
+    defs.push(def);
+  }
+
+  return defs;
+}
+
+/**
+ * Check whether enrichments exist for a given schema type.
+ */
+export function hasEnrichments(schemaType) {
+  return !!FMX_FIELD_ENRICHMENTS[schemaType];
+}
+
+// --- Derived maps (drop-in replacements for FMX_FIELD_MAP / FMX_ID_LOOKUP_FIELDS) ---
+
+/**
+ * Derive a { [fieldName]: apiKey } map from dynamic field definitions.
+ * Covers non-lookup fields only (where apiKey !== null).
+ */
+export function deriveFieldMap(fieldDefs) {
+  const map = {};
+  for (const f of fieldDefs) {
+    if (f.apiKey) map[f.name] = f.apiKey;
+  }
+  return map;
+}
+
+/**
+ * Derive a { [fieldName]: { endpoint, idField, searchParam, isArray } } map
+ * from dynamic field definitions. Covers lookup fields only.
+ */
+export function deriveLookupFields(fieldDefs) {
+  const map = {};
+  for (const f of fieldDefs) {
+    if (f.lookupConfig) map[f.name] = f.lookupConfig;
+  }
+  return map;
+}
+
+/**
+ * Derive dependency cache keys needed for a set of field definitions.
+ * Returns string[] of dep keys (e.g. ['buildings', 'equipment-types']).
+ */
+export function deriveDepKeys(fieldDefs) {
+  const keys = new Set();
+  for (const f of fieldDefs) {
+    if (f.crossSheet && CROSS_SHEET_TO_DEP_KEY[f.crossSheet]) {
+      keys.add(CROSS_SHEET_TO_DEP_KEY[f.crossSheet]);
+    }
+    if (f.lookupConfig) {
+      const depKey = Object.entries(CROSS_SHEET_TO_DEP_KEY)
+        .find(([, v]) => f.lookupConfig.endpoint.includes(`/v1/${v}`))?.[1];
+      if (depKey) keys.add(depKey);
+    }
+  }
+  return [...keys];
 }
 
 export { FMX_FIELD_ENRICHMENTS, SCHEMA_DEP_KEYS };
