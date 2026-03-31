@@ -152,6 +152,10 @@ const FMX_FIELD_MAP = {
     'Name':                       'name',
     'Other Resource':             'otherResource',
     'Is Private':                 'isPrivate',
+    'Event Time':                 'event-time',
+    'Reservation Time':           'reservation-time',
+    'Setup Time':                 'setup-duration',
+    'Teardown Time':              'teardown-duration',
   },
   'Work Task': {
     'Name':                       'name',
@@ -211,6 +215,7 @@ const FMX_ID_LOOKUP_FIELDS = {
   'Schedule Request': {
     'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               nameField: 'name', isArray: true },
     'Request Type':      { endpoint: '/v1/request-types',   idField: 'requestTypeID',             nameField: 'name' },
+    'Resources':         { endpoint: '/v1/resources',       idField: 'resourceQuantities',        nameField: 'name', isArray: true },
   },
   'Work Task': {
     'Buildings':         { endpoint: '/v1/buildings',       idField: 'buildingIDs',               nameField: 'name', isArray: true },

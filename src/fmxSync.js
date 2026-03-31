@@ -152,13 +152,22 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   }
 }
 
+// Map GET OPTIONS response keys (camelCase) → dep cache keys (kebab-case)
+const GET_OPTS_DEP_PROPS = {
+  buildings:     'buildings',
+  requestTypes:  'request-types',
+  resources:     'resources',
+  equipment:     'equipment',
+  resourceTypes: 'resource-types',
+};
+
 async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolveGetOptionsEndpoint(schemaType, modules);
-  if (!endpoint) return { customFields: [] };
+  if (!endpoint) return { customFields: [], raw: null, depMaps: {} };
 
   try {
     const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
-    if (!res.ok) return { customFields: [] };
+    if (!res.ok) return { customFields: [], raw: null, depMaps: {} };
     const data = await res.json();
 
     // get-options returns customFields as map<id, name>, not an array
@@ -171,10 +180,21 @@ async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
       isRequired: false,
     }));
 
-    return { customFields, raw: data };
+    // Extract dep maps (buildings, requestTypes, resources, etc.)
+    const depMaps = {};
+    for (const [prop, cacheKey] of Object.entries(GET_OPTS_DEP_PROPS)) {
+      const raw = data[prop];
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        depMaps[cacheKey] = Object.entries(raw)
+          .map(([id, name]) => ({ id: parseInt(id, 10), name: String(name) }))
+          .filter(item => item.id > 0);
+      }
+    }
+
+    return { customFields, raw: data, depMaps };
   } catch (e) {
     console.warn('[FMX get-options] fetch failed:', e);
-    return { customFields: [] };
+    return { customFields: [], raw: null, depMaps: {} };
   }
 }
 
@@ -322,12 +342,15 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
       fetchGetOptions(siteUrl, email, password, schemaType, modules),
     ]);
 
-    // Supplement systemFields with any fields that appear in get-options sortKeys but are absent
-    // from post-options (e.g. Equipment lifespan fields like estimatedEndOfLife).
+    // Build synthetic fields from GET OPTIONS sortKeys + enrichments.
+    // Fields that appear in sortKeys AND have an enrichment entry become mappable
+    // system fields even if they're absent from post-options.
     const sortKeys = getOpts.raw?.sortKeys || {};
     const baseType = getBaseSchemaType(schemaType);
     const enrichments = FMX_FIELD_ENRICHMENTS[baseType] || {};
     const existingSystemFieldKeys = new Set(postOpts.systemFields.map(sf => sf.key));
+
+    // 1) SortKey-driven synthetic fields: keys in sortKeys that have a matching enrichment
     const syntheticFields = Object.keys(sortKeys)
       .filter(k => enrichments[k] && !existingSystemFieldKeys.has(k))
       .map(k => ({
@@ -336,21 +359,24 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
         isRequired: false,
         isPermitted: true,
       }));
-    // Also add enrichment fields that have a lookup but aren't in post-options systemFields.
-    // This ensures lookup fields like Building (buildingID) always appear as mappable fields.
-    const lookupSyntheticFields = Object.entries(enrichments)
+
+    // 2) Enrichment-driven synthetic fields: ALL enrichment entries not already covered.
+    //    This ensures non-lookup fields like dueDate and date/time fields always appear.
+    const syntheticKeys = new Set(syntheticFields.map(s => s.key));
+    const enrichmentSyntheticFields = Object.entries(enrichments)
       .filter(([key, enrich]) =>
-        enrich.lookup &&
+        enrich.label &&
         !existingSystemFieldKeys.has(key) &&
-        !syntheticFields.find(s => s.key === key)
+        !syntheticKeys.has(key)
       )
       .map(([key, enrich]) => ({
         key,
-        label: enrich.label || key,
+        label: enrich.label,
         isRequired: false,
         isPermitted: true,
       }));
-    const systemFields = [...postOpts.systemFields, ...syntheticFields, ...lookupSyntheticFields];
+
+    const systemFields = [...postOpts.systemFields, ...syntheticFields, ...enrichmentSyntheticFields];
 
     // Merge custom fields: /post-options is the authoritative source (has full metadata: id via cf.key,
     // label, fieldType, options, allowMultipleSelections, etc.). /get-options only has a name map and
@@ -364,12 +390,22 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     // Infer/assign field types via rules + AI
     const customFields = await inferCustomFieldTypes(mergedCustomFields);
 
+    // Save dep maps from GET OPTIONS to dep cache
+    if (projectId && getOpts.depMaps) {
+      for (const [depKey, items] of Object.entries(getOpts.depMaps)) {
+        if (items.length > 0) {
+          await saveDependencyCache(projectId, depKey, items, items.length);
+        }
+      }
+    }
+
     if (projectId) {
       await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
     }
 
     return { customFields, systemFields, fromCache: false };
-  } catch {
+  } catch (e) {
+    console.error('syncFmxDataForProject error:', e);
     return { customFields: [], systemFields: [], fromCache: false };
   }
 }

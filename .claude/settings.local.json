@@ -5,7 +5,8 @@
       "Bash(npm run:*)",
       "Bash(gh pr:*)",
       "Bash(npx react-scripts:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(echo \"Exit: $?\")"
     ]
   }
 }

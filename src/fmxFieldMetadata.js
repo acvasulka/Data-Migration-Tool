@@ -5,6 +5,9 @@
 //
 // This replaces the fully-hardcoded FMX_API_STANDARD_FIELDS in fmxFieldSchema.js
 // and the FMX_FIELD_MAP / FMX_ID_LOOKUP_FIELDS in fmxEndpoints.js.
+//
+// Enrichment keys for synthetic fields must match GET OPTIONS sortKey names
+// so the synthetic field mechanism in syncFmxDataForProject picks them up.
 
 // --- Enrichment registry ---
 // Keyed by [schemaType][systemField.key]. Each entry stores ONLY what the API
@@ -148,11 +151,17 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Schedule Request': {
-    name:            { label: 'Name' },
-    requestTypeID:   { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
-    buildingIDs:     { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
-    otherResource:   { label: 'Other Resource' },
-    isPrivate:       { label: 'Is Private' },
+    name:               { label: 'Name' },
+    requestTypeID:      { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    buildingIDs:        { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
+    resourceQuantities: { label: 'Resources', lookup: { endpoint: '/v1/resources', searchParam: 'search', isArray: true } },
+    otherResource:      { label: 'Other Resource' },
+    isPrivate:          { label: 'Is Private' },
+    // Date/time fields from GET OPTIONS sortKeys (not in post-options systemFields)
+    'event-time':       { label: 'Event Time' },
+    'reservation-time': { label: 'Reservation Time' },
+    'setup-duration':   { label: 'Setup Time' },
+    'teardown-duration':{ label: 'Teardown Time' },
   },
 
   'Work Task': {
@@ -203,6 +212,31 @@ const CROSS_SHEET_TO_DEP_KEY = {
   'User Type':       'user-types',
   'Resource Type':   'resource-types',
 };
+
+// Which dep keys each schema base type needs for cross-field validation.
+// null = not in map = fetch all (safe default for unknown types).
+const SCHEMA_DEP_KEYS = {
+  'Building':               [],
+  'Resource':               ['buildings', 'resource-types'],
+  'User':                   ['buildings', 'user-types'],
+  'Equipment Type':         [],
+  'Equipment':              ['buildings', 'equipment-types'],
+  'Inventory Type':         [],
+  'Inventory':              ['buildings', 'inventory-types'],
+  'Work Request':           ['buildings', 'users', 'resources', 'request-types'],
+  'Schedule Request':       ['buildings', 'resources', 'request-types'],
+  'Work Task':              ['buildings', 'users', 'equipment', 'request-types'],
+  'Transportation Request': ['buildings', 'resources', 'request-types'],
+  'Accounting Account':     [],
+};
+
+/** Returns the dep keys needed for a given schema type, or null if unknown (fetch all). */
+export function getDepKeysForSchema(schemaType) {
+  if (!schemaType) return null;
+  const base = schemaType.indexOf(':') === -1 ? schemaType : schemaType.slice(0, schemaType.indexOf(':'));
+  const keys = SCHEMA_DEP_KEYS[base];
+  return Array.isArray(keys) ? keys : null;
+}
 
 // --- Builder ---
 
@@ -298,7 +332,6 @@ export function deriveDepKeys(fieldDefs) {
     if (f.crossSheet && CROSS_SHEET_TO_DEP_KEY[f.crossSheet]) {
       keys.add(CROSS_SHEET_TO_DEP_KEY[f.crossSheet]);
     }
-    // Also include dep keys for lookup fields without crossSheet
     if (f.lookupConfig) {
       const depKey = Object.entries(CROSS_SHEET_TO_DEP_KEY)
         .find(([, v]) => f.lookupConfig.endpoint.includes(`/v1/${v}`))?.[1];
@@ -308,4 +341,4 @@ export function deriveDepKeys(fieldDefs) {
   return [...keys];
 }
 
-export { FMX_FIELD_ENRICHMENTS };
+export { FMX_FIELD_ENRICHMENTS, SCHEMA_DEP_KEYS };
