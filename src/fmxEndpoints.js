@@ -72,26 +72,10 @@ const FMX_FIELD_MAP = {
     'Track asset lifespan':       'trackAssetLifespan',
   },
   'Equipment': {
-    'Tag':                        'tag',
-    // Location is now an ID lookup (locationResourceID) — not a direct string field
-    'Downtime calculation start date': 'downtimeCalculationStartDate',
-    'Barcode ID':                 'barcodeID',
-    'Cooling Capacity':           'coolingCapacity',
-    'Date of Manufacture':        'dateOfManufacture',
-    'Expected Replacement Cost':  'expectedReplacementCost',
-    'Expected Replacement Date':  'expectedReplacementDate',
-    'Filter size':                'filterSize',
-    'Heating Capacity':           'heatingCapacity',
-    'Installed Cost':             'installedCost',
-    'Installed Date':             'installedDate',
-    'Manufacturer':               'manufacturer',
-    'Model number':               'modelNumber',
-    'Serial number':              'serialNumber',
+    'Tag':                             'tag',
+    // Location/Type/Parent/Inventory/Users are ID lookups — not direct string fields
     // Asset Condition is an integer enum — handled specially in fmxTransform.js
-    'Budget Category':            'budgetCategory',
-    'Estimated end-of-life (EOL)': 'estimatedEndOfLife',
-    'Planned replacement date':   'plannedReplacementDate',
-    'Replacement asset value':    'replacementAssetValue',
+    'Downtime calculation start date': 'downtimeCalculationStartDate',
   },
   'Inventory': {
     'Name':                       'name',
@@ -110,6 +94,7 @@ const FMX_FIELD_MAP = {
     // Resource type is now an array ID lookup — not a direct string field
     'Capacity':                   'capacity',
     'Quantity':                   'scheduleRequestQuantity',
+    'Is location':                'isLocation',
     'Sunday From':                'sundayAvailabilityStartTime',
     'Sunday To':                  'sundayAvailabilityEndTime',
     'Monday From':                'mondayAvailabilityStartTime',
@@ -156,6 +141,18 @@ const FMX_FIELD_MAP = {
     'Reservation Time':           'reservation-time',
     'Setup Time':                 'setup-duration',
     'Teardown Time':              'teardown-duration',
+    // firstOccurrenceEventTimeBlock fields (dot-notation → nested object in transform)
+    'Event Start Date':           'firstOccurrenceEventTimeBlock.startDate',
+    'Event End Date':             'firstOccurrenceEventTimeBlock.endDate',
+    'Event Start Time':           'firstOccurrenceEventTimeBlock.startTimeUtc',
+    'Event End Time':             'firstOccurrenceEventTimeBlock.endTimeUtc',
+    // schedule/recurrence fields (dot-notation → nested object in transform)
+    'Recurrence Frequency':       'schedule.frequency',
+    'Recurrence Interval':        'schedule.interval',
+    'Recurrence Days':            'schedule.weeklyDaysOfWeek',
+    'Monthly Recurrence':         'schedule.monthlyRecurrence',
+    'Recurrence End Date':        'schedule.endDate',
+    'Recurrence End Count':       'schedule.endCount',
   },
   'Work Task': {
     'Name':                       'name',
@@ -180,10 +177,12 @@ const FMX_FIELD_MAP = {
 // nameField: which response property to match input values against (default: 'name').
 const FMX_ID_LOOKUP_FIELDS = {
   'Equipment': {
-    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },
-    'Type':              { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID',           nameField: 'name' },
-    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',        nameField: 'name' },
-    'Parent Equipment':  { endpoint: '/v1/equipment',       idField: 'parentEquipmentID',         nameField: 'tag' },
+    'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',               nameField: 'name' },
+    'Type':              { endpoint: '/v1/equipment-types', idField: 'equipmentTypeID',          nameField: 'name' },
+    'Location':          { endpoint: '/v1/resources',       idField: 'locationResourceID',       nameField: 'name' },
+    'Parent Equipment':  { endpoint: '/v1/equipment',       idField: 'parentEquipmentID',        nameField: 'tag' },
+    'Inventory items':   { endpoint: '/v1/inventory',       idField: 'inventoryItemIDs',         nameField: 'name', isArray: true },
+    'Assigned users':    { endpoint: '/v1/users',           idField: 'assignedUserIDs',          nameField: 'name', isArray: true },
   },
   'Inventory': {
     'Building':          { endpoint: '/v1/buildings',       idField: 'buildingID',                nameField: 'name' },

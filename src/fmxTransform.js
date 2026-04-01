@@ -121,6 +121,19 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     payload.customFields = customFields;
   }
 
+  // Compose dot-notation keys into nested objects
+  // e.g. 'schedule.frequency' → payload.schedule = { frequency: ... }
+  // e.g. 'firstOccurrenceEventTimeBlock.startDate' → payload.firstOccurrenceEventTimeBlock = { startDate: ... }
+  const dotKeys = Object.keys(payload).filter(k => k.includes('.'));
+  for (const key of dotKeys) {
+    const dotIdx = key.indexOf('.');
+    const parent = key.slice(0, dotIdx);
+    const child = key.slice(dotIdx + 1);
+    if (!payload[parent] || typeof payload[parent] !== 'object') payload[parent] = {};
+    payload[parent][child] = payload[key];
+    delete payload[key];
+  }
+
   // Resolve ID lookup fields (Building → buildingID, etc.)
   const lookups = effectiveLookups;
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
@@ -128,7 +141,13 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     if (!value) return;
     const cacheKey = `${fmxField}:${value}`;
     if (idCache[cacheKey]) {
-      payload[lookup.idField] = lookup.isArray ? [idCache[cacheKey]] : idCache[cacheKey];
+      const resolvedId = idCache[cacheKey];
+      if (lookup.idField === 'resourceQuantities') {
+        // FMX API expects [{resourceID, quantity}] objects, not plain [id]
+        payload[lookup.idField] = [{ resourceID: resolvedId, quantity: 1 }];
+      } else {
+        payload[lookup.idField] = lookup.isArray ? [resolvedId] : resolvedId;
+      }
     } else {
       console.warn(`[FMX ID Resolve] No match for "${fmxField}": "${value}" → ${lookup.idField} will be missing from payload`);
     }

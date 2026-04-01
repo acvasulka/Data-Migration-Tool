@@ -143,6 +143,7 @@ export default function App() {
   const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
+  const [xlsxWorkbook, setXlsxWorkbook] = useState(null); // { wb, typeLabel } when sheet picker active
 
   // Overview / tab routing
   const [mainTab, setMainTab] = useState('overview'); // 'overview' | 'dependencies' | 'settings' | 'wizard'
@@ -380,13 +381,57 @@ export default function App() {
       reader.onload = async e => {
         const XLSX = await import("xlsx");
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
-        const sheetName = wb.SheetNames[0];
-        const ws = wb.Sheets[sheetName];
-        const csvStr = XLSX.utils.sheet_to_csv(ws);
         const typeLabel = ext === "xlsx" ? "Excel (.xlsx)" : ext === "xls" ? "Excel (.xls)" : "ODS";
-        await processCSV(csvStr, { type: typeLabel, sheetName });
+        if (wb.SheetNames.length <= 1) {
+          // Single sheet — proceed immediately
+          const sheetName = wb.SheetNames[0];
+          const ws = wb.Sheets[sheetName];
+          const csvStr = XLSX.utils.sheet_to_csv(ws);
+          await processCSV(csvStr, { type: typeLabel, sheetName });
+        } else {
+          // Multiple sheets — show picker
+          setXlsxWorkbook({ wb, typeLabel });
+        }
       };
       reader.readAsArrayBuffer(file);
+    }
+  };
+
+  const handleSheetSelect = async (selection) => {
+    if (!xlsxWorkbook) return;
+    const { wb, typeLabel } = xlsxWorkbook;
+    const XLSX = await import("xlsx");
+    setXlsxWorkbook(null);
+
+    if (selection === '__merge__') {
+      // Merge all sheets — prefix each column with "SheetName — ColumnHeader"
+      const allRows = [];
+      for (const sheetName of wb.SheetNames) {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        for (const row of rows) {
+          const prefixed = {};
+          for (const [col, val] of Object.entries(row)) {
+            prefixed[`${sheetName} \u2014 ${col}`] = val;
+          }
+          allRows.push(prefixed);
+        }
+      }
+      const allHeaders = [...new Set(allRows.flatMap(r => Object.keys(r)))];
+      const csvLines = [
+        allHeaders.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','),
+        ...allRows.map(row =>
+          allHeaders.map(h => {
+            const v = row[h] ?? '';
+            return `"${String(v).replace(/"/g, '""')}"`;
+          }).join(',')
+        ),
+      ];
+      await processCSV(csvLines.join('\n'), { type: typeLabel, sheetName: `Merged (${wb.SheetNames.length} sheets)` });
+    } else {
+      const ws = wb.Sheets[selection];
+      const csvStr = XLSX.utils.sheet_to_csv(ws);
+      await processCSV(csvStr, { type: typeLabel, sheetName: selection });
     }
   };
 
@@ -752,6 +797,8 @@ export default function App() {
                 handleFileAndMap={handleFileAndMap}
                 fmxSyncLoading={fmxSyncData.loading}
                 fmxSyncFromCache={fmxSyncData.fromCache}
+                xlsxSheetNames={xlsxWorkbook ? xlsxWorkbook.wb.SheetNames : null}
+                onSheetSelect={handleSheetSelect}
               />
             )}
 
