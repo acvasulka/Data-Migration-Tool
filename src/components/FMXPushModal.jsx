@@ -43,6 +43,8 @@ export default function FMXPushModal({
   fmxModules,
   customFieldIdMap,
   customFieldMetadata,
+  fieldList,
+  prebuiltIdMap,
   onClose,
   onSuccess,
 }) {
@@ -126,7 +128,7 @@ export default function FMXPushModal({
       setStatusMsg('Preparing — resolving reference IDs…');
       let idCache = {};
       try {
-        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw);
+        idCache = await buildIdCache(mappedRows, schemaType, url, em, pw, fieldList || [], prebuiltIdMap || {});
       } catch {}
 
       if (cancelledRef.current) return;
@@ -141,7 +143,7 @@ export default function FMXPushModal({
 
         let ok = false;
         try {
-          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || []);
+          const payload = transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || [], fieldList || []);
           const res = await fetch('/api/fmx', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

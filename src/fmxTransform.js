@@ -1,8 +1,8 @@
-import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
+import { getLookupConfig } from './fmxLookupRegistry';
 import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType } from './schemas';
 
-// Equipment assetCondition is an integer enum in the FMX API
+// Equipment assetCondition is an integer enum in the FMX API — fallback if post-options doesn't provide options
 const ASSET_CONDITION_MAP = {
   'unknown': 0, 'excellent': 1, 'good': 2, 'fair': 3, 'poor': 4, 'retired': 5,
 };
@@ -28,91 +28,132 @@ function coerceCustomFieldValue(value, fieldType) {
 }
 
 // Transform a mapped row object into the correct FMX API payload shape.
-// idCache: { "Building:Main Campus": 42 }
-// customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
+// fieldList: dynamic field array from post-options (via buildFieldListFromPostOptions)
+// idCache: { "Building:Main Campus": 42 } — pre-built from get-options + search fallback
+// customFieldIdMap: { "Year Built": 42 } — maps friendly name to FMX custom field ID
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
-export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = []) {
-  const baseType = getBaseSchemaType(schemaType);
-  const fieldMap = FMX_FIELD_MAP[baseType] || {};
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldList = []) {
   const payload = {};
   const customFields = [];
 
-  Object.entries(row).forEach(([fieldName, value]) => {
-    if (value === null || value === undefined || value === '') return;
+  // When a dynamic field list is available, use it as the source of truth
+  if (fieldList.length > 0) {
+    for (const field of fieldList) {
+      const value = row[field.name];
+      if (value === null || value === undefined || value === '') continue;
 
-    // Match by friendly name in customFieldIdMap (e.g. "Year Built" → ID 42)
-    if (customFieldIdMap[fieldName] !== undefined) {
-      const cfId = customFieldIdMap[fieldName];
-      const cfMeta = customFieldMetadata.find(cf => cf.id === cfId);
-      const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
-      if (coerced !== null) {
-        customFields.push({ customFieldID: cfId, value: coerced });
+      // Custom field
+      if (field.isCustomField && field.customFieldId) {
+        const coerced = coerceCustomFieldValue(value, field.fieldType);
+        if (coerced !== null) {
+          customFields.push({ customFieldID: field.customFieldId, value: coerced });
+        }
+        continue;
       }
-      return;
+
+      // Lookup field — resolve from idCache
+      if (field.isLookupField && field.apiKey) {
+        const cacheKey = `${field.name}:${value}`;
+        const resolvedId = idCache[cacheKey];
+        if (resolvedId !== undefined) {
+          const lookupCfg = field.lookupConfig || getLookupConfig(field.apiKey);
+          payload[field.apiKey] = lookupCfg?.isArray ? [resolvedId] : resolvedId;
+        }
+        continue;
+      }
+
+      // Special handling: Equipment assetCondition → integer enum
+      if (field.apiKey === 'assetCondition') {
+        if (field.options && field.options.length > 0) {
+          // Use options array from post-options: index = enum value
+          const idx = field.options.findIndex(o => o.toLowerCase() === String(value).toLowerCase().trim());
+          payload['assetCondition'] = idx >= 0 ? idx : 0;
+        } else {
+          // Fallback to hardcoded map
+          const normalized = String(value).toLowerCase().trim();
+          const enumVal = ASSET_CONDITION_MAP[normalized];
+          payload['assetCondition'] = enumVal !== undefined ? enumVal : 0;
+        }
+        continue;
+      }
+
+      // Standard field — direct mapping
+      if (field.apiKey) {
+        payload[field.apiKey] = value;
+      }
     }
 
-    // Match by legacy key format "customField_42"
-    if (fieldName.startsWith('customField_')) {
-      const id = parseInt(fieldName.replace('customField_', ''), 10);
-      if (!isNaN(id)) {
-        customFields.push({ customFieldID: id, value: String(value) });
+    // Also handle any row fields matched by legacy customField_ keys
+    for (const [fieldName, value] of Object.entries(row)) {
+      if (value === null || value === undefined || value === '') continue;
+      if (fieldName.startsWith('customField_')) {
+        const id = parseInt(fieldName.replace('customField_', ''), 10);
+        if (!isNaN(id)) {
+          customFields.push({ customFieldID: id, value: String(value) });
+        }
       }
-      return;
     }
+  } else {
+    // No field list — handle row entries directly (custom field fallback only)
+    for (const [fieldName, value] of Object.entries(row)) {
+      if (value === null || value === undefined || value === '') continue;
 
-    // Special handling: Equipment Asset Condition → integer enum
-    if (baseType === 'Equipment' && fieldName === 'Asset Condition') {
-      const normalized = String(value).toLowerCase().trim();
-      const enumVal = ASSET_CONDITION_MAP[normalized];
-      if (enumVal !== undefined) {
-        payload['assetCondition'] = enumVal;
-      } else {
-        const parsed = parseInt(value, 10);
-        payload['assetCondition'] = isNaN(parsed) ? 0 : parsed;
+      if (customFieldIdMap[fieldName] !== undefined) {
+        const cfId = customFieldIdMap[fieldName];
+        const cfMeta = customFieldMetadata.find(cf => cf.id === cfId);
+        const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
+        if (coerced !== null) {
+          customFields.push({ customFieldID: cfId, value: coerced });
+        }
+        continue;
       }
-      return;
-    }
 
-    // Standard field
-    const apiKey = fieldMap[fieldName];
-    if (apiKey) payload[apiKey] = value;
-  });
+      if (fieldName.startsWith('customField_')) {
+        const id = parseInt(fieldName.replace('customField_', ''), 10);
+        if (!isNaN(id)) {
+          customFields.push({ customFieldID: id, value: String(value) });
+        }
+      }
+    }
+  }
 
   if (customFields.length > 0) {
     payload.customFields = customFields;
   }
-
-  // Resolve ID lookup fields (Building → buildingID, etc.)
-  const lookups = FMX_ID_LOOKUP_FIELDS[baseType] || {};
-  Object.entries(lookups).forEach(([fmxField, lookup]) => {
-    const value = row[fmxField];
-    if (!value) return;
-    const cacheKey = `${fmxField}:${value}`;
-    if (idCache[cacheKey]) {
-      payload[lookup.idField] = lookup.isArray ? [idCache[cacheKey]] : idCache[cacheKey];
-    }
-  });
 
   console.warn('Payload:', JSON.stringify(payload));
   return payload;
 }
 
 // Pre-fetch IDs for all unique reference values in the dataset.
-// Returns an idCache map: { "Building:Main Campus": 42, ... }
-export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
-  const lookups = FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {};
-  const idCache = {};
+// Uses prebuiltIdMap from get-options as the base; only searches for missing values.
+// fieldList: dynamic field array from post-options
+// prebuiltIdMap: { "Building:Main Campus": 1, ... } from get-options
+export async function buildIdCache(rows, schemaType, siteUrl, email, password, fieldList = [], prebuiltIdMap = {}) {
+  const idCache = { ...prebuiltIdMap };
 
-  for (const [fmxField, lookup] of Object.entries(lookups)) {
-    const uniqueValues = [...new Set(rows.map(r => r[fmxField]).filter(Boolean))];
+  // Determine which fields need lookup
+  const lookupFields = fieldList.filter(f => f.isLookupField);
+
+  for (const field of lookupFields) {
+    const lookupCfg = field.lookupConfig || getLookupConfig(field.apiKey);
+    if (!lookupCfg) continue;
+
+    const uniqueValues = [...new Set(rows.map(r => r[field.name]).filter(Boolean))];
     for (const value of uniqueValues) {
+      const cacheKey = `${field.name}:${value}`;
+
+      // Skip if already resolved from get-options
+      if (idCache[cacheKey] !== undefined) continue;
+
+      // Search fallback for values not in get-options
       try {
         const res = await fetch('/api/fmx', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             siteUrl, email, password,
-            endpoint: `${lookup.endpoint}?${lookup.searchParam}=${encodeURIComponent(value)}&limit=1`,
+            endpoint: `${lookupCfg.endpoint}?search=${encodeURIComponent(value)}&limit=1`,
             method: 'GET',
             payload: null,
           }),
@@ -120,12 +161,13 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password) {
         const data = await res.json();
         const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
         if (Array.isArray(items) && items.length > 0) {
-          idCache[`${fmxField}:${value}`] = items[0].id;
+          idCache[cacheKey] = items[0].id;
         }
       } catch (e) {
-        console.warn(`Could not resolve ID for ${fmxField}:${value}`, e);
+        console.warn(`Could not resolve ID for ${field.name}:${value}`, e);
       }
     }
   }
+
   return idCache;
 }

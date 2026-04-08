@@ -50,19 +50,85 @@ export function buildMappedRows(rows, mapping, transformRules, allFields) {
   });
 }
 
-export function computeCellErrors(rows, allFields, importedData) {
+export function computeCellErrors(rows, allFields, importedData, getOptionsData) {
   const cellMap = {};
+
+  // Pre-build valid-name sets from get-options for lookup fields
+  const validNamesCache = {};
+  if (getOptionsData) {
+    for (const f of allFields) {
+      if (f.isLookupField && f.lookupConfig?.getOptionsKey) {
+        const optionsMap = getOptionsData[f.lookupConfig.getOptionsKey];
+        if (optionsMap && typeof optionsMap === 'object') {
+          validNamesCache[f.name] = new Set(Object.values(optionsMap).map(v => String(v).toLowerCase()));
+        }
+      }
+    }
+  }
+
   allFields.forEach(f => {
     rows.forEach((row, ri) => {
       const val = row[f.name] ?? "";
       const key = `${ri}-${f.name}`;
-      if (f.isCustomField) return; // custom fields are never required by the API
+
+      // Custom field validation
+      if (f.isCustomField) {
+        if (!val) return;
+        // Validate dropdown options for custom fields
+        if (f.options && f.options.length > 0 && val) {
+          const lowerVal = String(val).toLowerCase();
+          const match = f.options.some(o => String(o).toLowerCase() === lowerVal);
+          if (!match) { cellMap[key] = "warning"; }
+        }
+        return;
+      }
+
+      // Required check
       if (f.required && !val) { cellMap[key] = "error"; return; }
       if (!val) return;
+
+      // Type checks
       if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { cellMap[key] = "error"; return; }
       if (f.type === "date" && isNaN(Date.parse(val))) { cellMap[key] = "error"; return; }
       if (f.type === "number" && isNaN(Number(val))) { cellMap[key] = "error"; return; }
-      if (f.crossSheet && importedData[f.crossSheet] && !importedData[f.crossSheet].includes(val)) { cellMap[key] = "warning"; }
+
+      // Min/max length validation
+      if (f.maxLength && String(val).length > f.maxLength) { cellMap[key] = "error"; return; }
+      if (f.minLength && String(val).length < f.minLength) { cellMap[key] = "error"; return; }
+
+      // Min/max value validation for numbers
+      if (f.type === "number" && !isNaN(Number(val))) {
+        const num = Number(val);
+        if (f.maxValue != null && num > f.maxValue) { cellMap[key] = "error"; return; }
+        if (f.minValue != null && num < f.minValue) { cellMap[key] = "error"; return; }
+      }
+
+      // System field dropdown options validation
+      if (f.options && f.options.length > 0) {
+        const lowerVal = String(val).toLowerCase();
+        const match = f.options.some(o => String(o).toLowerCase() === lowerVal);
+        if (!match) { cellMap[key] = "warning"; return; }
+      }
+
+      // Lookup field validation against get-options data
+      if (f.isLookupField && validNamesCache[f.name]) {
+        const lowerVal = String(val).toLowerCase();
+        if (!validNamesCache[f.name].has(lowerVal)) {
+          // Also check cross-sheet data (in-session imports)
+          if (f.crossSheet && importedData[f.crossSheet] && importedData[f.crossSheet].includes(val)) {
+            return; // Found in cross-sheet data — OK
+          }
+          cellMap[key] = "dep_error";
+          return;
+        }
+      }
+
+      // Cross-sheet validation (fallback for non-lookup fields or when get-options unavailable)
+      if (f.crossSheet && importedData[f.crossSheet] && !importedData[f.crossSheet].includes(val)) {
+        if (!validNamesCache[f.name]) {
+          cellMap[key] = "warning";
+        }
+      }
     });
   });
   return cellMap;

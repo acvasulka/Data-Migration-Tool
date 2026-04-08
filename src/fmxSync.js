@@ -1,4 +1,6 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge } from './db';
+import { getLookupConfig, isLookupField, CROSS_SHEET_MAP, inferFieldGroup, inferFieldType } from './fmxLookupRegistry';
+import { getFieldTypeCategory } from './fmxFieldTypes';
 
 export function encodeCredentials(email, password) {
   return btoa(`${email}:${password}`);
@@ -35,10 +37,9 @@ export async function testFmxConnection(siteUrl, email, password) {
   }
 }
 
-// Resolve post-options endpoint — handles static strings, module functions, and
-// module-qualified schema types like "Work Request:maintenance".
+// ── Endpoint resolution ─────────────────────────────────────────────────────
+
 function resolvePostOptionsEndpoint(schemaType, modules) {
-  // Module-qualified types carry the slug in the key itself
   if (schemaType.startsWith('Work Request:'))
     return `/v1/${schemaType.split(':')[1]}-requests/post-options`;
   if (schemaType.startsWith('Schedule Request:'))
@@ -50,22 +51,26 @@ function resolvePostOptionsEndpoint(schemaType, modules) {
   return typeof ep === 'function' ? ep(modules) : ep;
 }
 
-// Convert any fmx_modules shape to the canonical new format:
-//   { workRequestModules:[{slug,label}], scheduleRequestModules:[{slug,label}], workTaskModules:[{slug,label}] }
-// Handles three cases:
-//   1. Already fully-formed new format — pass-through
-//   2. New format missing workTaskModules (saved before this fix) — backfill default
-//   3. Old flat format { workRequest, scheduling, workTask } — convert to arrays
-// Returns null for falsy input.
+function resolveGetOptionsEndpoint(schemaType, modules) {
+  if (schemaType.startsWith('Work Request:'))
+    return `/v1/${schemaType.split(':')[1]}-requests/get-options`;
+  if (schemaType.startsWith('Schedule Request:'))
+    return `/v1/${schemaType.split(':')[1]}/requests/get-options`;
+  if (schemaType.startsWith('Work Task:'))
+    return `/v1/${schemaType.split(':')[1]}/tasks/get-options`;
+  const ep = GET_OPTIONS_ENDPOINTS[schemaType];
+  if (!ep) return null;
+  return typeof ep === 'function' ? ep(modules) : ep;
+}
+
+// ── Module normalization ────────────────────────────────────────────────────
+
 export function normalizeModules(raw) {
   if (!raw) return null;
-  // Already fully-formed
   if (Array.isArray(raw.workRequestModules) && Array.isArray(raw.workTaskModules)) return raw;
-  // New format missing workTaskModules (data saved before work-task independence fix)
   if (Array.isArray(raw.workRequestModules)) {
     return { ...raw, workTaskModules: [{ slug: 'maintenance', label: 'Maintenance' }] };
   }
-  // Old flat format
   const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
   return {
     workRequestModules:    [{ slug: raw.workRequest || 'maintenance', label: cap(raw.workRequest || 'maintenance') }],
@@ -74,29 +79,18 @@ export function normalizeModules(raw) {
   };
 }
 
-// Merges a freshly-fetched module list into the existing stored modules.
-// Rules:
-//   - Existing modules still in fresh → kept active (label updated if changed)
-//   - Existing modules NOT in fresh   → marked { ..., disabled: true }
-//   - Fresh modules not yet stored    → added as active
-// Returns { merged, changed } where `changed` is true only if the result differs from existing.
 export function mergeModules(existing, fresh) {
   const mergeList = (existingList = [], freshList = []) => {
     const freshMap  = new Map(freshList.map(m => [m.slug, m]));
     const existingSlugs = new Set(existingList.map(m => m.slug));
     const result = [];
-
-    // Preserve existing order; update active/disabled status
     for (const m of existingList) {
       if (freshMap.has(m.slug)) {
-        // Still present — ensure label is current, clear disabled flag
         result.push({ slug: m.slug, label: freshMap.get(m.slug).label });
       } else {
-        // Gone from org → mark disabled (keep for history)
         result.push({ slug: m.slug, label: m.label, disabled: true });
       }
     }
-    // Append brand-new modules from fresh
     for (const m of freshList) {
       if (!existingSlugs.has(m.slug)) {
         result.push({ slug: m.slug, label: m.label });
@@ -116,6 +110,8 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
+// ── Endpoint maps ───────────────────────────────────────────────────────────
+
 const POST_OPTIONS_ENDPOINTS = {
   'Building':               '/v1/buildings/post-options',
   'Equipment':              '/v1/equipment/post-options',
@@ -129,6 +125,22 @@ const POST_OPTIONS_ENDPOINTS = {
   'Transportation Request': '/v1/transportation-requests/post-options',
   'Accounting Account':     '/v1/accounting-accounts/post-options',
 };
+
+const GET_OPTIONS_ENDPOINTS = {
+  'Building':               '/v1/buildings/get-options',
+  'Equipment':              '/v1/equipment/get-options',
+  'Inventory':              '/v1/inventory/get-options',
+  'Resource':               '/v1/resources/get-options',
+  'User':                   '/v1/users/get-options',
+  'Equipment Type':         '/v1/equipment-types/get-options',
+  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests/get-options`,
+  'Schedule Request':       (m) => `/v1/${m?.scheduling || 'scheduling'}/requests/get-options`,
+  'Work Task':              (m) => `/v1/${m?.workTask || 'maintenance'}/tasks/get-options`,
+  'Transportation Request': '/v1/transportation-requests/get-options',
+  'Accounting Account':     '/v1/accounting-accounts/get-options',
+};
+
+// ── Fetch post-options (field definitions) ──────────────────────────────────
 
 async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
@@ -155,6 +167,13 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
         name: cf.label,
         fieldType: cf.fieldTypeName,
         isRequired: cf.isRequired || false,
+        options: cf.options || [],
+        allowMultipleSelections: cf.allowMultipleSelections || false,
+        allowOtherOption: cf.allowOtherOption || false,
+        description: cf.description || '',
+        allowMultipleLines: cf.allowMultipleLines || false,
+        disallowNegativeValues: cf.disallowNegativeValues || false,
+        defaults: cf.defaults || [],
       }));
 
     const systemFields = (data.systemFields || []).map(sf => ({
@@ -162,24 +181,121 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       label: sf.label,
       isRequired: sf.isRequired || false,
       isPermitted: sf.isPermitted !== false,
+      options: sf.options || null,
+      minimumLength: sf.minimumLength || null,
       maximumLength: sf.maximumLength || null,
+      minimumValue: sf.minimumValue || null,
+      maximumValue: sf.maximumValue || null,
+      defaultValue: sf.defaultValue || null,
+      documentation: sf.documentation || null,
     }));
 
-    console.log('Custom fields found:', customFields);
+    console.log('System fields found:', systemFields.length, '| Custom fields found:', customFields.length);
     return { customFields, systemFields };
   } catch {
     return { customFields: [], systemFields: [] };
   }
 }
 
-// Auto-fetch module arrays from the FMX organization endpoint.
-// Returns { workRequestModules, scheduleRequestModules, workTaskModules } each as [{slug,label}].
-// Falls back to single-entry defaults if the org endpoint fails or returns no data.
-//
-// Actual response fields (confirmed from API):
-//   data.workRequestSettings    — array,  each has .moduleKey (slug) and .moduleName (label)
-//   data.scheduleRequestSettings — object, has .moduleKey and .moduleName
-//   data.workTaskSettings       — array,  each has .moduleKey and .moduleName
+// ── Fetch get-options (reference value maps) ────────────────────────────────
+
+async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
+  const endpoint = resolveGetOptionsEndpoint(schemaType, modules);
+  if (!endpoint) return {};
+
+  try {
+    const res = await fetch('/api/fmx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteUrl, email, password,
+        endpoint,
+        method: 'GET', payload: null,
+      }),
+    });
+    if (!res.ok) return {};
+    const data = await res.json();
+    console.log('FMX get-options response:', data);
+    return data;
+  } catch {
+    return {};
+  }
+}
+
+// ── Build field list from post-options ──────────────────────────────────────
+
+export function buildFieldListFromPostOptions(systemFields, customFields) {
+  const fields = [];
+
+  // System fields — filter to permitted only
+  for (const sf of systemFields) {
+    if (!sf.isPermitted) continue;
+    fields.push({
+      name: sf.label,
+      apiKey: sf.key,
+      required: sf.isRequired,
+      type: inferFieldType(sf.key),
+      group: inferFieldGroup(sf.key),
+      crossSheet: CROSS_SHEET_MAP[sf.key] || null,
+      isLookupField: isLookupField(sf.key),
+      lookupConfig: getLookupConfig(sf.key),
+      options: sf.options,
+      minLength: sf.minimumLength,
+      maxLength: sf.maximumLength,
+      minValue: sf.minimumValue,
+      maxValue: sf.maximumValue,
+      documentation: sf.documentation,
+    });
+  }
+
+  // Custom fields
+  for (const cf of customFields) {
+    fields.push({
+      name: cf.name,
+      required: cf.isRequired,
+      type: getFieldTypeCategory(cf.fieldType),
+      group: 'FMX Custom Fields',
+      isCustomField: true,
+      customFieldId: cf.id,
+      fieldType: cf.fieldType,
+      options: cf.options,
+      allowMultipleSelections: cf.allowMultipleSelections,
+      description: cf.description,
+    });
+  }
+
+  return fields;
+}
+
+// ── Build ID map from get-options ───────────────────────────────────────────
+
+// Converts the get-options response into a pre-built ID cache.
+// Returns: { "Building:Main Campus": 1, "Request Type:Plumbing": 10, ... }
+// The cache key format matches what fmxTransform.js expects: "fieldDisplayName:value"
+export function buildIdMapFromGetOptions(getOptionsData, fieldList) {
+  const idMap = {};
+  if (!getOptionsData || !fieldList) return idMap;
+
+  for (const field of fieldList) {
+    if (!field.isLookupField || !field.lookupConfig) continue;
+    const optionsKey = field.lookupConfig.getOptionsKey;
+    if (!optionsKey) continue;
+
+    const optionsMap = getOptionsData[optionsKey];
+    if (!optionsMap || typeof optionsMap !== 'object') continue;
+
+    // optionsMap is { id: displayName } — invert to build name→id cache
+    for (const [id, displayName] of Object.entries(optionsMap)) {
+      const cacheKey = `${field.name}:${displayName}`;
+      idMap[cacheKey] = parseInt(id, 10);
+    }
+  }
+
+  return idMap;
+}
+
+// ── Fetch modules ───────────────────────────────────────────────────────────
+
 export async function fetchFmxModules(siteUrl, email, password) {
   const defaults = {
     workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
@@ -202,7 +318,6 @@ export async function fetchFmxModules(siteUrl, email, password) {
 
     const modules = { ...defaults };
 
-    // Work request modules — data.workRequestSettings is an array
     const wrSettings = data.workRequestSettings || [];
     if (Array.isArray(wrSettings) && wrSettings.length > 0) {
       modules.workRequestModules = wrSettings.map(m => ({
@@ -211,13 +326,11 @@ export async function fetchFmxModules(siteUrl, email, password) {
       }));
     }
 
-    // Schedule request — data.scheduleRequestSettings is a single object (not array)
     const srSettings = data.scheduleRequestSettings;
     if (srSettings?.moduleKey) {
       modules.scheduleRequestModules = [{ slug: srSettings.moduleKey, label: srSettings.moduleName }];
     }
 
-    // Work task modules — data.workTaskSettings is an array, independent of work requests
     const wtSettings = data.workTaskSettings || [];
     if (Array.isArray(wtSettings) && wtSettings.length > 0) {
       modules.workTaskModules = wtSettings.map(m => ({
@@ -233,12 +346,13 @@ export async function fetchFmxModules(siteUrl, email, password) {
   }
 }
 
-// Main sync entry point — takes full project object and schemaType string
+// ── Main sync entry point ───────────────────────────────────────────────────
+
 export async function syncFmxDataForProject(project, schemaType, forceRefresh = false) {
   console.log('FMX sync triggered for:', schemaType);
   console.log('Has credentials:', !!project?.fmx_credentials, '| Has site URL:', !!project?.fmx_site_url);
   if (!project?.fmx_credentials || !project?.fmx_site_url) {
-    return { customFields: [], systemFields: [], fromCache: false };
+    return { customFields: [], systemFields: [], fields: [], getOptionsData: {}, idMap: {}, fromCache: false };
   }
 
   const projectId = project.id;
@@ -249,15 +363,13 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     const age = await getCacheAge(projectId, schemaType);
     if (age < 24) {
       const cached = await getFmxReferenceCache(projectId, schemaType);
-      if (cached?.extra?.customFields) {
-        const customFields = cached.extra.customFields.map(cf => ({
-          id: cf.id,
-          name: cf.name,
-          fieldType: cf.fieldType,
-          isRequired: cf.isRequired || false,
-        }));
-        const systemFields = cached.extra.systemFields || [];
-        return { customFields, systemFields, fromCache: true };
+      if (cached?.extra?.customFields && cached?.extra?.systemFields) {
+        const customFields = cached.extra.customFields;
+        const systemFields = cached.extra.systemFields;
+        const getOptionsData = cached.extra.getOptionsData || {};
+        const fields = buildFieldListFromPostOptions(systemFields, customFields);
+        const idMap = buildIdMapFromGetOptions(getOptionsData, fields);
+        return { customFields, systemFields, fields, getOptionsData, idMap, fromCache: true };
       }
     }
   }
@@ -266,14 +378,24 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
   const siteUrl = project.fmx_site_url;
 
   try {
-    const { customFields, systemFields } = await fetchPostOptions(siteUrl, email, password, schemaType, modules);
+    // Fetch post-options and get-options in parallel
+    const [postOpts, getOpts] = await Promise.all([
+      fetchPostOptions(siteUrl, email, password, schemaType, modules),
+      fetchGetOptions(siteUrl, email, password, schemaType, modules),
+    ]);
+
+    const { customFields, systemFields } = postOpts;
+    const getOptionsData = getOpts;
+
+    const fields = buildFieldListFromPostOptions(systemFields, customFields);
+    const idMap = buildIdMapFromGetOptions(getOptionsData, fields);
 
     if (projectId) {
-      await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields);
+      await saveFmxReferenceCache(projectId, schemaType, customFields, systemFields, getOptionsData);
     }
 
-    return { customFields, systemFields, fromCache: false };
+    return { customFields, systemFields, fields, getOptionsData, idMap, fromCache: false };
   } catch {
-    return { customFields: [], systemFields: [], fromCache: false };
+    return { customFields: [], systemFields: [], fields: [], getOptionsData: {}, idMap: {}, fromCache: false };
   }
 }

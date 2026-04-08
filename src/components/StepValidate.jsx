@@ -18,6 +18,7 @@ export default function StepValidate({
   projectId,
   importedData,
   onRefsLoaded,
+  getOptionsData,
 }) {
   const [jumpIdx, setJumpIdx] = useState(-1);
   const [noMoreMsg, setNoMoreMsg] = useState(false);
@@ -37,21 +38,27 @@ export default function StepValidate({
       const buildingNames = buildingRefs?.Name ?? [];
       const equipTypeNames = equipTypeRefs?.Name ?? [];
 
-      // Merge into the shape computeCellErrors expects: { [schemaType]: [values] }
+      // Merge get-options data (live FMX values) with DB reference values and in-session data
+      const getOptBuildings = getOptionsData?.buildings ? Object.values(getOptionsData.buildings) : [];
+      const getOptEquipTypes = getOptionsData?.equipmentTypes ? Object.values(getOptionsData.equipmentTypes) : [];
+
+      const allBuildingNames = [...new Set([...buildingNames, ...getOptBuildings])];
+      const allEquipTypeNames = [...new Set([...equipTypeNames, ...getOptEquipTypes])];
+
       const merged = {
-        ...(buildingNames.length ? { 'Building': buildingNames } : {}),
-        ...(equipTypeNames.length ? { 'Equipment Type': equipTypeNames } : {}),
+        ...(allBuildingNames.length ? { 'Building': allBuildingNames } : {}),
+        ...(allEquipTypeNames.length ? { 'Equipment Type': allEquipTypeNames } : {}),
         ...importedData, // in-session data overrides
       };
 
-      if (buildingNames.length > 0 || equipTypeNames.length > 0) {
-        setRefCounts({ building: buildingNames.length, equipType: equipTypeNames.length });
+      if (allBuildingNames.length > 0 || allEquipTypeNames.length > 0) {
+        setRefCounts({ building: allBuildingNames.length, equipType: allEquipTypeNames.length });
       }
 
       onRefsLoaded(merged);
     })();
     return () => { cancelled = true; };
-  }, [projectId]); // intentionally only re-runs when projectId changes
+  }, [projectId, getOptionsData]); // re-run when getOptionsData arrives
 
   // Sorted list of all error cells: [{ri, header}]
   const errorCells = useMemo(() => {

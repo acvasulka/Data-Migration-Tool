@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { C } from "../theme";
-import { FMX_SCHEMAS, getImportOrder, getBaseSchemaType, getSchemaDisplayName, isModuleDisabled } from "../schemas";
+import { getImportOrder, getBaseSchemaType, getSchemaDisplayName, isModuleDisabled } from "../schemas";
 import { normalizeModules } from "../fmxSync";
 import { getImportRows } from "../db";
 import { downloadCSV } from "../utils";
@@ -89,7 +89,7 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
         {importOrder.map((schema, idx) => {
           const schemaImports = bySchema[schema] || [];
           const hasImports = schemaImports.length > 0;
-          const fieldCount = FMX_SCHEMAS[getBaseSchemaType(schema)]?.fields?.length || 0;
+          const fieldCount = 0; // Field count is dynamic — shown after sync
           const inSession = !!sessionByType[schema];
           const disabled = isModuleDisabled(schema, mods);
 
@@ -133,7 +133,7 @@ export default function SchemaOverview({ imports = [], hasCreds, onSelectType, o
                         fontWeight: 600,
                       }}>Module disabled</span>
                     ) : (
-                      <span style={{ fontSize: 11, color: C.textLight }}>{fieldCount} fields</span>
+                      <span style={{ fontSize: 11, color: hasCreds ? C.textLight : C.orange }}>{hasCreds ? 'Fields from API' : 'Connect FMX'}</span>
                     )}
                     {inSession && !disabled && (
                       <span style={{
