@@ -307,7 +307,10 @@ export default function FMXPushModal({
                 if (userIds.length > 0) {
                   const assignPayload = { assignedUsers: userIds };
                   const priorityVal = row[assignConfig.priorityField];
-                  if (priorityVal) assignPayload.priorityLevel = String(priorityVal);
+                  if (priorityVal) {
+                    assignPayload.priorityLevel = String(priorityVal);
+                    console.info(`[FMX Assignment] Row ${i}: using priority level "${priorityVal}"`);
+                  }
 
                   await fmxFetch({
                     siteUrl: url, email: em, password: pw,

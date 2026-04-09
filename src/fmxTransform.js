@@ -130,21 +130,39 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
   }
 
   // Resolve ID lookup fields (Building → buildingID, etc.)
+  // For isArray fields, split delimited values (semicolons/commas) and resolve each individually.
   const lookups = effectiveLookups;
   Object.entries(lookups).forEach(([fmxField, lookup]) => {
-    const value = row[fmxField];
-    if (!value) return;
-    const cacheKey = `${fmxField}:${value}`;
-    if (idCache[cacheKey]) {
-      const resolvedId = idCache[cacheKey];
-      if (lookup.idField === 'resourceQuantities') {
-        // FMX API expects [{resourceID, quantity}] objects, not plain [id]
-        payload[lookup.idField] = [{ resourceID: resolvedId, quantity: 1 }];
-      } else {
-        payload[lookup.idField] = lookup.isArray ? [resolvedId] : resolvedId;
+    const rawValue = row[fmxField];
+    if (!rawValue) return;
+
+    if (lookup.isArray) {
+      // Split multi-value input and resolve each individually
+      const parts = String(rawValue).split(/[;,]/).map(s => s.trim()).filter(Boolean);
+      const resolvedIds = [];
+      for (const part of parts) {
+        const key = `${fmxField}:${part}`;
+        if (idCache[key]) {
+          resolvedIds.push(idCache[key]);
+        } else {
+          console.warn(`[FMX ID Resolve] No match for "${fmxField}": "${part}" → ${lookup.idField}`);
+        }
+      }
+      if (resolvedIds.length > 0) {
+        if (lookup.idField === 'resourceQuantities') {
+          payload[lookup.idField] = resolvedIds.map(id => ({ resourceID: id, quantity: 1 }));
+        } else {
+          payload[lookup.idField] = resolvedIds;
+        }
       }
     } else {
-      console.warn(`[FMX ID Resolve] No match for "${fmxField}": "${value}" → ${lookup.idField} will be missing from payload`);
+      // Single-value lookup
+      const cacheKey = `${fmxField}:${rawValue}`;
+      if (idCache[cacheKey]) {
+        payload[lookup.idField] = idCache[cacheKey];
+      } else {
+        console.warn(`[FMX ID Resolve] No match for "${fmxField}": "${rawValue}" → ${lookup.idField} will be missing from payload`);
+      }
     }
   });
 
@@ -240,7 +258,19 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
   }
 
   for (const [fmxField, lookup] of Object.entries(lookups)) {
-    const uniqueValues = [...new Set(rows.map(r => r[fmxField]).filter(Boolean))];
+    // For isArray fields, split delimited cell values before collecting unique values
+    const seen = new Set();
+    const uniqueValues = [];
+    for (const row of rows) {
+      const cellValue = row[fmxField];
+      if (!cellValue) continue;
+      const vals = lookup.isArray
+        ? String(cellValue).split(/[;,]/).map(s => s.trim()).filter(Boolean)
+        : [String(cellValue)];
+      for (const v of vals) {
+        if (!seen.has(v)) { seen.add(v); uniqueValues.push(v); }
+      }
+    }
 
     // Try to resolve from dependency cache first
     const depKey = ENDPOINT_TO_DEP_KEY[lookup.endpoint];
