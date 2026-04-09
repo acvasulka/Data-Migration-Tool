@@ -62,8 +62,14 @@ export function validatePayload(payload, systemFields = [], customFields = []) {
     if (sf.options && Array.isArray(sf.options) && sf.options.length > 0) {
       const strVal = String(value);
       const validOptions = sf.options.map(o => typeof o === 'object' ? (o.value || o.label || '') : String(o));
-      if (!validOptions.some(opt => opt === strVal || opt.toLowerCase() === strVal.toLowerCase())) {
-        warnings.push(`"${sf.label || key}" value "${strVal}" not in allowed options`);
+      const exactMatch = validOptions.some(opt => opt === strVal);
+      if (!exactMatch) {
+        const caseMatch = validOptions.find(opt => opt.toLowerCase() === strVal.toLowerCase());
+        if (caseMatch) {
+          warnings.push(`"${sf.label || key}" value "${strVal}" should be "${caseMatch}" (case mismatch)`);
+        } else {
+          warnings.push(`"${sf.label || key}" value "${strVal}" not in allowed options`);
+        }
       }
     }
   }

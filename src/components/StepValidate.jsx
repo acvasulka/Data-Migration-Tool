@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { C } from "../theme";
+import { claudeFetch, parseClaudeText } from "../apiClient";
 import NLEditPanel from "./NLEditPanel";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
 import DepResolveModal from "./DepResolveModal";
@@ -129,16 +130,18 @@ export default function StepValidate({
       .map(([col, n]) => `"${col}": ${n} cells missing`)
       .join('\n');
     const prompt = `You are analyzing data import quality. Generate 2-3 concise, actionable bulk-edit suggestions to fix missing required fields.\n\nSchema type: ${schemaType || 'unknown'}\nTotal rows: ${mappedRows.length}\nFields with missing required data:\n${topCols || '(none)'}\n\nReturn ONLY a JSON array, max 3 items, each with: { "text": "plain English instruction for the bulk edit field", "affectedCount": N }\nInstructions should be copy-pasteable into a bulk edit box. No markdown, no explanation.`;
-    fetch('/api/claude', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 300, messages: [{ role: 'user', content: prompt }] }),
+    claudeFetch({
+      max_tokens: 300,
+      messages: [{ role: 'user', content: prompt }],
     })
-      .then(r => r.json())
       .then(data => {
-        const raw = (data.content?.[0]?.text || '[]').replace(/```json|```/g, '').trim();
+        const raw = parseClaudeText(data) || '[]';
         setSuggestions(JSON.parse(raw));
       })
-      .catch(() => setSuggestions([]))
+      .catch((e) => {
+        console.warn('[StepValidate] Claude suggestion fetch failed:', e);
+        setSuggestions([]);
+      })
       .finally(() => setSuggestionsLoading(false));
   }, []); // intentional mount-only
 

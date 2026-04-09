@@ -147,18 +147,24 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
     }));
 
     return { customFields, systemFields };
-  } catch {
+  } catch (e) {
+    console.warn('[FMX post-options] fetch failed:', e);
     return { customFields: [], systemFields: [] };
   }
 }
 
 // Map GET OPTIONS response keys (camelCase) → dep cache keys (kebab-case)
 const GET_OPTS_DEP_PROPS = {
-  buildings:     'buildings',
-  requestTypes:  'request-types',
-  resources:     'resources',
-  equipment:     'equipment',
-  resourceTypes: 'resource-types',
+  buildings:       'buildings',
+  requestTypes:    'request-types',
+  resources:       'resources',
+  equipment:       'equipment',
+  resourceTypes:   'resource-types',
+  assignmentUsers: 'users',
+  priorityLevels:  'priority-levels',
+  statuses:        'statuses',
+  ownerships:      'ownerships',
+  sortKeys:        'sort-keys',
 };
 
 async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
@@ -189,6 +195,20 @@ async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
           .map(([id, name]) => ({ id: parseInt(id, 10), name: String(name) }))
           .filter(item => item.id > 0);
       }
+    }
+
+    // Handle customFieldOptions specially — nested map { fieldId: { optionId: label } }
+    const cfOpts = data.customFieldOptions;
+    if (cfOpts && typeof cfOpts === 'object' && !Array.isArray(cfOpts)) {
+      const items = [];
+      for (const [fieldId, optionsMap] of Object.entries(cfOpts)) {
+        if (optionsMap && typeof optionsMap === 'object') {
+          for (const [optId, label] of Object.entries(optionsMap)) {
+            items.push({ id: parseInt(optId, 10), name: String(label), customFieldID: parseInt(fieldId, 10) });
+          }
+        }
+      }
+      if (items.length > 0) depMaps['custom-field-options'] = items;
     }
 
     return { customFields, raw: data, depMaps };
@@ -247,7 +267,8 @@ export async function fetchFmxModules(siteUrl, email, password) {
     }
 
     return modules;
-  } catch {
+  } catch (e) {
+    console.warn('[FMX modules] fetch failed, using defaults:', e);
     return defaults;
   }
 }
