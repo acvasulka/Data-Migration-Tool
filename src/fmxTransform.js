@@ -1,4 +1,3 @@
-import { FMX_FIELD_MAP, FMX_ID_LOOKUP_FIELDS } from './fmxEndpoints';
 import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType } from './schemas';
 import { fmxFetch } from './apiClient';
@@ -41,17 +40,13 @@ function coerceCustomFieldValue(value, fieldType) {
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
 export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null) {
   const baseType = getBaseSchemaType(schemaType);
-  const fieldMap = (fieldMapOverride && Object.keys(fieldMapOverride).length > 0)
-    ? fieldMapOverride
-    : (FMX_FIELD_MAP[baseType] || {});
+  const fieldMap = fieldMapOverride || {};
   const payload = {};
   const customFields = [];
   const droppedFields = [];
 
   // Build a set of lookup field names so we don't report them as "dropped"
-  const effectiveLookups = (lookupFieldsOverride && Object.keys(lookupFieldsOverride).length > 0)
-    ? lookupFieldsOverride
-    : (FMX_ID_LOOKUP_FIELDS[baseType] || {});
+  const effectiveLookups = lookupFieldsOverride || {};
   const lookupFieldNames = new Set(Object.keys(effectiveLookups));
 
   Object.entries(row).forEach(([fieldName, value]) => {
@@ -232,9 +227,7 @@ function matchDepLookup(value, depLookup) {
 // If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
 // and only falls back to individual API calls for cache misses.
 export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
-  const lookups = (lookupFieldsOverride && Object.keys(lookupFieldsOverride).length > 0)
-    ? lookupFieldsOverride
-    : (FMX_ID_LOOKUP_FIELDS[getBaseSchemaType(schemaType)] || {});
+  const lookups = lookupFieldsOverride || {};
   const idCache = {};
   const unresolved = [];
 

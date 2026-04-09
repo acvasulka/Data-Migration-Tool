@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
-import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
+import { getBaseSchemaType } from "./schemas";
 import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
@@ -200,8 +199,6 @@ export default function App() {
     return map;
   }, [fmxSyncData.customFields]);
 
-  const schema = schemaType ? FMX_SCHEMAS[getBaseSchemaType(schemaType)] : null;
-
   // Use API-driven field list when credentials are present and sync has completed
   const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
   const baseType = schemaType ? getBaseSchemaType(schemaType) : null;
@@ -209,13 +206,10 @@ export default function App() {
     if (!schemaType) return [];
     // Dynamic: merge live systemFields from /post-options with enrichment metadata
     if (hasApiFields && fmxSyncData.systemFields?.length && hasEnrichments(baseType)) {
-      const dynamic = buildFieldDefinitions(baseType, fmxSyncData.systemFields);
-      if (dynamic) return dynamic;
+      return buildFieldDefinitions(baseType, fmxSyncData.systemFields) || [];
     }
-    // Fallback: hardcoded field schema
-    if (hasApiFields && FMX_API_STANDARD_FIELDS[baseType]) return FMX_API_STANDARD_FIELDS[baseType];
-    return schema?.fields || [];
-  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields, schema]);
+    return []; // No fallback — API fields required
+  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields]);
 
   const allFields = schemaType ? [
     ...baseFields,
@@ -318,12 +312,12 @@ export default function App() {
     setCsv(parsed);
     setFileInfo({ ...info, rowCount: parsed.rows.length });
     setAiLoading(true);
-    const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
+    const suggested = suggestMapping(parsed.headers, allFields);
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
         claudeFetch({
           max_tokens: 1000,
-          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(allFields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
         }).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
         getSavedRulesForSchema(schemaType),
@@ -480,15 +474,19 @@ export default function App() {
   };
 
   const handleImportComplete = ({ schemaType: st, referenceValues }) => {
-    const refField = FMX_SCHEMAS[st]?.crossRef;
-    if (refField) {
+    // Building and Equipment Type use "Name" as cross-reference value
+    const crossRefTypes = ['Building', 'Equipment Type'];
+    const baseSt = getBaseSchemaType(st);
+    if (crossRefTypes.includes(baseSt)) {
       const vals = referenceValues
-        .filter(r => r.fieldName === refField)
+        .filter(r => r.fieldName === 'Name')
         .map(r => r.value);
-      setImportedData(prev => ({
-        ...prev,
-        [st]: [...new Set([...(prev[st] || []), ...vals])],
-      }));
+      if (vals.length > 0) {
+        setImportedData(prev => ({
+          ...prev,
+          [baseSt]: [...new Set([...(prev[baseSt] || []), ...vals])],
+        }));
+      }
     }
     setChecklistRefreshKey(k => k + 1);
     if (selectedProject?.id) {
@@ -498,13 +496,10 @@ export default function App() {
 
   const handleResumeFromWizard = async (rec, step = 3) => {
     const rows = await getImportRows(rec.id);
-    const schemaFieldNames = new Set((FMX_SCHEMAS[rec.schema_type]?.fields || []).map(f => f.name));
-    const rowKeys = Object.keys((rows && rows[0]) || {});
-    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
     setSchemaType(rec.schema_type);
     setMapping(rec.mapping_snapshot || {});
     setMappedRows(rows || []);
-    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
+    setCustomFields([]);
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
@@ -512,6 +507,7 @@ export default function App() {
     setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(step);
     setMainTab('wizard');
+    handleFmxSync(rec.schema_type);
   };
 
   const handleViewFromWizard = async (rec) => {
@@ -523,14 +519,10 @@ export default function App() {
   };
 
   const handleResumeImport = ({ schemaType: st, mappedRows: rows, mapping: m, wStep: step = 3 }) => {
-    // Derive any extra columns from saved rows that aren't in the static schema
-    const schemaFieldNames = new Set((FMX_SCHEMAS[st]?.fields || []).map(f => f.name));
-    const rowKeys = Object.keys((rows && rows[0]) || {});
-    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
     setSchemaType(st);
     setMapping(m || {});
     setMappedRows(rows || []);
-    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
+    setCustomFields([]);
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
@@ -538,6 +530,7 @@ export default function App() {
     setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setShowProjectScreen(false);
     setWStep(step);
+    handleFmxSync(st);
   };
 
   const reset = () => {
