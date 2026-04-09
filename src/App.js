@@ -1,11 +1,14 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import { getBaseSchemaType } from "./schemas";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { FMX_SCHEMAS, getBaseSchemaType } from "./schemas";
+import { FMX_API_STANDARD_FIELDS } from "./fmxFieldSchema";
+import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows } from "./db";
-import { syncFmxDataForProject } from "./fmxSync";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache } from "./db";
+import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
+import { claudeFetch, parseClaudeText } from "./apiClient";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -117,7 +120,6 @@ export default function App() {
   const [resetMsg, setResetMsg] = useState('');
 
   // --- Wizard state ---
-  const [importedData, setImportedData] = useState({});
   const [history, setHistory] = useState([]);
   const [wStep, setWStep] = useState(0);
   const [schemaType, setSchemaType] = useState("");
@@ -137,10 +139,11 @@ export default function App() {
   const [memoryMatches, setMemoryMatches] = useState({});
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
-  const [persistentRefs, setPersistentRefs] = useState(null); // merged Supabase + in-session refs
+  const [depCacheMap, setDepCacheMap] = useState({}); // { [crossSheetType]: string[] } from FMX live dep cache
+  const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
-  const [activeImportId, setActiveImportId] = useState(null);
+  const [xlsxWorkbook, setXlsxWorkbook] = useState(null); // { wb, typeLabel } when sheet picker active
 
   // Overview / tab routing
   const [mainTab, setMainTab] = useState('overview'); // 'overview' | 'dependencies' | 'settings' | 'wizard'
@@ -197,19 +200,42 @@ export default function App() {
     return map;
   }, [fmxSyncData.customFields]);
 
-  // Use dynamic field list from post-options when available (includes system + custom fields)
-  const hasDynamicFields = fmxSyncData.fields && fmxSyncData.fields.length > 0;
+  const schema = schemaType ? FMX_SCHEMAS[getBaseSchemaType(schemaType)] : null;
+
+  // Use API-driven field list when credentials are present and sync has completed
+  const hasApiFields = !!selectedProject?.fmx_credentials && fmxSyncData.fromCache !== undefined;
+  const baseType = schemaType ? getBaseSchemaType(schemaType) : null;
+  const baseFields = useMemo(() => {
+    if (!schemaType) return [];
+    // Dynamic: merge live systemFields from /post-options with enrichment metadata
+    if (hasApiFields && fmxSyncData.systemFields?.length && hasEnrichments(baseType)) {
+      const dynamic = buildFieldDefinitions(baseType, fmxSyncData.systemFields);
+      if (dynamic) return dynamic;
+    }
+    // Fallback: hardcoded field schema
+    if (hasApiFields && FMX_API_STANDARD_FIELDS[baseType]) return FMX_API_STANDARD_FIELDS[baseType];
+    return schema?.fields || [];
+  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields, schema]);
 
   const allFields = schemaType ? [
-    ...(hasDynamicFields ? fmxSyncData.fields : []),
+    ...baseFields,
+    // Manual custom fields only when not using API-driven field list
+    ...(!hasApiFields ? customFields.filter(cf => cf.name).map(cf => ({
+      name: cf.name, required: cf.required || false, type: "string", group: "Custom Fields",
+    })) : []),
     ...dynamicRates.flatMap((_, i) => [
       { name: `Rate ${i + 1} Cost`, required: false, type: "number", group: "Scheduling Rates" },
       { name: `Rate ${i + 1} Unit`, required: false, type: "string", group: "Scheduling Rates" },
     ]),
+    // FMX custom fields from live sync (always appended; empty when no credentials)
+    ...(fmxSyncData.customFields || []).map(cf => ({
+      name: cf.name, required: cf.isRequired || false, type: getFieldTypeCategory(cf.fieldType), group: "FMX Custom Fields",
+      isCustomField: true, customFieldId: cf.id, fieldType: cf.fieldType,
+    })),
   ] : [];
   const mappedHeaders = allFields.map(f => f.name);
 
-  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, persistentRefs ?? importedData, fmxSyncData.getOptionsData) : {};
+  const cellErrors = wStep >= 3 ? computeCellErrors(mappedRows, allFields, schemaType, depCacheMap) : {};
   const hasErrors = Object.values(cellErrors).some(v => v === "error");
 
   const groupedFields = {};
@@ -222,28 +248,69 @@ export default function App() {
   const canProceed = !hasErrors || certified;
 
   const handleFmxSync = async (type) => {
-    console.log('handleFmxSync called, project:', selectedProject?.name, 'creds:', !!selectedProject?.fmx_credentials);
     if (!selectedProject?.fmx_credentials) return;
-    setFmxSyncData({ customFields: [], fields: [], loading: true, fromCache: undefined });
+    setFmxSyncData({ customFields: [], loading: true, fromCache: undefined });
     const result = await syncFmxDataForProject(selectedProject, type);
-    setFmxSyncData({
-      customFields: result.customFields || [],
-      systemFields: result.systemFields || [],
-      fields: result.fields || [],
-      getOptionsData: result.getOptionsData || {},
-      idMap: result.idMap || {},
-      loading: false,
-      fromCache: result.fromCache,
-    });
+    setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
   };
+
+  // Maps dependency cache keys to crossSheet field labels used in allFields
+  const DEP_KEY_TO_CROSS_SHEET = {
+    'buildings':       'Building',
+    'equipment-types': 'Equipment Type',
+    'resources':       'Resource',
+    'equipment':       'Equipment',
+    'users':           'User',
+    'request-types':   'Request Type',
+    'inventory-types': 'Inventory Type',
+    'inventory':       'Inventory',
+    'user-types':      'User Type',
+  };
+
+  const handleCustomFieldTypeChange = useCallback(async (fieldId, newType) => {
+    const updated = (fmxSyncData.customFields || []).map(cf =>
+      cf.id === fieldId ? { ...cf, fieldType: newType } : cf
+    );
+    setFmxSyncData(prev => ({ ...prev, customFields: updated }));
+    if (selectedProject?.id && schemaType) {
+      await saveFmxReferenceCache(selectedProject.id, schemaType, updated, fmxSyncData.systemFields || []);
+    }
+  }, [fmxSyncData, selectedProject, schemaType]);
+
+  const loadDepCacheMap = useCallback(async () => {
+    if (!selectedProject?.id) return;
+    const rows = await getAllDependencyCaches(selectedProject.id);
+    const map = {};
+    for (const row of rows) {
+      const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
+      if (crossSheet && row.extra?.items?.length) {
+        map[crossSheet] = row.extra.items.map(i => i.name).filter(Boolean);
+      }
+    }
+    setDepCacheMap(map);
+  }, [selectedProject?.id]); // dep: selectedProject.id is the only relevant change trigger
+
+  // Load dep cache whenever selected project changes
+  useEffect(() => { loadDepCacheMap(); }, [loadDepCacheMap]);
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
     setTransformRules({}); setCertified(false); setFileInfo(null);
-    setFmxSyncData({ customFields: [], systemFields: [], fields: [], getOptionsData: {}, idMap: {}, loading: false, fromCache: undefined });
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(1);
     setMainTab('wizard');
     handleFmxSync(t);
+    // Auto-refresh only the dep types this schema actually needs (parallel, schema-aware)
+    if (selectedProject?.fmx_connection_verified) {
+      const depKeys = getDepKeysForSchema(t); // [] for self-imports, null = all
+      if (depKeys === null || depKeys.length > 0) {
+        setDepAutoSyncing(true);
+        fetchAllDependencies(selectedProject, () => {}, depKeys)
+          .then(() => loadDepCacheMap())
+          .catch(() => {})
+          .finally(() => setDepAutoSyncing(false));
+      }
+    }
   };
 
   const processCSV = async (csvStr, info) => {
@@ -251,16 +318,13 @@ export default function App() {
     setCsv(parsed);
     setFileInfo({ ...info, rowCount: parsed.rows.length });
     setAiLoading(true);
-    const suggested = suggestMapping(parsed.headers, allFields);
+    const suggested = suggestMapping(parsed.headers, (FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []));
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
-        fetch("/api/claude", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 1000,
-            messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(allFields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
-          })
-        }).then(r => r.json()).catch(() => null),
+        claudeFetch({
+          max_tokens: 1000,
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify((FMX_SCHEMAS[getBaseSchemaType(schemaType)]?.fields || []).map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+        }).catch(() => null),
         getMappingSuggestions(schemaType, parsed.headers),
         getSavedRulesForSchema(schemaType),
       ]);
@@ -268,7 +332,7 @@ export default function App() {
       // Parse AI result
       let aiResult = {};
       if (aiRes) {
-        const clean = (aiRes.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim();
+        const clean = parseClaudeText(aiRes) || "{}";
         try { aiResult = JSON.parse(clean); } catch {}
       }
 
@@ -317,13 +381,57 @@ export default function App() {
       reader.onload = async e => {
         const XLSX = await import("xlsx");
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
-        const sheetName = wb.SheetNames[0];
-        const ws = wb.Sheets[sheetName];
-        const csvStr = XLSX.utils.sheet_to_csv(ws);
         const typeLabel = ext === "xlsx" ? "Excel (.xlsx)" : ext === "xls" ? "Excel (.xls)" : "ODS";
-        await processCSV(csvStr, { type: typeLabel, sheetName });
+        if (wb.SheetNames.length <= 1) {
+          // Single sheet — proceed immediately
+          const sheetName = wb.SheetNames[0];
+          const ws = wb.Sheets[sheetName];
+          const csvStr = XLSX.utils.sheet_to_csv(ws);
+          await processCSV(csvStr, { type: typeLabel, sheetName });
+        } else {
+          // Multiple sheets — show picker
+          setXlsxWorkbook({ wb, typeLabel });
+        }
       };
       reader.readAsArrayBuffer(file);
+    }
+  };
+
+  const handleSheetSelect = async (selection) => {
+    if (!xlsxWorkbook) return;
+    const { wb, typeLabel } = xlsxWorkbook;
+    const XLSX = await import("xlsx");
+    setXlsxWorkbook(null);
+
+    if (selection === '__merge__') {
+      // Merge all sheets — prefix each column with "SheetName — ColumnHeader"
+      const allRows = [];
+      for (const sheetName of wb.SheetNames) {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        for (const row of rows) {
+          const prefixed = {};
+          for (const [col, val] of Object.entries(row)) {
+            prefixed[`${sheetName} \u2014 ${col}`] = val;
+          }
+          allRows.push(prefixed);
+        }
+      }
+      const allHeaders = [...new Set(allRows.flatMap(r => Object.keys(r)))];
+      const csvLines = [
+        allHeaders.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','),
+        ...allRows.map(row =>
+          allHeaders.map(h => {
+            const v = row[h] ?? '';
+            return `"${String(v).replace(/"/g, '""')}"`;
+          }).join(',')
+        ),
+      ];
+      await processCSV(csvLines.join('\n'), { type: typeLabel, sheetName: `Merged (${wb.SheetNames.length} sheets)` });
+    } else {
+      const ws = wb.Sheets[selection];
+      const csvStr = XLSX.utils.sheet_to_csv(ws);
+      await processCSV(csvStr, { type: typeLabel, sheetName: selection });
     }
   };
 
@@ -372,18 +480,15 @@ export default function App() {
   };
 
   const handleImportComplete = ({ schemaType: st, referenceValues }) => {
-    // Cross-reference field: Building and Equipment Type use "Name" as the reference value
-    const crossRefTypes = ['Building', 'Equipment Type'];
-    if (crossRefTypes.includes(getBaseSchemaType(st))) {
+    const refField = FMX_SCHEMAS[st]?.crossRef;
+    if (refField) {
       const vals = referenceValues
-        .filter(r => r.fieldName === 'Name')
+        .filter(r => r.fieldName === refField)
         .map(r => r.value);
-      if (vals.length > 0) {
-        setImportedData(prev => ({
-          ...prev,
-          [getBaseSchemaType(st)]: [...new Set([...(prev[getBaseSchemaType(st)] || []), ...vals])],
-        }));
-      }
+      setImportedData(prev => ({
+        ...prev,
+        [st]: [...new Set([...(prev[st] || []), ...vals])],
+      }));
     }
     setChecklistRefreshKey(k => k + 1);
     if (selectedProject?.id) {
@@ -393,18 +498,20 @@ export default function App() {
 
   const handleResumeFromWizard = async (rec, step = 3) => {
     const rows = await getImportRows(rec.id);
+    const schemaFieldNames = new Set((FMX_SCHEMAS[rec.schema_type]?.fields || []).map(f => f.name));
+    const rowKeys = Object.keys((rows && rows[0]) || {});
+    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
     setSchemaType(rec.schema_type);
     setMapping(rec.mapping_snapshot || {});
     setMappedRows(rows || []);
-    setCustomFields([]);
+    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
     setPersistentRefs(null);
-    setFmxSyncData({ customFields: [], systemFields: [], fields: [], getOptionsData: {}, idMap: {}, loading: false, fromCache: undefined });
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(step);
     setMainTab('wizard');
-    handleFmxSync(rec.schema_type);
   };
 
   const handleViewFromWizard = async (rec) => {
@@ -416,18 +523,21 @@ export default function App() {
   };
 
   const handleResumeImport = ({ schemaType: st, mappedRows: rows, mapping: m, wStep: step = 3 }) => {
+    // Derive any extra columns from saved rows that aren't in the static schema
+    const schemaFieldNames = new Set((FMX_SCHEMAS[st]?.fields || []).map(f => f.name));
+    const rowKeys = Object.keys((rows && rows[0]) || {});
+    const extraFields = rowKeys.filter(k => !schemaFieldNames.has(k));
     setSchemaType(st);
     setMapping(m || {});
     setMappedRows(rows || []);
-    setCustomFields([]);
+    setCustomFields(extraFields.map(name => ({ name, required: false, type: 'string' })));
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
     setPersistentRefs(null);
-    setFmxSyncData({ customFields: [], systemFields: [], fields: [], getOptionsData: {}, idMap: {}, loading: false, fromCache: undefined });
+    setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setShowProjectScreen(false);
     setWStep(step);
-    handleFmxSync(st);
   };
 
   const reset = () => {
@@ -635,6 +745,9 @@ export default function App() {
             onViewImport={handleViewFromWizard}
             history={history}
             fmxModules={selectedProject?.fmx_modules}
+            cardSettings={selectedProject?.card_settings || {}}
+            projectId={selectedProject?.id}
+            onProjectUpdated={(u) => setSelectedProject(u)}
           />
         )}
 
@@ -684,6 +797,8 @@ export default function App() {
                 handleFileAndMap={handleFileAndMap}
                 fmxSyncLoading={fmxSyncData.loading}
                 fmxSyncFromCache={fmxSyncData.fromCache}
+                xlsxSheetNames={xlsxWorkbook ? xlsxWorkbook.wb.SheetNames : null}
+                onSheetSelect={handleSheetSelect}
               />
             )}
 
@@ -708,6 +823,7 @@ export default function App() {
                 mappingSources={mappingSources}
                 savedRules={savedRules}
                 fmxSyncData={fmxSyncData}
+                onCustomFieldTypeChange={handleCustomFieldTypeChange}
               />
             )}
 
@@ -724,9 +840,10 @@ export default function App() {
                 applyNLEdit={applyNLEdit}
                 onRowsUpdated={(rows) => setMappedRows(rows)}
                 projectId={selectedProject?.id}
-                importedData={importedData}
-                onRefsLoaded={handleRefsLoaded}
-                getOptionsData={fmxSyncData?.getOptionsData || {}}
+                schemaType={schemaType}
+                depCacheMap={depCacheMap}
+                depAutoSyncing={depAutoSyncing}
+                onCustomFieldTypeChange={handleCustomFieldTypeChange}
               />
             )}
 
@@ -746,8 +863,7 @@ export default function App() {
                 userEmail={user?.email}
                 customFieldIdMap={fmxCustomFieldIdMap}
                 customFieldMetadata={fmxSyncData?.customFields || []}
-                fieldList={allFields}
-                prebuiltIdMap={fmxSyncData?.idMap || {}}
+                systemFieldMetadata={fmxSyncData?.systemFields || []}
                 fileInfo={fileInfo}
               />
             )}
