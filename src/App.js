@@ -447,10 +447,13 @@ export default function App() {
   };
 
   const handleExport = async (format = "csv") => {
-    const refField = schema.crossRef;
+    // Building and Equipment Type use "Name" as cross-reference value
+    const crossRefTypes = ['Building', 'Equipment Type'];
+    const baseSt = getBaseSchemaType(schemaType);
+    const refField = crossRefTypes.includes(baseSt) ? 'Name' : null;
     if (refField) {
       const vals = [...new Set(mappedRows.map(r => r[refField]).filter(Boolean))];
-      setImportedData(prev => ({ ...prev, [schemaType]: vals }));
+      setImportedData(prev => ({ ...prev, [baseSt]: vals }));
     }
     const baseName = schemaType.replace(/\s+/g, "_");
     setHistory(h => [...h, { type: schemaType, rows: mappedRows.length, time: new Date().toLocaleTimeString() }]);
@@ -795,7 +798,7 @@ export default function App() {
               />
             )}
 
-            {wStep === 2 && schema && (
+            {wStep === 2 && allFields.length > 0 && (
               <StepMapFields
                 csv={csv}
                 schemaType={schemaType}
