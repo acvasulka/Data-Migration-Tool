@@ -1,6 +1,6 @@
 import { getFmxReferenceCache, saveFmxReferenceCache, getCacheAge, saveDependencyCache } from './db';
 import { fmxFetch, claudeFetch, parseClaudeText } from './apiClient';
-import { resolveEndpoint, resolvePostOptionsEndpoint, resolveGetOptionsEndpoint } from './fmxEndpoints';
+import { resolveEndpoint, resolvePostOptionsEndpoint, resolveGetOptionsEndpoint, resolvePutOptionsEndpoint } from './fmxEndpoints';
 import { FMX_FIELD_TYPE_MAP } from './fmxFieldTypes';
 import { FMX_FIELD_ENRICHMENTS } from './fmxFieldMetadata';
 import { getBaseSchemaType } from './schemas';
@@ -102,14 +102,7 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
-// Resolve put-options endpoint for an existing entity.
-// Uses resolveEndpoint to get the base path, then appends /{entityId}/put-options.
-export function resolvePutOptionsEndpoint(schemaType, entityId, modules) {
-  const base = resolveEndpoint(schemaType, modules);
-  return base ? `${base}/${entityId}/put-options` : null;
-}
-
-async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
+export async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
 
@@ -123,7 +116,9 @@ async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
       .map(cf => ({
         id: cf.key,
         name: cf.label,
-        fieldType: cf.fieldTypeName || cf.fieldType || 'Text',
+        // Per CLAUDE.md §8f, the canonical field is `fieldType`. Any earlier
+        // `fieldTypeName` fallback was undocumented.
+        fieldType: cf.fieldType || 'Text',
         isRequired: cf.isRequired || false,
         options: cf.options || [],
         allowMultipleSelections: cf.allowMultipleSelections || false,
@@ -227,6 +222,9 @@ async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
 //   data.scheduleRequestSettings — object, has .moduleKey and .moduleName
 //   data.workTaskSettings       — array,  each has .moduleKey and .moduleName
 export async function fetchFmxModules(siteUrl, email, password) {
+  // Defaults used only until fetchFmxModules() confirms module slugs from /v1/organization.
+  // 'maintenance' is an assumption, not a spec-backed value — CLAUDE.md §4 names it as a
+  // common convention but does not prescribe a Work-Task default.
   const defaults = {
     workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
     scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
@@ -483,7 +481,6 @@ const SCHEMA_DEP_KEYS = {
   'User':                   ['buildings', 'user-types'],
   'Equipment Type':         [],
   'Equipment':              ['buildings', 'equipment-types'],
-  'Inventory Type':         [],
   'Inventory':              ['buildings', 'inventory-types'],
   'Work Request':           ['buildings', 'users', 'resources', 'request-types'],
   'Schedule Request':       ['buildings', 'resources'],

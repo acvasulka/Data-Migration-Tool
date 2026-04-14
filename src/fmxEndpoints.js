@@ -1,4 +1,10 @@
-// FMX API endpoint map. Module-based schemas use a function that accepts the project's fmx_modules object.
+// FMX API endpoint map.
+// NOTE: Module-qualified schema types — "Work Request:<slug>", "Schedule Request:<slug>",
+// "Work Task:<slug>" — are resolved exclusively by resolveEndpoint()'s string-prefix
+// branches below. They MUST NOT be added here.
+// NOTE: "Inventory Type" is intentionally omitted: FMX does not document a create/update
+// endpoint for inventory types (CLAUDE.md §9 lists only GETs). It is also not in
+// IMPORT_ORDER (src/schemas.js), so it is unreachable from the import flow.
 const FMX_ENDPOINTS = {
   'Building':               '/v1/buildings',
   'Resource':               '/v1/resources',
@@ -6,17 +12,15 @@ const FMX_ENDPOINTS = {
   'Equipment Type':         '/v1/equipment-types',
   'Equipment':              '/v1/equipment',
   'Inventory':              '/v1/inventory',
-  'Work Request':           (m) => `/v1/${m?.workRequest || 'maintenance'}-requests`,
-  'Schedule Request':       (m) => `/v1/${m?.scheduling  || 'scheduling'}/requests`,
-  'Work Task':              (m) => `/v1/${m?.workTask    || 'maintenance'}/tasks`,
   'Transportation Request': '/v1/transportation-requests',
   'Accounting Account':     '/v1/accounting-accounts',
 };
 
 // Resolves the endpoint for a schema type.
-// Handles module-qualified types like "Work Request:maintenance" (slug embedded in key),
-// legacy module-function entries, and static string endpoints.
-export function resolveEndpoint(schemaType, modules) {
+// Handles module-qualified types like "Work Request:maintenance" (slug embedded in key)
+// and static string endpoints.
+// `modules` kept in signature for call-site stability; no longer consulted.
+export function resolveEndpoint(schemaType, modules) { // eslint-disable-line no-unused-vars
   // Module-qualified types — slug is embedded in the key after ":"
   if (schemaType.startsWith('Work Request:'))
     return `/v1/${schemaType.split(':')[1]}-requests`;
@@ -24,10 +28,9 @@ export function resolveEndpoint(schemaType, modules) {
     return `/v1/${schemaType.split(':')[1]}/requests`;
   if (schemaType.startsWith('Work Task:'))
     return `/v1/${schemaType.split(':')[1]}/tasks`;
-  // Static / legacy function-based entries
+  // Static string endpoints
   const ep = FMX_ENDPOINTS[schemaType];
-  if (!ep) return null;
-  return typeof ep === 'function' ? ep(modules) : ep;
+  return ep || null;
 }
 
 export function resolvePostOptionsEndpoint(schemaType, modules) {
