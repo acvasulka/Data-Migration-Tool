@@ -451,7 +451,7 @@ export const DEPENDENCY_TYPES = [
 ];
 
 // Generic paginated fetcher — collects all pages from an FMX list endpoint.
-async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,name', limit = 100) {
+export async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,name', limit = 100) {
   const allItems = [];
   let offset = 0;
   let totalCount = null;

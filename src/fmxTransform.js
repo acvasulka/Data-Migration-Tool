@@ -1,6 +1,7 @@
 import { getFieldTypeCategory } from './fmxFieldTypes';
 import { getBaseSchemaType, getSchemaModuleSlug } from './schemas';
 import { fmxFetch } from './apiClient';
+import { fetchAllPages } from './fmxSync';
 
 // Equipment assetCondition is an integer enum in the FMX API
 function generateDefaultPassword() {
@@ -284,8 +285,9 @@ function matchDepLookup(value, depLookup) {
 
 // Pre-fetch IDs for all unique reference values in the dataset.
 // Returns { idCache: { "Building:Main Campus": 42, ... }, unresolved: [...] }
-// If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings
-// and only falls back to individual API calls for cache misses.
+// If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings.
+// Unresolved values are batched by endpoint and fetched in parallel bulk requests
+// rather than issuing individual sequential API calls per value.
 export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
   const lookups = lookupFieldsOverride || {};
   const idCache = {};
@@ -299,8 +301,12 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
     }
   }
 
+  // Phase 1: Collect unique values per field and resolve from dep cache.
+  // Track unresolved values grouped by endpoint for bulk fetching.
+  // pendingByEndpoint: { endpoint: [{ cacheKey, value, nameField }] }
+  const pendingByEndpoint = {};
+
   for (const [fmxField, lookup] of Object.entries(lookups)) {
-    // For isArray fields, split delimited cell values before collecting unique values
     const seen = new Set();
     const uniqueValues = [];
     for (const row of rows) {
@@ -314,43 +320,81 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
       }
     }
 
-    // Resolve {module} sentinel (e.g. self-referential Work Request lookups) before use.
     const endpoint = resolveLookupEndpoint(lookup.endpoint, schemaType);
 
     // Try to resolve from dependency cache first
     const depKey = ENDPOINT_TO_DEP_KEY[endpoint];
     const depItems = depKey ? depByKey[depKey] : null;
-    const depLookup = depItems ? buildDepLookup(depItems, depKey === 'equipment' ? 'tag' : 'name') : {};
+    const nameField = depKey === 'equipment' ? 'tag' : 'name';
+    const depLookup = depItems ? buildDepLookup(depItems, nameField) : {};
 
     for (const value of uniqueValues) {
       const cacheKey = `${fmxField}:${value}`;
-
-      // Check dependency cache (with case-insensitive matching)
       const depId = matchDepLookup(value, depLookup);
       if (depId !== undefined) {
         idCache[cacheKey] = depId;
         continue;
       }
+      // Queue for bulk fetch
+      if (!pendingByEndpoint[endpoint]) pendingByEndpoint[endpoint] = { nameField, items: [] };
+      pendingByEndpoint[endpoint].items.push({ cacheKey, value });
+    }
+  }
 
-      // Fall back to individual API search
-      try {
-        const searchParam = lookup.searchParam || 'search';
-        const res = await fmxFetch({
-          siteUrl, email, password,
-          endpoint: `${endpoint}?${searchParam}=${encodeURIComponent(value)}&limit=1`,
-          method: 'GET',
-        });
-        const data = await res.json();
-        const items = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
-        if (Array.isArray(items) && items.length > 0) {
-          idCache[cacheKey] = items[0].id;
-        } else {
-          unresolved.push(cacheKey);
+  // Phase 2: Bulk-fetch all records for each endpoint with unresolved values.
+  // Uses fetchAllPages with minimal fields to get a complete name→ID map per endpoint,
+  // then matches locally — replaces N sequential search calls with one paginated fetch.
+  const endpointEntries = Object.entries(pendingByEndpoint);
+  if (endpointEntries.length > 0) {
+    const settled = await Promise.allSettled(
+      endpointEntries.map(async ([endpoint, { nameField, items }]) => {
+        // Fetch all records from this endpoint with minimal fields
+        const fields = `id,name,tag,email`;
+        try {
+          const { items: allRecords } = await fetchAllPages(siteUrl, email, password, endpoint, fields);
+          const bulkLookup = buildDepLookup(allRecords, nameField);
+          // Also build a secondary lookup by 'name' if nameField is 'tag' (or vice versa)
+          // to catch matches on either field
+          const altLookup = nameField !== 'name'
+            ? buildDepLookup(allRecords, 'name')
+            : buildDepLookup(allRecords, 'tag');
+
+          for (const { cacheKey, value } of items) {
+            const id = matchDepLookup(value, bulkLookup) ?? matchDepLookup(value, altLookup);
+            if (id !== undefined) {
+              idCache[cacheKey] = id;
+            } else {
+              unresolved.push(cacheKey);
+            }
+          }
+        } catch (e) {
+          console.warn(`[buildIdCache] bulk fetch failed for ${endpoint}, falling back to individual lookups:`, e);
+          // Fallback: individual search calls (original behavior)
+          for (const { cacheKey, value } of items) {
+            try {
+              const res = await fmxFetch({
+                siteUrl, email, password,
+                endpoint: `${endpoint}?search=${encodeURIComponent(value)}&limit=1&fields=id,name,tag`,
+                method: 'GET',
+              });
+              const data = await res.json();
+              const records = Array.isArray(data) ? data : (data.items || data.data || data.results || []);
+              if (records.length > 0) {
+                idCache[cacheKey] = records[0].id;
+              } else {
+                unresolved.push(cacheKey);
+              }
+            } catch (err) {
+              console.warn(`Could not resolve ID for ${cacheKey}`, err);
+              unresolved.push(cacheKey);
+            }
+          }
         }
-      } catch (e) {
-        console.warn(`Could not resolve ID for ${fmxField}:${value}`, e);
-        unresolved.push(cacheKey);
-      }
+      })
+    );
+    // Log any rejected promises (shouldn't happen since we catch inside, but safety net)
+    for (const r of settled) {
+      if (r.status === 'rejected') console.warn('[buildIdCache] unexpected rejection:', r.reason);
     }
   }
 
