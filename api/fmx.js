@@ -7,12 +7,13 @@ export default async function handler(req, res) {
   const fmxUrl = `https://${siteUrl}/api${endpoint}`;
   const httpMethod = method || 'POST';
   try {
+    // Per CLAUDE.md §1, only bodied requests use application/json; GET has no body.
+    const headers = { 'Authorization': `Basic ${credentials}` };
+    if (httpMethod !== 'GET') headers['Content-Type'] = 'application/json';
+
     const response = await fetch(fmxUrl, {
       method: httpMethod,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${credentials}`,
-      },
+      headers,
       body: httpMethod !== 'GET' ? JSON.stringify(payload) : undefined,
     });
     let data;

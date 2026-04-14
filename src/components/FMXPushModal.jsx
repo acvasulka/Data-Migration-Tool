@@ -4,7 +4,7 @@ import Modal from "./Modal";
 import { resolveEndpoint, FMX_ASSIGNMENT_FIELDS } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache, fetchAllRecords } from "../fmxTransform";
 import { deriveFieldMap, deriveLookupFields } from "../fmxFieldMetadata";
-import { decodeCredentials } from "../fmxSync";
+import { decodeCredentials, fetchPostOptions } from "../fmxSync";
 import { fmxFetch } from "../apiClient";
 import { downloadCSV } from "../utils";
 import { getAllDependencyCaches } from "../db";
@@ -106,9 +106,13 @@ export default function FMXPushModal({
       const em = effectiveEmail.trim();
       const pw = effectivePassword;
 
-      // Derive dynamic field/lookup maps from allFields
+      // Derive dynamic field/lookup/type maps from allFields
       const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
       const dynLookups = allFields?.length ? deriveLookupFields(allFields) : null;
+      const dynTypeMap = {};
+      if (allFields?.length) {
+        for (const f of allFields) { if (f.type && f.type !== 'string') dynTypeMap[f.name] = f.type; }
+      }
 
       // Step 1: Build ID cache
       setStatusMsg('Resolving reference IDs\u2026');
@@ -125,14 +129,24 @@ export default function FMXPushModal({
       if (cancelledRef.current) return;
       idCacheRef.current = idCache;
 
-      // Step 2: Transform all rows and validate
+      // Step 2: Fetch fresh post-options for current field constraints (CLAUDE.md §2)
+      setStatusMsg('Fetching field constraints\u2026');
+      let sysFields = systemFieldMetadata || [];
+      let cfMeta = customFieldMetadata || [];
+      try {
+        const freshOpts = await fetchPostOptions(url, em, pw, schemaType, fmxModules);
+        if (freshOpts.systemFields.length > 0) sysFields = freshOpts.systemFields;
+        if (freshOpts.customFields.length > 0) cfMeta = freshOpts.customFields;
+      } catch {}
+
+      if (cancelledRef.current) return;
+
+      // Step 3: Transform all rows and validate
       setStatusMsg('Validating payloads\u2026');
-      const sysFields = systemFieldMetadata || [];
-      const cfMeta = customFieldMetadata || [];
       const cfIdMap = customFieldIdMap || {};
 
       const payloads = mappedRows.map(row => {
-        const p = transformRowToPayload(row, schemaType, idCache, cfIdMap, cfMeta, dynFieldMap, dynLookups);
+        const p = transformRowToPayload(row, schemaType, idCache, cfIdMap, cfMeta, dynFieldMap, dynLookups, dynTypeMap);
         applyDefaults(p, sysFields, cfMeta);
         return p;
       });
@@ -176,15 +190,26 @@ export default function FMXPushModal({
       const em = effectiveEmail.trim();
       const pw = effectivePassword;
 
-      // Derive dynamic field/lookup maps from allFields
+      // Derive dynamic field/lookup/type maps from allFields
       const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
       const dynLookups = allFields?.length ? deriveLookupFields(allFields) : null;
+      const dynTypeMap = {};
+      if (allFields?.length) {
+        for (const f of allFields) { if (f.type && f.type !== 'string') dynTypeMap[f.name] = f.type; }
+      }
 
       // Use pre-built payloads if available (from validation phase)
       // Otherwise build them now (when validation was skipped)
       let payloads = payloadsRef.current;
       let idCache = idCacheRef.current;
       if (!payloads || payloads.length === 0) {
+        // Fetch fresh post-options for field constraints (CLAUDE.md §2)
+        let cfMeta = customFieldMetadata || [];
+        try {
+          const freshOpts = await fetchPostOptions(url, em, pw, schemaType, fmxModules);
+          if (freshOpts.customFields.length > 0) cfMeta = freshOpts.customFields;
+        } catch {}
+
         setStatusMsg('Preparing \u2014 resolving reference IDs\u2026');
         try {
           const depCaches = projectId ? await getAllDependencyCaches(projectId) : [];
@@ -193,7 +218,7 @@ export default function FMXPushModal({
         } catch {}
         if (cancelledRef.current) return;
         payloads = mappedRows.map(row =>
-          transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, customFieldMetadata || [], dynFieldMap, dynLookups)
+          transformRowToPayload(row, schemaType, idCache, customFieldIdMap || {}, cfMeta, dynFieldMap, dynLookups, dynTypeMap)
         );
       }
 

@@ -1,5 +1,5 @@
 import { getFieldTypeCategory } from './fmxFieldTypes';
-import { getBaseSchemaType } from './schemas';
+import { getBaseSchemaType, getSchemaModuleSlug } from './schemas';
 import { fmxFetch } from './apiClient';
 
 // Equipment assetCondition is an integer enum in the FMX API
@@ -27,10 +27,33 @@ function coerceCustomFieldValue(value, fieldType) {
       return value === true || value === 'true' ||
              value === '1' ||
              String(value).toLowerCase() === 'yes';
-    case 'date':
+    case 'date': {
+      const d = new Date(value);
+      return isNaN(d.getTime()) ? String(value) : d.toISOString();
+    }
     case 'string':
     default:
       return String(value);
+  }
+}
+
+function coerceSystemFieldValue(value, fieldType) {
+  if (value === null || value === undefined || value === '') return value;
+  switch (fieldType) {
+    case 'number': {
+      const cleaned = String(value).replace(/[^0-9.-]/g, '');
+      const num = parseFloat(cleaned);
+      return isNaN(num) ? value : num;
+    }
+    case 'date': {
+      const d = new Date(value);
+      return isNaN(d.getTime()) ? value : d.toISOString();
+    }
+    case 'boolean':
+      return value === true || value === 'true' || value === '1' ||
+             String(value).toLowerCase() === 'yes';
+    default:
+      return value;
   }
 }
 
@@ -38,7 +61,7 @@ function coerceCustomFieldValue(value, fieldType) {
 // idCache: { "Building:Main Campus": 42 }
 // customFieldIdMap: { "Year Built": 42, "Region": 7 } — maps friendly field name to FMX custom field ID
 // customFieldMetadata: [{ id: 42, name: "Year Built", fieldType: "Numeric" }]
-export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null) {
+export function transformRowToPayload(row, schemaType, idCache = {}, customFieldIdMap = {}, customFieldMetadata = [], fieldMapOverride = null, lookupFieldsOverride = null, fieldTypeMap = {}) {
   const baseType = getBaseSchemaType(schemaType);
   const fieldMap = fieldMapOverride || {};
   const payload = {};
@@ -76,7 +99,11 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     if (fieldName.startsWith('customField_')) {
       const id = parseInt(fieldName.replace('customField_', ''), 10);
       if (!isNaN(id)) {
-        customFields.push({ customFieldID: id, value: String(value) });
+        const cfMeta = customFieldMetadata.find(cf => cf.id === id);
+        const coerced = coerceCustomFieldValue(value, cfMeta?.fieldType);
+        if (coerced !== null) {
+          customFields.push({ customFieldID: id, value: coerced });
+        }
       }
       return;
     }
@@ -97,7 +124,8 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
     // Standard field
     const apiKey = fieldMap[fieldName];
     if (apiKey) {
-      payload[apiKey] = value;
+      const fType = fieldTypeMap[fieldName];
+      payload[apiKey] = fType ? coerceSystemFieldValue(value, fType) : value;
       return;
     }
 
@@ -206,6 +234,20 @@ export async function fetchAllRecords(siteUrl, email, password, endpoint, fields
   return allItems;
 }
 
+// Resolves the {module} token in a lookup endpoint using the row's schemaType.
+// No-op for endpoints without the token. If the token is present but the schemaType
+// has no module slug (static type), logs a warning and returns the unresolved string
+// so the bug surfaces as a 404 rather than silently hitting the wrong module.
+function resolveLookupEndpoint(endpoint, schemaType) {
+  if (!endpoint.includes('{module}')) return endpoint;
+  const slug = getSchemaModuleSlug(schemaType);
+  if (!slug) {
+    console.warn(`[FMX lookup] {module} token in "${endpoint}" but schemaType "${schemaType}" has no module slug`);
+    return endpoint;
+  }
+  return endpoint.replace('{module}', slug);
+}
+
 // Maps FMX API endpoints to dependency cache keys
 const ENDPOINT_TO_DEP_KEY = {
   '/v1/buildings':        'buildings',
@@ -272,8 +314,11 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
       }
     }
 
+    // Resolve {module} sentinel (e.g. self-referential Work Request lookups) before use.
+    const endpoint = resolveLookupEndpoint(lookup.endpoint, schemaType);
+
     // Try to resolve from dependency cache first
-    const depKey = ENDPOINT_TO_DEP_KEY[lookup.endpoint];
+    const depKey = ENDPOINT_TO_DEP_KEY[endpoint];
     const depItems = depKey ? depByKey[depKey] : null;
     const depLookup = depItems ? buildDepLookup(depItems, depKey === 'equipment' ? 'tag' : 'name') : {};
 
@@ -292,7 +337,7 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
         const searchParam = lookup.searchParam || 'search';
         const res = await fmxFetch({
           siteUrl, email, password,
-          endpoint: `${lookup.endpoint}?${searchParam}=${encodeURIComponent(value)}&limit=1`,
+          endpoint: `${endpoint}?${searchParam}=${encodeURIComponent(value)}&limit=1`,
           method: 'GET',
         });
         const data = await res.json();
