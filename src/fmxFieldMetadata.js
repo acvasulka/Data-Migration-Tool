@@ -196,6 +196,69 @@ const FMX_FIELD_ENRICHMENTS = {
   'Accounting Account': {
     name: { label: 'Name' },
   },
+
+  'Requisition': {
+    title:            { label: 'Title' },
+    requestTypeID:    { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    dueDate:          { label: 'Due Date', type: 'date' },
+    memo:             { label: 'Memo' },
+    supplierUserID:   { label: 'Supplier', lookup: { endpoint: '/v1/users', searchParam: 'search' } },
+    supplierName:     { label: 'Supplier Name' },
+    supplierEmail:    { label: 'Supplier Email', type: 'email' },
+    supplierAddress:  { label: 'Supplier Address' },
+    billToName:       { label: 'Bill To Name' },
+    billToBuildingID: { label: 'Bill To Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    billToAddress:    { label: 'Bill To Address' },
+    shipToName:       { label: 'Ship To Name' },
+    shipToBuildingID: { label: 'Ship To Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    shipToAddress:    { label: 'Ship To Address' },
+    followingUserIDs: { label: 'Following Users', lookup: { endpoint: '/v1/users', searchParam: 'search', isArray: true } },
+    shippingCost:     { label: 'Shipping Cost', type: 'number' },
+    discount:         { label: 'Discount', type: 'number' },
+  },
+
+  'Inventory Adjustment': {
+    inventoryID:          { label: 'Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
+    name:                 { label: 'Name' },
+    adjustment:           { label: 'Adjustment', type: 'number' },
+    transactionUnitPrice: { label: 'Unit Price', type: 'number' },
+    updateUnitPrice:      { label: 'Update Unit Price' },
+    description:          { label: 'Description' },
+  },
+
+  'Inventory Transfer': {
+    inventoryID:          { label: 'From Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
+    otherInventoryItemID: { label: 'To Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
+    name:                 { label: 'Name' },
+    transferredQuantity:  { label: 'Quantity', type: 'number' },
+    transferToOtherItem:  { label: 'Transfer To Other Item' },
+    transactionUnitPrice: { label: 'Unit Price', type: 'number' },
+    updateUnitPrice:      { label: 'Update Unit Price' },
+    description:          { label: 'Description' },
+  },
+
+  'Equipment Log': {
+    equipmentID:   { label: 'Equipment', crossSheet: 'Equipment', lookup: { endpoint: '/v1/equipment', searchParam: 'search' } },
+    name:          { label: 'Name' },
+    cost:          { label: 'Cost', type: 'number' },
+    description:   { label: 'Description' },
+  },
+
+  'Utility Provider': {
+    name:                         { label: 'Name' },
+    utilityTypeID:                { label: 'Utility Type', type: 'number' },
+    repeatInterval:               { label: 'Repeat Interval' },
+    isConsumptionTracked:         { label: 'Track Consumption' },
+    consumptionUnit:              { label: 'Consumption Unit' },
+    isConsumptionSplitByMeter:    { label: 'Consumption Split By Meter' },
+    isDemandTracked:              { label: 'Track Demand' },
+    demandUnit:                   { label: 'Demand Unit' },
+    isDemandSplitByMeter:         { label: 'Demand Split By Meter' },
+    isEnergyUseIntensityTracked:  { label: 'Track Energy Use Intensity' },
+    kbtuConversionFactor:         { label: 'KBTU Conversion Factor', type: 'number' },
+    isWaterUseIntensityTracked:   { label: 'Track Water Use Intensity' },
+    gallonConversionFactor:       { label: 'Gallon Conversion Factor', type: 'number' },
+  },
 };
 
 // --- Dependency cache key mapping ---
@@ -226,6 +289,11 @@ const SCHEMA_DEP_KEYS = {
   'Work Task':              ['buildings', 'users', 'equipment', 'request-types'],
   'Transportation Request': ['buildings', 'resources', 'request-types'],
   'Accounting Account':     [],
+  'Requisition':            ['buildings', 'users', 'request-types'],
+  'Utility Provider':       [],
+  'Equipment Log':          ['equipment'],
+  'Inventory Adjustment':   ['inventory'],
+  'Inventory Transfer':     ['inventory'],
 };
 
 /** Returns the dep keys needed for a given schema type, or null if unknown (fetch all). */

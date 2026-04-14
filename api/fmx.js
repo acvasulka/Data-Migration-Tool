@@ -7,18 +7,23 @@ export default async function handler(req, res) {
   const fmxUrl = `https://${siteUrl}/api${endpoint}`;
   const httpMethod = method || 'POST';
   try {
-    // Per CLAUDE.md §1, only bodied requests use application/json; GET has no body.
+    // Only bodied requests (POST/PUT) use application/json; GET and DELETE have no body.
     const headers = { 'Authorization': `Basic ${credentials}` };
-    if (httpMethod !== 'GET') headers['Content-Type'] = 'application/json';
+    const hasBod = httpMethod !== 'GET' && httpMethod !== 'DELETE';
+    if (hasBod) headers['Content-Type'] = 'application/json';
 
     const response = await fetch(fmxUrl, {
       method: httpMethod,
       headers,
-      body: httpMethod !== 'GET' ? JSON.stringify(payload) : undefined,
+      body: hasBod ? JSON.stringify(payload) : undefined,
     });
     let data;
-    try { data = await response.json(); }
-    catch { data = { status: response.status }; }
+    if (response.status === 204) {
+      data = { status: 204 };
+    } else {
+      try { data = await response.json(); }
+      catch { data = { status: response.status }; }
+    }
     // Forward FMX-* headers (e.g. FMX-Total-Count for pagination)
     for (const [key, value] of response.headers.entries()) {
       if (key.toLowerCase().startsWith('fmx-')) {

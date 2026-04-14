@@ -24,10 +24,16 @@ export async function testFmxConnection(siteUrl, email, password) {
   try {
     const res = await fmxFetch({
       siteUrl: siteUrl.trim(), email: email.trim(), password,
-      endpoint: '/v1/buildings?limit=1', method: 'GET',
+      endpoint: '/v1/session/user', method: 'GET',
     });
     if (res.ok || res.status === 200) {
-      return { success: true, message: `Connected to ${siteUrl.trim()}` };
+      let userName = '';
+      try {
+        const data = await res.json();
+        userName = data.name || data.email || '';
+      } catch {}
+      const suffix = userName ? ` as ${userName}` : '';
+      return { success: true, message: `Connected to ${siteUrl.trim()}${suffix}` };
     }
     return { success: false, message: `Connection failed (${res.status}) — check URL and credentials` };
   } catch {

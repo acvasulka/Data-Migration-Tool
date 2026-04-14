@@ -14,6 +14,14 @@ const FMX_ENDPOINTS = {
   'Inventory':              '/v1/inventory',
   'Transportation Request': '/v1/transportation-requests',
   'Accounting Account':     '/v1/accounting-accounts',
+  'Requisition':            '/v1/requisitions',
+  'Utility Provider':       '/v1/utility-providers',
+  // Equipment Log is a nested resource: actual POST uses /v1/equipment/{equipmentID}/logs.
+  // The base path below is used for get-options; the push flow injects the parent ID at runtime.
+  'Equipment Log':          '/v1/equipment/{equipmentID}/logs',
+  // Inventory sub-actions: nested under parent inventory item ID.
+  'Inventory Adjustment':   '/v1/inventory/{inventoryID}/change-quantity',
+  'Inventory Transfer':     '/v1/inventory/{inventoryID}/transfer-quantity',
 };
 
 // Resolves the endpoint for a schema type.
@@ -35,12 +43,16 @@ export function resolveEndpoint(schemaType, modules) { // eslint-disable-line no
 
 export function resolvePostOptionsEndpoint(schemaType, modules) {
   const base = resolveEndpoint(schemaType, modules);
-  return base ? `${base}/post-options` : null;
+  // Nested resources with unresolved path tokens have no post-options endpoint
+  if (!base || base.includes('{')) return null;
+  return `${base}/post-options`;
 }
 
 export function resolveGetOptionsEndpoint(schemaType, modules) {
   const base = resolveEndpoint(schemaType, modules);
-  return base ? `${base}/get-options` : null;
+  // Nested resources with unresolved path tokens have no usable get-options at sync time
+  if (!base || base.includes('{')) return null;
+  return `${base}/get-options`;
 }
 
 export function resolvePutOptionsEndpoint(schemaType, entityId, modules) {
