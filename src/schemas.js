@@ -2,6 +2,8 @@ export const IMPORT_ORDER = [
   "Building", "Resource", "User", "Equipment Type", "Equipment", "Inventory",
   "Work Request", "Schedule Request", "Work Task",
   "Transportation Request", "Accounting Account",
+  "Requisition", "Utility Provider", "Equipment Log",
+  "Inventory Adjustment", "Inventory Transfer",
 ];
 
 // ── Module-aware schema type helpers ────────────────────────────────────────
@@ -65,5 +67,10 @@ export function getImportOrder(fmxModules) {
     ...wtMods.map(m => `Work Task:${m.slug}`),    // independent from work requests
     "Transportation Request",
     "Accounting Account",
+    "Requisition",
+    "Utility Provider",
+    "Equipment Log",
+    "Inventory Adjustment",
+    "Inventory Transfer",
   ];
 }

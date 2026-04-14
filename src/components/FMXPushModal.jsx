@@ -37,7 +37,7 @@ export default function FMXPushModal({
   onSuccess,
 }) {
   const [phase, setPhase] = useState('setup'); // 'setup' | 'validating' | 'pushing' | 'done'
-  const [pushMode, setPushMode] = useState('create'); // 'create' | 'update'
+  const [pushMode, setPushMode] = useState('create'); // 'create' | 'update' | 'delete'
   const [siteUrl, setSiteUrl] = useState('');
   const [email, setEmail] = useState('');
   const [useSaved, setUseSaved] = useState(false);
@@ -80,11 +80,13 @@ export default function FMXPushModal({
     try {
       const res = await fmxFetch({
         siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword,
-        endpoint: '/v1/buildings?limit=1', method: 'GET',
+        endpoint: '/v1/session/user', method: 'GET',
       });
       if (res.ok || res.status === 200) {
+        let userName = '';
+        try { const d = await res.json(); userName = d.name || d.email || ''; } catch {}
         setConnStatus('ok');
-        setConnMsg(`\u2713 Connected to ${siteUrl.trim()}`);
+        setConnMsg(`\u2713 Connected to ${siteUrl.trim()}${userName ? ` as ${userName}` : ''}`);
       } else {
         setConnStatus('fail');
         setConnMsg(`\u2715 Connection failed (${res.status}) \u2014 check URL and credentials`);
@@ -222,19 +224,20 @@ export default function FMXPushModal({
         );
       }
 
-      // For update mode: build a name->id map of existing entities
+      // For update/delete mode: build a name->id map of existing entities
       let existingEntityMap = {};
-      if (pushMode === 'update') {
-        setStatusMsg('Fetching existing records for update\u2026');
+      if (pushMode === 'update' || pushMode === 'delete') {
+        setStatusMsg(pushMode === 'delete' ? 'Fetching existing records for deletion\u2026' : 'Fetching existing records for update\u2026');
         try {
-          const nameKey = payloads[0]?.tag !== undefined ? 'tag' : 'name';
+          const nameKey = payloads[0]?.tag !== undefined ? 'tag'
+            : payloads[0]?.title !== undefined ? 'title' : 'name';
           const records = await fetchAllRecords(url, em, pw, endpoint, `id,${nameKey}`);
           for (const r of records) {
             const key = String(r[nameKey] || '').toLowerCase().trim();
             if (key) existingEntityMap[key] = r.id;
           }
         } catch (e) {
-          console.warn('Could not fetch existing records for update mode:', e);
+          console.warn(`Could not fetch existing records for ${pushMode} mode:`, e);
         }
       }
 
@@ -265,38 +268,60 @@ export default function FMXPushModal({
         }
 
         const row = mappedRows[i];
-        const rowName = row['Name'] || row['Tag'] || row['Email'] || `Row ${i + 1}`;
-        const action = pushMode === 'update' ? 'Updating' : 'Pushing';
+        const rowName = row['Name'] || row['Title'] || row['Tag'] || row['Email'] || `Row ${i + 1}`;
+        const action = pushMode === 'update' ? 'Updating' : pushMode === 'delete' ? 'Deleting' : 'Pushing';
         setStatusMsg(`${action} row ${i + 1} of ${total}\u2026`);
         setProgress(Math.round(((i) / total) * 100));
 
         let ok = false;
         let errorMsg = '';
         try {
+          // For nested resources (e.g. Equipment Logs, Inventory Adjustments/Transfers),
+          // substitute parent ID tokens in the endpoint URL using resolved IDs from the payload.
           let reqEndpoint = endpoint;
+          const parentTokens = { '{equipmentID}': 'equipmentID', '{inventoryID}': 'inventoryID' };
+          for (const [token, field] of Object.entries(parentTokens)) {
+            if (reqEndpoint.includes(token)) {
+              const parentId = payloads[i]?.[field];
+              if (!parentId) {
+                failCount++;
+                failures.push({ ...row, _fmxError: `Missing ${field} reference — required for ${schemaType}` });
+                setRecentRows(prev => [{ name: rowName, ok: false }, ...prev].slice(0, 5));
+                setPushed(successCount); setFailed(failCount);
+                break;
+              }
+              reqEndpoint = reqEndpoint.replace(token, parentId);
+              delete payloads[i][field];
+            }
+          }
+          // If a parent token was missing, we pushed a failure above — skip to next row
+          if (reqEndpoint.includes('{')) continue;
           let httpMethod = 'POST';
 
-          if (pushMode === 'update') {
-            const nameVal = (row['Name'] || row['Tag'] || '').toLowerCase().trim();
+          if (pushMode === 'update' || pushMode === 'delete') {
+            const nameVal = (row['Name'] || row['Title'] || row['Tag'] || '').toLowerCase().trim();
             const existingId = existingEntityMap[nameVal];
             if (!existingId) {
               failCount++;
-              failures.push({ ...row, _fmxError: `No existing record found matching "${row['Name'] || row['Tag']}"` });
+              failures.push({ ...row, _fmxError: `No existing record found matching "${row['Name'] || row['Title'] || row['Tag']}"` });
               setRecentRows(prev => [{ name: rowName, ok: false }, ...prev].slice(0, 5));
               setPushed(successCount);
               setFailed(failCount);
               continue;
             }
             reqEndpoint = `${endpoint}/${existingId}`;
-            httpMethod = 'PUT';
+            httpMethod = pushMode === 'delete' ? 'DELETE' : 'PUT';
           }
 
-          const res = await fmxFetch({ siteUrl: url, email: em, password: pw, endpoint: reqEndpoint, method: httpMethod, payload: payloads[i] });
-          ok = res.ok || res.status === 200 || res.status === 201;
+          const fetchOpts = { siteUrl: url, email: em, password: pw, endpoint: reqEndpoint, method: httpMethod };
+          if (pushMode !== 'delete') fetchOpts.payload = payloads[i];
+          const res = await fmxFetch(fetchOpts);
+          ok = res.ok || res.status === 200 || res.status === 201 || res.status === 204;
 
           // Parse response for created/updated ID or error message
+          // DELETE responses (204) have no body
           try {
-            const respData = await res.json();
+            const respData = res.status === 204 ? null : await res.json();
             if (ok && respData?.id) {
               createdIds[i] = respData.id;
             }
@@ -377,8 +402,8 @@ export default function FMXPushModal({
         <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: C.navy }}>
           {phase === 'setup' && 'Send directly to FMX'}
           {phase === 'validating' && (!validationResult ? 'Validating\u2026' : 'Validation results')}
-          {phase === 'pushing' && 'Pushing to FMX\u2026'}
-          {phase === 'done' && (allOk ? 'All records pushed!' : 'Push complete')}
+          {phase === 'pushing' && (pushMode === 'delete' ? 'Deleting from FMX\u2026' : 'Pushing to FMX\u2026')}
+          {phase === 'done' && (allOk ? (pushMode === 'delete' ? 'All records deleted!' : 'All records pushed!') : (pushMode === 'delete' ? 'Delete complete' : 'Push complete'))}
         </p>
         {phase !== 'pushing' && phase !== 'validating' && (
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: C.textMid, lineHeight: 1, padding: '0 4px' }}>\u00d7</button>
@@ -426,20 +451,31 @@ export default function FMXPushModal({
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            {['create', 'update'].map(mode => (
+            {['create', 'update', 'delete'].map(mode => (
               <button key={mode} onClick={() => setPushMode(mode)} style={{
                 flex: 1, padding: '7px 0', fontSize: 12, fontWeight: 500, borderRadius: 6, cursor: 'pointer',
-                border: `1px solid ${pushMode === mode ? C.orange : C.border}`,
-                background: pushMode === mode ? '#FFF7ED' : C.white,
-                color: pushMode === mode ? C.orange : C.textMid,
+                border: `1px solid ${pushMode === mode ? (mode === 'delete' ? '#DC2626' : C.orange) : C.border}`,
+                background: pushMode === mode ? (mode === 'delete' ? '#FEE2E2' : '#FFF7ED') : C.white,
+                color: pushMode === mode ? (mode === 'delete' ? '#DC2626' : C.orange) : C.textMid,
               }}>
-                {mode === 'create' ? 'Create new records' : 'Update existing records'}
+                {mode === 'create' ? 'Create new' : mode === 'update' ? 'Update existing' : 'Delete records'}
               </button>
             ))}
           </div>
 
-          <button className="fmx-btn-primary" style={{ width: '100%', marginTop: 12, fontSize: 13, padding: '10px 0' }} disabled={!canPush} onClick={() => setPhase('validating')}>
-            {pushMode === 'create' ? `Push ${mappedRows.length} records to FMX \u2192` : `Update ${mappedRows.length} records in FMX \u2192`}
+          {pushMode === 'delete' && (
+            <p style={{ margin: '8px 0 0', fontSize: 11, color: '#DC2626', fontWeight: 500 }}>
+              Records will be permanently deleted from FMX. This cannot be undone.
+            </p>
+          )}
+
+          <button className="fmx-btn-primary" style={{
+            width: '100%', marginTop: 12, fontSize: 13, padding: '10px 0',
+            ...(pushMode === 'delete' ? { background: '#DC2626', borderColor: '#DC2626' } : {}),
+          }} disabled={!canPush} onClick={() => setPhase(pushMode === 'delete' ? 'pushing' : 'validating')}>
+            {pushMode === 'create' ? `Push ${mappedRows.length} records to FMX \u2192`
+              : pushMode === 'update' ? `Update ${mappedRows.length} records in FMX \u2192`
+              : `Delete ${mappedRows.length} records from FMX \u2192`}
           </button>
         </div>
       )}
@@ -532,7 +568,7 @@ export default function FMXPushModal({
 
           <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
             {[
-              { label: 'Pushed', value: pushed, bg: '#E6F7EF', color: '#1A7F4E' },
+              { label: pushMode === 'delete' ? 'Deleted' : 'Pushed', value: pushed, bg: '#E6F7EF', color: '#1A7F4E' },
               { label: 'Failed', value: failed, bg: failed > 0 ? '#FEE2E2' : C.bgPage, color: failed > 0 ? '#DC2626' : C.textLight },
               { label: 'Total', value: mappedRows.length, bg: '#EEF0F8', color: C.navy },
             ].map(card => (
