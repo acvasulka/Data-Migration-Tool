@@ -8,6 +8,7 @@ import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getIm
 import UserMenu from "./components/UserMenu";
 import ProfileEditModal from "./components/ProfileEditModal";
 import AdminPanelModal from "./components/AdminPanelModal";
+import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import { claudeFetch, parseClaudeText } from "./apiClient";
@@ -24,6 +25,9 @@ import StepExport from "./components/StepExport";
 import AuthScreen from "./components/AuthScreen";
 
 const WIZARD_STEPS = ["Select Type", "Upload CSV", "Map Fields", "Validate & Edit", "Export"];
+// User-facing step labels (Step 0 "Select Type" is implicit — happens when
+// the user clicks "Start new import" on a schema detail pane, before the wizard opens)
+const WIZARD_LABELS = ["Upload", "Map", "Validate", "Export"];
 
 const GLOBAL_STYLES = `
   *, *::before, *::after { box-sizing: border-box; }
@@ -153,6 +157,7 @@ export default function App() {
 
   // Overview / tab routing
   const [mainTab, setMainTab] = useState('overview'); // 'overview' | 'dependencies' | 'settings' | 'wizard'
+  const [selectedSchema, setSelectedSchema] = useState(null); // which schema's detail pane is shown in Overview
   const [wizardImports, setWizardImports] = useState([]);
   const [wizardViewModal, setWizardViewModal] = useState(null); // { rec, rows } | null
   const [wizardViewLoading, setWizardViewLoading] = useState(false);
@@ -307,6 +312,36 @@ export default function App() {
 
   // Load dep cache whenever selected project changes
   useEffect(() => { loadDepCacheMap(); }, [loadDepCacheMap]);
+
+  // Keyboard shortcuts for wizard navigation: ← prev step, → next step, Escape to Overview
+  useEffect(() => {
+    if (mainTab !== 'wizard') return;
+    const handleKey = (e) => {
+      // Skip when user is typing in an input/textarea/contenteditable
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (document.activeElement?.isContentEditable) return;
+      // Skip with modifiers (avoid clobbering browser shortcuts)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (wStep > 1) setWStep(wStep - 1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        // Only advance when the step's forward-guard is satisfied
+        // (reuses the same checks the Next button applies)
+        if (wStep === 1 && csv) setWStep(2);
+        else if (wStep === 2) goToValidate();
+        else if (wStep === 3 && (!hasErrors || certified)) setWStep(4);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setMainTab('overview');
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [mainTab, wStep, csv, hasErrors, certified, goToValidate]);
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
@@ -573,8 +608,13 @@ export default function App() {
   };
 
   const handleBack = () => {
-    if (wStep <= 1) { setMainTab('overview'); setWStep(0); }
-    else setWStep(wStep - 1);
+    if (wStep <= 1) {
+      // At step 1, "back" returns to Overview but preserves wizard state
+      // (so the Wizard tab stays available for resume)
+      setMainTab('overview');
+    } else {
+      setWStep(wStep - 1);
+    }
   };
 
   // Loading spinner
@@ -726,60 +766,103 @@ export default function App() {
         </div>
       )}
 
-      {/* Tab bar — only when project is open */}
+      {/* Tab bar — only when project is open. Wizard tab only appears when a session is active. */}
       {selectedProject && (
         <div style={{
           background: '#fff', borderBottom: '1px solid #E5E7EB',
           padding: '0 24px', display: 'flex', alignItems: 'center',
           position: 'sticky', top: 82, zIndex: 90,
         }}>
-          {['overview', 'dependencies', 'settings'].map(tab => {
-            const isActive = mainTab === tab || (tab === 'overview' && mainTab === 'wizard');
-            return (
-              <button
-                key={tab}
-                onClick={() => setMainTab(tab)}
-                style={{
-                  padding: '10px 18px', fontSize: 13,
-                  fontWeight: isActive ? 600 : 400,
-                  color: isActive ? C.orange : '#6B7280',
-                  background: 'none', border: 'none',
-                  borderBottom: isActive ? `2px solid ${C.orange}` : '2px solid transparent',
-                  cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
-                  transition: 'color 0.15s',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {tab === 'overview' && mainTab === 'wizard' ? '← Overview' : tab.charAt(0).toUpperCase() + tab.slice(1)}
-              </button>
-            );
-          })}
-          {mainTab === 'wizard' && (
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9CA3AF', paddingRight: 4 }}>
-              {schemaType} — step {wStep} of 4
-            </span>
-          )}
+          {(() => {
+            const baseTabs = ['overview', 'dependencies', 'settings'];
+            const tabs = schemaType ? [...baseTabs, 'wizard'] : baseTabs;
+            return tabs.map(tab => {
+              const isActive = mainTab === tab;
+              const label = tab === 'wizard'
+                ? `Wizard · ${schemaType} (${WIZARD_LABELS[wStep - 1] || ''})`
+                : tab.charAt(0).toUpperCase() + tab.slice(1);
+              return (
+                <button
+                  key={tab}
+                  onClick={() => setMainTab(tab)}
+                  style={{
+                    padding: '10px 18px', fontSize: 13,
+                    fontWeight: isActive ? 600 : 400,
+                    color: isActive ? C.orange : '#6B7280',
+                    background: 'none', border: 'none',
+                    borderBottom: isActive ? `2px solid ${C.orange}` : '2px solid transparent',
+                    cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
+                    transition: 'color 0.15s',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            });
+          })()}
         </div>
       )}
 
       {/* Page content */}
       <div style={{ padding: '1.5rem 24px 2rem' }}>
 
-        {/* Overview tab */}
+        {/* Overview tab — sidebar + detail pane */}
         {mainTab === 'overview' && (
-          <SchemaOverview
-            imports={wizardImports}
-            hasCreds={!!selectedProject?.fmx_credentials}
-            onSelectType={handleSelectType}
-            onResume={(rec) => handleResumeFromWizard(rec, 3)}
-            onRepush={(rec) => handleResumeFromWizard(rec, 4)}
-            onViewImport={handleViewFromWizard}
-            history={history}
-            fmxModules={selectedProject?.fmx_modules}
-            cardSettings={selectedProject?.card_settings || {}}
-            projectId={selectedProject?.id}
-            onProjectUpdated={(u) => setSelectedProject(u)}
-          />
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+            <WorkspaceSidebar
+              project={selectedProject}
+              status={(() => {
+                // Derive { [schemaType]: { complete: bool } } from the imports list
+                const s = {};
+                for (const imp of wizardImports) {
+                  if (!s[imp.schema_type]) s[imp.schema_type] = { complete: true };
+                }
+                return s;
+              })()}
+              cardSettings={selectedProject?.card_settings || {}}
+              selectedSchema={selectedSchema}
+              onSelectSchema={setSelectedSchema}
+              activeWizardSchema={schemaType || null}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {selectedSchema ? (
+                <SchemaOverview
+                  imports={wizardImports}
+                  hasCreds={!!selectedProject?.fmx_credentials}
+                  onSelectType={handleSelectType}
+                  onResume={(rec) => handleResumeFromWizard(rec, 3)}
+                  onRepush={(rec) => handleResumeFromWizard(rec, 4)}
+                  onViewImport={handleViewFromWizard}
+                  history={history}
+                  fmxModules={selectedProject?.fmx_modules}
+                  cardSettings={selectedProject?.card_settings || {}}
+                  projectId={selectedProject?.id}
+                  onProjectUpdated={(u) => setSelectedProject(u)}
+                  selectedSchema={selectedSchema}
+                />
+              ) : (
+                <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '32px 28px' }}>
+                  <h2 style={{ fontSize: 16, fontWeight: 700, color: C.navy, margin: '0 0 10px' }}>Project overview</h2>
+                  <p style={{ fontSize: 14, color: '#6B7280', margin: '0 0 18px' }}>
+                    Pick a schema from the left to view its imports and start a new import.
+                    {schemaType && (
+                      <>
+                        {' '}An import is in progress for <strong style={{ color: C.navy }}>{schemaType}</strong> —
+                        <button
+                          onClick={() => setMainTab('wizard')}
+                          style={{ background: 'none', border: 'none', color: C.orange, fontSize: 14, cursor: 'pointer', padding: '0 4px', fontWeight: 600 }}
+                        >resume wizard</button>.
+                      </>
+                    )}
+                  </p>
+                  <div style={{ fontSize: 13, color: '#9CA3AF' }}>
+                    {wizardImports.length} completed import{wizardImports.length === 1 ? '' : 's'} across this project.
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Dependencies tab */}
@@ -801,20 +884,83 @@ export default function App() {
         {/* Wizard */}
         {mainTab === 'wizard' && (
           <div>
-            {/* Wizard step tabs */}
-            <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${C.border}`, marginBottom: '1.5rem', overflowX: 'auto' }}>
-              {WIZARD_STEPS.slice(1).map((label, i) => {
-                const stepIdx = i + 1;
-                return (
-                  <div
-                    key={stepIdx}
-                    className={`fmx-tab ${stepIdx === wStep ? 'fmx-tab-active' : stepIdx < wStep ? 'fmx-tab-completed' : 'fmx-tab-inactive'}`}
-                    onClick={() => stepIdx < wStep && setWStep(stepIdx)}
-                  >
-                    {i + 1}. {label}
-                  </div>
-                );
-              })}
+            {/* Breadcrumb step bar with prev/next */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 0,
+              padding: '10px 14px', marginBottom: '1.5rem',
+              background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10,
+              overflowX: 'auto',
+            }}>
+              {/* Breadcrumbs */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, minWidth: 0 }}>
+                {WIZARD_LABELS.map((label, i) => {
+                  const stepIdx = i + 1;
+                  const isActive = stepIdx === wStep;
+                  const isDone = stepIdx < wStep;
+                  const clickable = isDone;
+                  return (
+                    <div key={stepIdx} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button
+                        onClick={() => clickable && setWStep(stepIdx)}
+                        disabled={!clickable}
+                        style={{
+                          background: 'none', border: 'none',
+                          padding: '4px 10px', borderRadius: 6,
+                          cursor: clickable ? 'pointer' : 'default',
+                          fontSize: 13,
+                          fontWeight: isActive ? 700 : 500,
+                          color: isActive ? C.orange : isDone ? '#374151' : '#9CA3AF',
+                          display: 'flex', alignItems: 'center', gap: 5,
+                          fontFamily: 'system-ui, -apple-system, sans-serif',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {isDone && (
+                          <span style={{
+                            width: 14, height: 14, borderRadius: '50%', background: '#1A7F4E',
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#fff', fontSize: 9, fontWeight: 700,
+                          }}>✓</span>
+                        )}
+                        {label}
+                      </button>
+                      {i < WIZARD_LABELS.length - 1 && (
+                        <span style={{ color: '#D1D5DB', fontSize: 14, userSelect: 'none' }}>›</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Prev / Next buttons */}
+              <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 12 }}>
+                <button
+                  onClick={handleBack}
+                  title="Previous step (←)"
+                  style={{
+                    background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6,
+                    padding: '5px 12px', fontSize: 12, cursor: 'pointer', color: '#374151',
+                    fontFamily: 'system-ui, -apple-system, sans-serif',
+                  }}
+                >‹ Prev</button>
+                <button
+                  onClick={() => {
+                    if (wStep === 2) goToValidate();
+                    else if (wStep === 3 && canProceed) setWStep(4);
+                    else if (wStep < 4 && canProceed) setWStep(wStep + 1);
+                  }}
+                  disabled={wStep >= 4 || !canProceed}
+                  title="Next step (→)"
+                  style={{
+                    background: (wStep >= 4 || !canProceed) ? '#E5E7EB' : C.orange,
+                    color: (wStep >= 4 || !canProceed) ? '#9CA3AF' : '#fff',
+                    border: 'none', borderRadius: 6,
+                    padding: '5px 12px', fontSize: 12,
+                    cursor: (wStep >= 4 || !canProceed) ? 'not-allowed' : 'pointer',
+                    fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 500,
+                  }}
+                >Next ›</button>
+              </div>
             </div>
 
             {wStep === 1 && (

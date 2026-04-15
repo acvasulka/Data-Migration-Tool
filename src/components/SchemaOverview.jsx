@@ -55,6 +55,7 @@ function Dot() {
 export default function SchemaOverview({
   imports = [], hasCreds, onSelectType, onResume, onRepush, onViewImport,
   history = [], fmxModules, cardSettings = {}, projectId, onProjectUpdated,
+  selectedSchema = null,
 }) {
   const [downloadingId, setDownloadingId] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
@@ -325,6 +326,21 @@ export default function SchemaOverview({
       </div>
     );
   };
+
+  // Detail-pane mode: render one schema full-width, expanded by default
+  if (selectedSchema) {
+    if (!expandedCards[selectedSchema]) {
+      // Auto-expand so imports are visible without a click
+      // (use setTimeout to avoid triggering setState during render)
+      setTimeout(() => setExpandedCards(prev => prev[selectedSchema] ? prev : { ...prev, [selectedSchema]: true }), 0);
+    }
+    const idx = importOrder.indexOf(selectedSchema);
+    return (
+      <div style={{ maxWidth: 720 }}>
+        {renderCard(selectedSchema, idx >= 0 ? idx : 0)}
+      </div>
+    );
+  }
 
   return (
     <div>
