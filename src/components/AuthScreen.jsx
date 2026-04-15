@@ -41,7 +41,7 @@ export default function AuthScreen() {
     const { error: err } = await supabase.auth.signUp({
       email: signupEmail,
       password: signupPassword,
-      options: { data: { full_name: fullName } },
+      options: { data: { full_name: fullName, email: signupEmail } },
     });
     if (err) {
       setError(err.message);

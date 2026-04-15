@@ -29,7 +29,7 @@ export async function getProjects() {
   );
 }
 
-export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false) {
+export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false, userId = null) {
   return dbQuery(
     () => supabase.from('projects').insert({
       name,
@@ -37,9 +37,95 @@ export async function createProject(name, description, fmxSiteUrl, encodedCreden
       fmx_site_url: fmxSiteUrl || null,
       fmx_credentials: encodedCredentials || null,
       fmx_connection_verified: connectionVerified,
+      user_id: userId || null,
     }).select().single(),
     null
   );
+}
+
+export async function getProjectsByOwner(userId) {
+  return dbQuery(
+    () => supabase.from('projects').select('*').eq('user_id', userId).order('updated_at', { ascending: false }),
+    []
+  );
+}
+
+export async function getOtherProjects(userId) {
+  return dbQuery(
+    () => supabase.from('projects').select('*').or(`user_id.neq.${userId},user_id.is.null`).order('updated_at', { ascending: false }),
+    []
+  );
+}
+
+export async function updateProjectOwner(projectId, newOwnerId) {
+  return dbQuery(
+    () => supabase.from('projects').update({ user_id: newOwnerId }).eq('id', projectId).select().single(),
+    null
+  );
+}
+
+export async function getProjectByFmxUrl(fmxSiteUrl) {
+  return dbQuery(
+    () => supabase.from('projects').select('id, name, user_id, fmx_site_url').eq('fmx_site_url', fmxSiteUrl).limit(1).maybeSingle(),
+    null
+  );
+}
+
+// --- PROFILES ---
+
+export async function getAllProfiles() {
+  return dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role'),
+    []
+  );
+}
+
+export async function getCurrentProfile(userId) {
+  return dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role').eq('id', userId).single(),
+    null
+  );
+}
+
+export async function getImportSummaryForProjects(projectIds) {
+  if (!projectIds || projectIds.length === 0) return [];
+  return dbQuery(
+    () => supabase.from('project_imports').select('project_id, schema_type').in('project_id', projectIds),
+    []
+  );
+}
+
+export async function updateProfileRole(userId, newRole) {
+  return dbQuery(
+    () => supabase.from('profiles').update({ role: newRole }).eq('id', userId).select().single(),
+    null
+  );
+}
+
+export async function updateProfileName(userId, fullName) {
+  return dbQuery(
+    () => supabase.from('profiles').update({ full_name: fullName }).eq('id', userId).select().single(),
+    null
+  );
+}
+
+// Claim an unassigned project. The .is('user_id', null) guard prevents racing claims.
+export async function claimProject(projectId, userId) {
+  return dbQuery(
+    () => supabase.from('projects').update({ user_id: userId }).eq('id', projectId).is('user_id', null).select().single(),
+    null
+  );
+}
+
+// Invoke the delete-user Edge Function. Returns { success: true } or { error: '...' }.
+export async function deleteUserViaEdgeFunction(userId) {
+  try {
+    const { data, error } = await supabase.functions.invoke('delete-user', { body: { userId } });
+    if (error) return { error: error.message || 'Failed to delete user' };
+    return data || { error: 'Unknown response' };
+  } catch (e) {
+    return { error: e?.message || 'Network error' };
+  }
 }
 
 export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
