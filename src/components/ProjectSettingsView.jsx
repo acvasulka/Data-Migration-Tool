@@ -12,6 +12,8 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   const [nameVal, setNameVal] = useState('');
   const [editingUrl, setEditingUrl] = useState(false);
   const [urlVal, setUrlVal] = useState('');
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionVal, setDescriptionVal] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Modules
@@ -45,6 +47,18 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
       setSaving(false);
     }
     setEditingName(false);
+  };
+
+  const handleDescriptionSave = async () => {
+    const nextVal = descriptionVal.trim();
+    const currentVal = selectedProject?.description || '';
+    if (nextVal !== currentVal) {
+      setSaving(true);
+      const updated = await updateProject(selectedProject.id, { description: nextVal || null });
+      if (updated && onProjectUpdated) onProjectUpdated(updated);
+      setSaving(false);
+    }
+    setEditingDescription(false);
   };
 
   const handleUrlSave = async () => {
@@ -87,7 +101,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
       const pw = credPassword;
       if (url && email && pw) {
         try {
-          const fresh = await fetchFmxModules(url, email, pw);
+          const { orgName: _org1, ...fresh } = await fetchFmxModules(url, email, pw);
           const existing = normalizeModules(updated.fmx_modules);
           const { merged, changed } = mergeModules(existing, fresh);
           if (changed) {
@@ -108,7 +122,7 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
     setModulesDetecting(true);
     setModulesMsg('');
     try {
-      const fresh = await fetchFmxModules(url, email, password);
+      const { orgName: _org2, ...fresh } = await fetchFmxModules(url, email, password);
       const existing = normalizeModules(selectedProject?.fmx_modules);
       const { merged, changed } = mergeModules(existing, fresh);
 
@@ -201,6 +215,46 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 16, fontWeight: 600, color: NAVY }}>{selectedProject?.name}</span>
             <button onClick={() => { setEditingName(true); setNameVal(selectedProject?.name || ''); }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}>
+              Edit
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Description */}
+      <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '20px 24px', marginBottom: 16 }}>
+        <label style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 10 }}>
+          Description
+        </label>
+        {editingDescription ? (
+          <div>
+            <textarea
+              autoFocus
+              rows={3}
+              value={descriptionVal}
+              onChange={e => setDescriptionVal(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setEditingDescription(false); }}
+              placeholder="Notes about this migration"
+              style={{ ...inputStyle, resize: 'vertical', fontFamily: 'system-ui, -apple-system, sans-serif' }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button onClick={handleDescriptionSave} disabled={saving}
+                style={{ padding: '7px 14px', background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setEditingDescription(false)}
+                style={{ padding: '7px 12px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <span style={{ fontSize: 14, color: selectedProject?.description ? '#374151' : '#9CA3AF', flex: 1, whiteSpace: 'pre-wrap' }}>
+              {selectedProject?.description || 'No description set'}
+            </span>
+            <button onClick={() => { setEditingDescription(true); setDescriptionVal(selectedProject?.description || ''); }}
               style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}>
               Edit
             </button>
