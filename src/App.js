@@ -4,7 +4,10 @@ import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects } from "./db";
+import UserMenu from "./components/UserMenu";
+import ProfileEditModal from "./components/ProfileEditModal";
+import AdminPanelModal from "./components/AdminPanelModal";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import { claudeFetch, parseClaudeText } from "./apiClient";
@@ -110,7 +113,11 @@ export default function App() {
   // --- Auth state ---
   const [user, setUser] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [allProfiles, setAllProfiles] = useState([]);
+  const [allProjects, setAllProjects] = useState([]);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
   const [showProjectScreen, setShowProjectScreen] = useState(true);
   const [passwordReset, setPasswordReset] = useState(false);
@@ -173,7 +180,26 @@ export default function App() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    setUserMenuOpen(false);
+  };
+
+  // Load profile + all profiles + all projects (for admin panel counts) whenever the user changes
+  useEffect(() => {
+    if (!user?.id) { setCurrentProfile(null); setAllProfiles([]); setAllProjects([]); return; }
+    getCurrentProfile(user.id).then(setCurrentProfile);
+    getAllProfiles().then(setAllProfiles);
+    getProjects().then(setAllProjects);
+  }, [user?.id]);
+
+  const reloadProfiles = async () => {
+    if (!user?.id) return;
+    const [prof, all, projs] = await Promise.all([
+      getCurrentProfile(user.id),
+      getAllProfiles(),
+      getProjects(),
+    ]);
+    setCurrentProfile(prof);
+    setAllProfiles(all);
+    setAllProjects(projs);
   };
 
   const handlePasswordUpdate = async e => {
@@ -185,11 +211,6 @@ export default function App() {
     setPasswordReset(false);
     setResetMsg('Password updated — please sign in.');
   };
-
-  const initials = (() => {
-    const name = user?.user_metadata?.full_name || user?.email || '';
-    return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  })();
 
   const fmxCustomFieldIdMap = useMemo(() => {
     const map = {};
@@ -604,6 +625,7 @@ export default function App() {
   if (showProjectScreen) {
     return (
       <ProjectScreen
+        user={user}
         onSelectProject={(project) => {
           setSelectedProject(project);
           setShowProjectScreen(false);
@@ -618,6 +640,25 @@ export default function App() {
   return (
     <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: C.bgPage, minHeight: "100vh", color: C.textDark }}>
       <style>{GLOBAL_STYLES}</style>
+
+      {showProfileModal && (
+        <ProfileEditModal
+          user={user}
+          profile={currentProfile}
+          onClose={() => setShowProfileModal(false)}
+          onProfileUpdated={reloadProfiles}
+        />
+      )}
+      {showAdminPanel && (
+        <AdminPanelModal
+          currentUser={user}
+          currentProfile={currentProfile}
+          allProfiles={allProfiles}
+          projects={allProjects}
+          onClose={() => setShowAdminPanel(false)}
+          onProfilesChanged={reloadProfiles}
+        />
+      )}
 
       {preview && <DataPreviewModal header={preview.header} values={preview.values} onClose={() => setPreview(null)} />}
       {transformModal && (
@@ -649,54 +690,48 @@ export default function App() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* User avatar */}
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => setUserMenuOpen(o => !o)}
-              style={{
-                width: 32, height: 32, borderRadius: '50%', background: C.navy,
-                border: '2px solid rgba(255,255,255,0.4)', color: '#fff',
-                fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              {initials}
-            </button>
-            {userMenuOpen && (
-              <div style={{
-                position: 'absolute', top: 44, right: 0, background: '#fff',
-                border: '1px solid #E5E7EB', borderRadius: 8,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 200,
-              }}>
-                <div style={{ padding: '12px 14px', borderBottom: '1px solid #F3F4F6' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.textDark }}>
-                    {user.user_metadata?.full_name || 'User'}
-                  </div>
-                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{user.email}</div>
-                </div>
-                <button
-                  onClick={handleSignOut}
-                  style={{
-                    width: '100%', textAlign: 'left', padding: '10px 14px',
-                    fontSize: 13, background: 'none', border: 'none',
-                    cursor: 'pointer', color: '#DC2626',
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
-                  }}
-                >
-                  Sign out
-                </button>
-              </div>
-            )}
-          </div>
+          <UserMenu
+            user={user}
+            profile={currentProfile}
+            onOpenProfile={() => setShowProfileModal(true)}
+            onOpenAdminPanel={() => setShowAdminPanel(true)}
+            onSignOut={handleSignOut}
+          />
         </div>
       </div>
+
+      {/* Owner / connection info strip */}
+      {selectedProject && (
+        <div style={{
+          background: '#F9FAFB', borderBottom: '1px solid #E5E7EB',
+          padding: '6px 24px', display: 'flex', alignItems: 'center', gap: 12,
+          fontSize: 12, color: '#6B7280',
+          position: 'sticky', top: 52, zIndex: 95,
+          minHeight: 30,
+        }}>
+          <span>
+            Owner:{' '}
+            <strong style={{ color: '#374151', fontWeight: 600 }}>
+              {allProfiles.find(p => p.id === selectedProject.user_id)?.full_name
+                || allProfiles.find(p => p.id === selectedProject.user_id)?.email
+                || 'Unassigned'}
+            </strong>
+          </span>
+          {selectedProject.fmx_connection_verified && (
+            <span style={{ padding: '1px 7px', borderRadius: 8, background: '#E6F4EE', color: '#1A7F4E', fontSize: 10, fontWeight: 600 }}>✓ FMX Connected</span>
+          )}
+          {selectedProject.fmx_site_url && (
+            <span style={{ color: '#9CA3AF' }}>· {selectedProject.fmx_site_url}</span>
+          )}
+        </div>
+      )}
 
       {/* Tab bar — only when project is open */}
       {selectedProject && (
         <div style={{
           background: '#fff', borderBottom: '1px solid #E5E7EB',
           padding: '0 24px', display: 'flex', alignItems: 'center',
-          position: 'sticky', top: 52, zIndex: 90,
+          position: 'sticky', top: 82, zIndex: 90,
         }}>
           {['overview', 'dependencies', 'settings'].map(tab => {
             const isActive = mainTab === tab || (tab === 'overview' && mainTab === 'wizard');

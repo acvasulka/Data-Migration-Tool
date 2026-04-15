@@ -1,8 +1,13 @@
-import { useState, useEffect } from 'react';
-import { getProjects, createProject, deleteProject, getProjectStatus, updateProject, saveProjectCredentials, getProjectImports, getImportRows, renameImport, getAllReferenceValues } from '../db';
-import { encodeCredentials, testFmxConnection } from '../fmxSync';
+import { useState, useEffect, useMemo } from 'react';
+import { getProjectsByOwner, getOtherProjects, createProject, deleteProject, getProjectStatus, updateProject, getProjectImports, getImportRows, renameImport, getAllReferenceValues, getAllProfiles, getCurrentProfile, updateProjectOwner, getProjectByFmxUrl, getImportSummaryForProjects, updateProjectModules, claimProject } from '../db';
+import { encodeCredentials, testFmxConnection, fetchFmxModules } from '../fmxSync';
 import { downloadCSV } from '../utils';
-import { IMPORT_ORDER } from '../schemas';
+import { IMPORT_ORDER, getImportOrder, getBaseSchemaType, getSchemaModuleSlug } from '../schemas';
+import { supabase } from '../supabase';
+import UserMenu from './UserMenu';
+import ProfileEditModal from './ProfileEditModal';
+import AdminPanelModal from './AdminPanelModal';
+import ProjectSettingsView from './ProjectSettingsView';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -28,8 +33,8 @@ function fmtDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function StatusBadge({ completedCount }) {
-  if (completedCount === 6)
+function StatusBadge({ completedCount, totalCount = 6 }) {
+  if (completedCount >= totalCount && totalCount > 0)
     return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: GREEN }}>Complete</span>;
   if (completedCount > 0)
     return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#FFF3CD', color: '#856404' }}>In progress</span>;
@@ -38,9 +43,9 @@ function StatusBadge({ completedCount }) {
 
 function SkeletonCard() {
   return (
-    <div style={{ background: '#fff', borderRadius: 8, border: '0.5px solid #E0E0E0', padding: '16px 20px', marginBottom: 10 }}>
-      <div style={{ height: 14, background: '#E5E7EB', borderRadius: 4, width: '60%', marginBottom: 10, animation: 'shimmer 1.4s infinite' }} />
-      <div style={{ height: 10, background: '#F3F4F6', borderRadius: 4, width: '40%', marginBottom: 12 }} />
+    <div style={{ background: '#fff', borderRadius: 10, border: '0.5px solid #E0E0E0', padding: '20px 24px' }}>
+      <div style={{ height: 16, background: '#E5E7EB', borderRadius: 4, width: '60%', marginBottom: 12, animation: 'shimmer 1.4s infinite' }} />
+      <div style={{ height: 10, background: '#F3F4F6', borderRadius: 4, width: '40%', marginBottom: 14 }} />
       <div style={{ height: 6, background: '#E5E7EB', borderRadius: 3, width: '100%' }} />
     </div>
   );
@@ -60,14 +65,14 @@ function DocumentPlusIcon() {
 // Schema status icon
 function SchemaIcon({ done, isCurrent }) {
   if (done) return (
-    <div style={{ width: 20, height: 20, borderRadius: '50%', background: GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-      <span style={{ color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: 1 }}>✓</span>
+    <div style={{ width: 18, height: 18, borderRadius: '50%', background: GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <span style={{ color: '#fff', fontSize: 10, fontWeight: 700, lineHeight: 1 }}>✓</span>
     </div>
   );
   if (isCurrent) return (
-    <div style={{ width: 20, height: 20, borderRadius: '50%', background: ORANGE, flexShrink: 0, animation: 'pulse 1.5s ease-in-out infinite' }} />
+    <div style={{ width: 18, height: 18, borderRadius: '50%', background: ORANGE, flexShrink: 0, animation: 'pulse 1.5s ease-in-out infinite' }} />
   );
-  return <div style={{ width: 20, height: 20, borderRadius: '50%', border: '2px solid #D1D5DB', flexShrink: 0 }} />;
+  return <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #D1D5DB', flexShrink: 0 }} />;
 }
 
 // Single import card component
@@ -143,101 +148,151 @@ function Dot() {
   return <span style={{ color: '#D1D5DB', fontSize: 11 }}>·</span>;
 }
 
-export default function ProjectScreen({ onSelectProject, onResumeImport }) {
-  const [projects, setProjects] = useState([]);
+// Compute progress for a project based on card_settings and import summary.
+// Uses module-aware expansion (Work Request:maintenance, Work Request:it, etc.) from getImportOrder,
+// falling back to defaults when fmx_modules is missing.
+function computeProgress(project, importedSchemas) {
+  const settings = project.card_settings || {};
+  const fullOrder = getImportOrder(project.fmx_modules);
+  const activeSchemas = fullOrder.filter(s => !settings[s]?.hidden);
+  const completed = activeSchemas.filter(s => importedSchemas.has(s));
+  return { total: activeSchemas.length, completed: completed.length, activeSchemas, completedSchemas: new Set(completed) };
+}
+
+// Compact label for a schema (used in the progress-dot row on cards).
+// For module-qualified types ("Work Request:maintenance"), returns base type first letter.
+function schemaShortLabel(schema) {
+  const base = getBaseSchemaType(schema);
+  return base.charAt(0).toUpperCase();
+}
+
+export default function ProjectScreen({ user, onSelectProject, onResumeImport }) {
+  const [myProjects, setMyProjects] = useState([]);
+  const [otherProjects, setOtherProjects] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(null);
-  const [status, setStatus] = useState({});
+  const [allProfiles, setAllProfiles] = useState([]);
+  const [currentProfile, setCurrentProfile] = useState(null);
+  const [activeListTab, setActiveListTab] = useState('mine'); // 'mine' | 'others'
+
+  // Expanded card state
+  const [expandedId, setExpandedId] = useState(null);
+  const [expandedStatus, setExpandedStatus] = useState({});
+  const [expandedImports, setExpandedImports] = useState([]);
+  const [expandedRefValues, setExpandedRefValues] = useState([]);
   const [statusLoading, setStatusLoading] = useState(false);
-  const [mode, setMode] = useState('idle'); // 'idle' | 'create'
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  // Inline card editing
   const [editingName, setEditingName] = useState(false);
   const [editNameVal, setEditNameVal] = useState('');
+  const [ownerEditing, setOwnerEditing] = useState(false);
 
-  // Tabs for project detail panel
-  const [activeTab, setActiveTab] = useState('imports'); // 'imports' | 'dependencies' | 'settings'
+  // Detail tabs inside expanded card
+  const [detailTab, setDetailTab] = useState('imports'); // 'imports' | 'dependencies' | 'settings'
 
-  // create form
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  // Create form
+  const [mode, setMode] = useState('idle'); // 'idle' | 'create'
   const [fmxSiteUrl, setFmxSiteUrl] = useState('');
   const [fmxApiEmail, setFmxApiEmail] = useState('');
   const [fmxApiPassword, setFmxApiPassword] = useState('');
-  const [apiExpanded, setApiExpanded] = useState(false);
+  const [description, setDescription] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
-  const [createConnStatus, setCreateConnStatus] = useState(null);
-  const [createConnMsg, setCreateConnMsg] = useState('');
-  const [createConnLoading, setCreateConnLoading] = useState(false);
-  const [createConnVerified, setCreateConnVerified] = useState(false);
+  const [createStep, setCreateStep] = useState(''); // '', 'testing', 'fetching', 'checking', 'creating'
+  const [orgName, setOrgName] = useState('');
+  const [manualName, setManualName] = useState('');
+  const [needsManualName, setNeedsManualName] = useState(false);
+  const [duplicateProject, setDuplicateProject] = useState(null);
 
-  // import history
-  const [imports, setImports] = useState([]);
+  // Import history (for expanded card)
   const [viewModal, setViewModal] = useState(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState('');
 
-  // dependencies tab
-  const [refValues, setRefValues] = useState([]); // all project_reference_values rows
+  // (Settings UI is now delegated to ProjectSettingsView; delete is handled below via deleteConfirm state.)
 
-  // settings / update credentials
-  const [showUpdateCreds, setShowUpdateCreds] = useState(false);
-  const [updateEmail, setUpdateEmail] = useState('');
-  const [updatePassword, setUpdatePassword] = useState('');
-  const [updateConnStatus, setUpdateConnStatus] = useState(null);
-  const [updateConnMsg, setUpdateConnMsg] = useState('');
-  const [updateConnLoading, setUpdateConnLoading] = useState(false);
-  const [updateSaving, setUpdateSaving] = useState(false);
-  // settings — FMX URL editing
-  const [editingUrl, setEditingUrl] = useState(false);
-  const [editUrlVal, setEditUrlVal] = useState('');
+  // Import summary for all projects (for card progress)
+  const [importSummaryMap, setImportSummaryMap] = useState({}); // { [projectId]: Set<schemaType> }
+
+  // User menu modals
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+
+  const profileMap = useMemo(() => {
+    const map = {};
+    for (const p of allProfiles) map[p.id] = p.full_name || p.email || 'Unknown';
+    return map;
+  }, [allProfiles]);
+
+  const isAdmin = currentProfile?.role === 'admin';
 
   const loadProjects = async () => {
     setLoading(true);
-    const data = await getProjects();
-    setProjects(data);
+    const [mine, others, profiles, profile] = await Promise.all([
+      getProjectsByOwner(user.id),
+      getOtherProjects(user.id),
+      getAllProfiles(),
+      getCurrentProfile(user.id),
+    ]);
+    setMyProjects(mine);
+    setOtherProjects(others);
+    setAllProfiles(profiles);
+    setCurrentProfile(profile);
+
+    // Load import summary for all projects
+    const allIds = [...mine, ...others].map(p => p.id);
+    if (allIds.length > 0) {
+      const summary = await getImportSummaryForProjects(allIds);
+      const map = {};
+      for (const row of summary) {
+        if (!map[row.project_id]) map[row.project_id] = new Set();
+        map[row.project_id].add(row.schema_type);
+      }
+      setImportSummaryMap(map);
+    }
+
     setLoading(false);
   };
 
   useEffect(() => { loadProjects(); }, []);
 
-  const loadStatus = async (projectId) => {
+  const loadExpandedDetails = async (projectId) => {
     setStatusLoading(true);
-    const s = await getProjectStatus(projectId);
-    setStatus(s);
+    const [s, imports, refVals] = await Promise.all([
+      getProjectStatus(projectId),
+      getProjectImports(projectId),
+      getAllReferenceValues(projectId),
+    ]);
+    setExpandedStatus(s);
+    setExpandedImports(imports);
+    setExpandedRefValues(refVals);
     setStatusLoading(false);
   };
 
-  const loadImports = async (projectId) => {
-    const data = await getProjectImports(projectId);
-    setImports(data);
-  };
-
-  const loadRefValues = async (projectId) => {
-    const data = await getAllReferenceValues(projectId);
-    setRefValues(data);
-  };
-
-  const handleSelectProject = (p) => {
-    setSelected(p);
-    setMode('idle');
+  const handleCardClick = (p) => {
+    if (expandedId === p.id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(p.id);
+    setDetailTab('imports');
     setDeleteConfirm(false);
     setEditingName(false);
+    setOwnerEditing(false);
     setRenamingId(null);
-    setShowUpdateCreds(false);
-    setActiveTab('imports');
-    loadStatus(p.id);
-    loadImports(p.id);
-    loadRefValues(p.id);
+    loadExpandedDetails(p.id);
+  };
+
+  const getExpanded = () => {
+    return [...myProjects, ...otherProjects].find(p => p.id === expandedId) || null;
   };
 
   const handleDownloadImport = async (rec) => {
     const rows = await getImportRows(rec.id);
     if (!rows || rows.length === 0) return;
     const headers = Object.keys(rows[0]);
-    const filename = `${rec.import_name || rec.schema_type}.csv`;
-    downloadCSV(filename, headers, rows);
+    downloadCSV(`${rec.import_name || rec.schema_type}.csv`, headers, rows);
   };
 
   const handleViewImport = async (rec) => {
@@ -264,100 +319,140 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     if (renameVal.trim()) await renameImport(id, renameVal.trim());
     setRenamingId(null);
     setRenameVal('');
-    if (selected) loadImports(selected.id);
+    if (expandedId) loadExpandedDetails(expandedId);
   };
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    setCreateError('');
+  const handleConnectAndCreate = async (e) => {
+    if (e) e.preventDefault();
     setCreating(true);
-    const encoded = fmxApiEmail && fmxApiPassword ? encodeCredentials(fmxApiEmail, fmxApiPassword) : null;
-    const p = await createProject(name, description, fmxSiteUrl, encoded, createConnVerified);
-    if (!p) { setCreateError('Unable to create project. Please try again.'); setCreating(false); return; }
+    setCreateError('');
+    setDuplicateProject(null);
+    setNeedsManualName(false);
+    setOrgName('');
+
+    // Step 1: Test connection
+    setCreateStep('testing');
+    const connResult = await testFmxConnection(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
+    if (!connResult.success) {
+      setCreateError(connResult.message);
+      setCreating(false);
+      setCreateStep('');
+      return;
+    }
+
+    // Step 2: Fetch org info
+    setCreateStep('fetching');
+    const { orgName: fetchedOrgName, ...modules } = await fetchFmxModules(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
+
+    if (!fetchedOrgName) {
+      setNeedsManualName(true);
+      setCreating(false);
+      setCreateStep('');
+      return;
+    }
+    setOrgName(fetchedOrgName);
+
+    // Step 3: Check for duplicate by FMX URL
+    setCreateStep('checking');
+    const existing = await getProjectByFmxUrl(fmxSiteUrl.trim());
+    if (existing) {
+      setDuplicateProject(existing);
+      setCreating(false);
+      setCreateStep('');
+      return;
+    }
+
+    // Step 4: Create project
+    setCreateStep('creating');
+    const encoded = encodeCredentials(fmxApiEmail, fmxApiPassword);
+    const project = await createProject(fetchedOrgName, description.trim() || null, fmxSiteUrl.trim(), encoded, true, user.id);
+    if (!project) {
+      setCreateError('Failed to create project. Please try again.');
+      setCreating(false);
+      setCreateStep('');
+      return;
+    }
+
+    // Step 5: Save modules
+    await updateProjectModules(project.id, modules);
+
+    // Step 6: Refresh and expand
     await loadProjects();
     setMode('idle');
-    setName(''); setDescription(''); setFmxSiteUrl(''); setFmxApiEmail(''); setFmxApiPassword('');
-    setCreateConnStatus(null); setCreateConnVerified(false);
-    handleSelectProject(p);
+    setFmxSiteUrl(''); setFmxApiEmail(''); setFmxApiPassword(''); setDescription('');
+    setCreateStep('');
     setCreating(false);
+    setActiveListTab('mine');
+    setExpandedId(project.id);
+    loadExpandedDetails(project.id);
   };
 
-  const handleTestCreateConn = async () => {
-    setCreateConnLoading(true); setCreateConnStatus(null);
-    const result = await testFmxConnection(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
-    setCreateConnStatus(result.success ? 'ok' : 'fail');
-    setCreateConnMsg(result.message);
-    setCreateConnVerified(result.success);
-    setCreateConnLoading(false);
-  };
+  const handleCreateWithManualName = async () => {
+    if (!manualName.trim()) return;
+    setCreating(true);
+    setCreateError('');
+    setCreateStep('creating');
 
-  const handleTestUpdateConn = async () => {
-    setUpdateConnLoading(true); setUpdateConnStatus(null);
-    const url = editingUrl ? editUrlVal : selected.fmx_site_url;
-    const result = await testFmxConnection(url, updateEmail, updatePassword);
-    setUpdateConnStatus(result.success ? 'ok' : 'fail');
-    setUpdateConnMsg(result.message);
-    setUpdateConnLoading(false);
-  };
-
-  const handleSaveUpdateCreds = async () => {
-    setUpdateSaving(true);
-    const encoded = encodeCredentials(updateEmail, updatePassword);
-    const verified = updateConnStatus === 'ok';
-    const updated = await saveProjectCredentials(selected.id, encoded, verified);
-    if (updated) {
-      setSelected(updated);
-      setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
-      setShowUpdateCreds(false);
-      setUpdateEmail(''); setUpdatePassword(''); setUpdateConnStatus(null);
+    const encoded = encodeCredentials(fmxApiEmail, fmxApiPassword);
+    const { orgName: _o, ...modules } = await fetchFmxModules(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
+    const project = await createProject(manualName.trim(), description.trim() || null, fmxSiteUrl.trim(), encoded, true, user.id);
+    if (!project) {
+      setCreateError('Failed to create project.');
+      setCreating(false);
+      setCreateStep('');
+      return;
     }
-    setUpdateSaving(false);
-  };
-
-  const handleUrlBlur = async () => {
-    if (editUrlVal.trim() && editUrlVal !== selected.fmx_site_url) {
-      const updated = await updateProject(selected.id, { fmx_site_url: editUrlVal.trim() });
-      if (updated) {
-        setSelected(updated);
-        setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
-      }
-    }
-    setEditingUrl(false);
+    await updateProjectModules(project.id, modules);
+    await loadProjects();
+    setMode('idle');
+    setFmxSiteUrl(''); setFmxApiEmail(''); setFmxApiPassword(''); setDescription('');
+    setManualName(''); setNeedsManualName(false);
+    setCreateStep('');
+    setCreating(false);
+    setActiveListTab('mine');
+    setExpandedId(project.id);
+    loadExpandedDetails(project.id);
   };
 
   const handleDelete = async () => {
-    await deleteProject(selected.id);
-    setSelected(null);
-    setStatus({});
-    setImports([]);
-    setRefValues([]);
+    await deleteProject(expandedId);
+    setExpandedId(null);
     setDeleteConfirm(false);
     await loadProjects();
   };
 
   const handleNameBlur = async () => {
-    if (editNameVal.trim() && editNameVal !== selected.name) {
-      const updated = await updateProject(selected.id, { name: editNameVal.trim() });
-      if (updated) {
-        setSelected(updated);
-        setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
-      }
+    const expanded = getExpanded();
+    if (expanded && editNameVal.trim() && editNameVal !== expanded.name) {
+      const updated = await updateProject(expanded.id, { name: editNameVal.trim() });
+      if (updated) await loadProjects();
     }
     setEditingName(false);
   };
 
-  const cnt = selected ? IMPORT_ORDER.filter(s => status[s]?.complete).length : 0;
+  const handleClaim = async (projectId) => {
+    const result = await claimProject(projectId, user.id);
+    if (result) {
+      await loadProjects();
+      setActiveListTab('mine');
+    }
+  };
 
-  const cardStyle = (p) => ({
-    background: selected?.id === p.id ? '#FFF8F6' : '#fff',
-    borderRadius: 8,
-    border: '0.5px solid #E0E0E0',
-    borderLeft: selected?.id === p.id ? `3px solid ${ORANGE}` : '0.5px solid #E0E0E0',
-    padding: '16px 20px',
-    marginBottom: 10,
-    cursor: 'pointer',
-    transition: 'all 0.15s ease',
-  });
+  const handleOwnerChange = async (newOwnerId) => {
+    const updated = await updateProjectOwner(expandedId, newOwnerId);
+    if (updated) {
+      await loadProjects();
+      // If we just transferred to someone else, the card might now be in 'others'
+      if (newOwnerId !== user.id) setActiveListTab('others');
+    }
+    setOwnerEditing(false);
+  };
+
+  // URL edit and credentials save are handled inside ProjectSettingsView now.
+
+  const expanded = getExpanded();
+  const expandedOrder = expanded ? getImportOrder(expanded.fmx_modules) : IMPORT_ORDER;
+  const expandedCnt = expanded ? expandedOrder.filter(s => expandedStatus[s]?.complete).length : 0;
 
   const inputStyle = {
     width: '100%', padding: '9px 12px', fontSize: 14, borderRadius: 6,
@@ -365,35 +460,35 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
     fontFamily: 'system-ui, -apple-system, sans-serif',
   };
 
-  const tabStyle = (tab) => ({
-    padding: '8px 14px',
+  const detailTabStyle = (tab) => ({
+    padding: '7px 14px',
     fontSize: 13,
-    fontWeight: activeTab === tab ? 600 : 400,
-    color: activeTab === tab ? ORANGE : '#6B7280',
+    fontWeight: detailTab === tab ? 600 : 400,
+    color: detailTab === tab ? ORANGE : '#6B7280',
     background: 'none',
     border: 'none',
-    borderBottom: activeTab === tab ? `2px solid ${ORANGE}` : '2px solid transparent',
+    borderBottom: detailTab === tab ? `2px solid ${ORANGE}` : '2px solid transparent',
     cursor: 'pointer',
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    transition: 'color 0.15s',
   });
 
-  // Group imports by schema type
+  // Group expanded imports by schema type
   const importsBySchema = {};
-  for (const imp of imports) {
+  for (const imp of expandedImports) {
     if (!importsBySchema[imp.schema_type]) importsBySchema[imp.schema_type] = [];
     importsBySchema[imp.schema_type].push(imp);
   }
 
-  // Group reference values by schema type (for dependencies tab)
+  // Group reference values by schema type
   const refBySchema = {};
-  for (const row of refValues) {
+  for (const row of expandedRefValues) {
     if (!refBySchema[row.schema_type]) refBySchema[row.schema_type] = {};
     if (!refBySchema[row.schema_type][row.field_name]) refBySchema[row.schema_type][row.field_name] = [];
     refBySchema[row.schema_type][row.field_name].push(row.value);
   }
 
-  const hasCreds = !!selected?.fmx_credentials;
+  const hasCreds = !!expanded?.fmx_credentials;
+  const displayedProjects = activeListTab === 'mine' ? myProjects : otherProjects;
 
   return (
     <div style={{ minHeight: '100vh', background: '#F5F5F5', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
@@ -401,7 +496,6 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
         @keyframes shimmer { 0%,100%{opacity:1} 50%{opacity:0.4} }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .proj-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-        .import-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
       `}</style>
 
       {/* View modal */}
@@ -444,426 +538,526 @@ export default function ProjectScreen({ onSelectProject, onResumeImport }) {
               <button
                 onClick={() => { if (viewModal.rows.length > 0) { const h = Object.keys(viewModal.rows[0]); downloadCSV(`${viewModal.rec.import_name || viewModal.rec.schema_type}.csv`, h, viewModal.rows); } }}
                 style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, background: NAVY, color: '#fff', border: 'none', cursor: 'pointer' }}
-              >
-                Download CSV
-              </button>
+              >Download CSV</button>
               <button onClick={() => setViewModal(null)} style={{ fontSize: 13, padding: '6px 14px', borderRadius: 6, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer' }}>Close</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Create modal */}
+      {mode === 'create' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', width: '100%', maxWidth: 480, padding: '28px 32px' }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>New project</h2>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX site URL *</label>
+              <input style={inputStyle} value={fmxSiteUrl} onChange={e => { setFmxSiteUrl(e.target.value); setDuplicateProject(null); }} placeholder="yoursite.gofmx.com" />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email *</label>
+              <input style={inputStyle} type="email" value={fmxApiEmail} onChange={e => setFmxApiEmail(e.target.value)} placeholder="admin@example.com" />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password *</label>
+              <input style={inputStyle} type="password" value={fmxApiPassword} onChange={e => setFmxApiPassword(e.target.value)} placeholder="••••••••" />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Description <span style={{ color: '#9CA3AF', fontWeight: 400 }}>(optional)</span></label>
+              <textarea
+                rows={3}
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="Notes about this migration (team, target go-live, etc.)"
+                style={{ ...inputStyle, resize: 'vertical', fontFamily: 'system-ui, -apple-system, sans-serif' }}
+              />
+            </div>
+
+            {/* Org name detected */}
+            {orgName && !duplicateProject && (
+              <div style={{ background: '#E6F4EE', padding: '10px 14px', borderRadius: 6, marginBottom: 14, fontSize: 13, color: '#1A5C38' }}>
+                Organization: <strong>{orgName}</strong>
+              </div>
+            )}
+
+            {/* Duplicate warning */}
+            {duplicateProject && (
+              <div style={{ background: '#FFF3CD', padding: '12px 14px', borderRadius: 6, marginBottom: 14, fontSize: 13, color: '#856404' }}>
+                <p style={{ margin: '0 0 8px' }}>A project for this FMX site already exists: <strong>{duplicateProject.name}</strong></p>
+                <button
+                  onClick={() => {
+                    setMode('idle');
+                    setDuplicateProject(null);
+                    setActiveListTab(duplicateProject.user_id === user.id ? 'mine' : 'others');
+                    setExpandedId(duplicateProject.id);
+                    loadExpandedDetails(duplicateProject.id);
+                  }}
+                  style={{ fontSize: 12, padding: '4px 12px', borderRadius: 5, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer', fontWeight: 500 }}
+                >Open existing project</button>
+              </div>
+            )}
+
+            {/* Manual name fallback */}
+            {needsManualName && (
+              <div style={{ background: '#FFF8F0', padding: '12px 14px', borderRadius: 6, marginBottom: 14, border: '1px solid #FFE0B2' }}>
+                <p style={{ margin: '0 0 8px', fontSize: 13, color: '#6D4C1A' }}>Could not detect organization name. Please enter one:</p>
+                <input
+                  style={inputStyle}
+                  value={manualName}
+                  onChange={e => setManualName(e.target.value)}
+                  placeholder="e.g. Riverside School District"
+                  autoFocus
+                />
+                <button
+                  onClick={handleCreateWithManualName}
+                  disabled={!manualName.trim() || creating}
+                  style={{ marginTop: 8, fontSize: 13, padding: '6px 16px', borderRadius: 6, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', opacity: !manualName.trim() ? 0.5 : 1 }}
+                >Create project</button>
+              </div>
+            )}
+
+            {createError && <p style={{ color: '#DC2626', fontSize: 13, margin: '0 0 14px' }}>{createError}</p>}
+
+            {/* Progress indicator */}
+            {creating && createStep && (
+              <p style={{ fontSize: 12, color: '#6B7280', margin: '0 0 14px' }}>
+                {createStep === 'testing' && 'Testing connection…'}
+                {createStep === 'fetching' && 'Fetching organization info…'}
+                {createStep === 'checking' && 'Checking for duplicates…'}
+                {createStep === 'creating' && 'Creating project…'}
+              </p>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              <button
+                onClick={handleConnectAndCreate}
+                disabled={!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || creating || !!duplicateProject}
+                style={{ flex: 1, padding: 10, fontSize: 14, fontWeight: 500, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: creating ? 'not-allowed' : 'pointer', opacity: (!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || creating || !!duplicateProject) ? 0.5 : 1 }}
+              >
+                {creating ? 'Connecting…' : 'Connect & Create'}
+              </button>
+              <button
+                onClick={() => { setMode('idle'); setCreateError(''); setDuplicateProject(null); setNeedsManualName(false); setOrgName(''); setDescription(''); }}
+                style={{ padding: '10px 20px', fontSize: 14, background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, cursor: 'pointer', color: '#6B7280' }}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Profile edit modal */}
+      {showProfileModal && (
+        <ProfileEditModal
+          user={user}
+          profile={currentProfile}
+          onClose={() => setShowProfileModal(false)}
+          onProfileUpdated={async () => { await loadProjects(); }}
+        />
+      )}
+
+      {/* Admin panel modal */}
+      {showAdminPanel && (
+        <AdminPanelModal
+          currentUser={user}
+          currentProfile={currentProfile}
+          allProfiles={allProfiles}
+          projects={[...myProjects, ...otherProjects]}
+          onClose={() => setShowAdminPanel(false)}
+          onProfilesChanged={async () => { await loadProjects(); }}
+        />
+      )}
+
       {/* Header */}
-      <div style={{ height: 52, background: NAVY, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
+      <div style={{ height: 52, background: NAVY, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 32px' }}>
         <span style={{ color: '#fff', fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
+        <UserMenu
+          user={user}
+          profile={currentProfile}
+          onOpenProfile={() => setShowProfileModal(true)}
+          onOpenAdminPanel={() => setShowAdminPanel(true)}
+          onSignOut={async () => { await supabase.auth.signOut(); }}
+        />
       </div>
 
-      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '2rem', display: 'grid', gridTemplateColumns: '60% 40%', gap: 24, alignItems: 'start' }}>
+      {/* Main content */}
+      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 32px' }}>
 
-        {/* LEFT — Project list */}
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-            <span style={{ fontSize: 18, fontWeight: 600, color: NAVY }}>Your projects</span>
+        {/* Tab bar + New project button */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 0 }}>
             <button
-              onClick={() => { setMode('create'); setSelected(null); setDeleteConfirm(false); }}
-              style={{ background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, padding: '6px 16px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+              onClick={() => setActiveListTab('mine')}
+              style={{
+                padding: '10px 20px', fontSize: 15, fontWeight: activeListTab === 'mine' ? 600 : 400,
+                color: activeListTab === 'mine' ? NAVY : '#9CA3AF',
+                borderBottom: activeListTab === 'mine' ? `2px solid ${ORANGE}` : '2px solid transparent',
+                background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+              }}
             >
-              + New project
+              My Projects ({myProjects.length})
+            </button>
+            <button
+              onClick={() => setActiveListTab('others')}
+              style={{
+                padding: '10px 20px', fontSize: 15, fontWeight: activeListTab === 'others' ? 600 : 400,
+                color: activeListTab === 'others' ? NAVY : '#9CA3AF',
+                borderBottom: activeListTab === 'others' ? `2px solid ${ORANGE}` : '2px solid transparent',
+                background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer',
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+              }}
+            >
+              Other Projects ({otherProjects.length})
             </button>
           </div>
-
-          {loading && [0, 1, 2].map(i => <SkeletonCard key={i} />)}
-
-          {!loading && projects.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-              <DocumentPlusIcon />
-              <p style={{ fontSize: 16, fontWeight: 700, color: NAVY, marginTop: 16, marginBottom: 6 }}>No projects yet</p>
-              <p style={{ fontSize: 14, color: '#6B7280', marginBottom: 20 }}>Create your first migration project to get started</p>
-              <button
-                onClick={() => setMode('create')}
-                style={{ background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
-              >
-                + Create project
-              </button>
-            </div>
-          )}
-
-          {!loading && projects.map(p => {
-            const isSelected = selected?.id === p.id;
-            const pct = isSelected ? (cnt / 6) * 100 : 0;
-            return (
-              <div
-                key={p.id}
-                className="proj-card"
-                style={cardStyle(p)}
-                onClick={() => handleSelectProject(p)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600, fontSize: 15, color: NAVY }}>{p.name}</span>
-                  {isSelected
-                    ? <StatusBadge completedCount={cnt} />
-                    : <StatusBadge completedCount={0} />
-                  }
-                </div>
-                {p.fmx_site_url && (
-                  <p style={{ margin: '0 0 10px', fontSize: 13, color: '#6B7280' }}>{p.fmx_site_url}</p>
-                )}
-                <div style={{ height: 6, background: '#E0E0E0', borderRadius: 3, margin: '8px 0 4px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', background: ORANGE, borderRadius: 3, width: `${isSelected ? pct : 0}%`, transition: 'width 0.4s ease' }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 12, color: '#9CA3AF' }}>{isSelected ? `${cnt} of 6 schemas complete` : '— of 6 schemas complete'}</span>
-                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>{daysSince(p.updated_at) || ''}</span>
-                </div>
-              </div>
-            );
-          })}
+          <button
+            onClick={() => { setMode('create'); setExpandedId(null); setCreateError(''); setDuplicateProject(null); setNeedsManualName(false); setOrgName(''); }}
+            style={{ background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+          >+ New project</button>
         </div>
 
-        {/* RIGHT — Detail panel */}
-        <div style={{ background: '#fff', borderRadius: 10, border: '0.5px solid #E0E0E0', minHeight: 400, overflow: 'hidden' }}>
+        {/* Loading skeletons */}
+        {loading && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
+            {[0, 1, 2].map(i => <SkeletonCard key={i} />)}
+          </div>
+        )}
 
-          {/* STATE A — Nothing selected */}
-          {mode === 'idle' && !selected && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 360, color: '#9CA3AF', fontSize: 14, fontStyle: 'italic', textAlign: 'center', padding: '0 2rem' }}>
-              Select a project to view details, or create a new one
-            </div>
-          )}
-
-          {/* STATE B — Create form */}
-          {mode === 'create' && (
-            <div style={{ padding: '24px 24px' }}>
-              <form onSubmit={handleCreate}>
-                <h2 style={{ fontSize: 16, fontWeight: 700, color: NAVY, margin: '0 0 20px' }}>New project</h2>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Project name *</label>
-                  <input style={inputStyle} required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverside School District" />
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>Description</label>
-                  <textarea
-                    rows={3} value={description} onChange={e => setDescription(e.target.value)}
-                    placeholder="Optional notes about this migration"
-                    style={{ ...inputStyle, resize: 'vertical', fontFamily: 'system-ui, -apple-system, sans-serif' }}
-                  />
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 2 }}>FMX site URL</label>
-                  <span style={{ fontSize: 11, color: '#9CA3AF', display: 'block', marginBottom: 4 }}>Used for direct API push later</span>
-                  <input style={inputStyle} value={fmxSiteUrl} onChange={e => setFmxSiteUrl(e.target.value)} placeholder="yoursite.gofmx.com" />
-                </div>
-
-                <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '16px 0' }} />
-
-                <button
-                  type="button"
-                  onClick={() => setApiExpanded(v => !v)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', padding: 0, marginBottom: 12 }}
-                >
-                  <span style={{ display: 'inline-block', transform: apiExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: 11 }}>▶</span>
-                  API credentials (optional)
-                </button>
-                {apiExpanded && (
-                  <div>
-                    <div style={{ marginBottom: 12 }}>
-                      <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API email</label>
-                      <input style={inputStyle} type="email" placeholder="admin@example.com" value={fmxApiEmail} onChange={e => { setFmxApiEmail(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
-                    </div>
-                    <div style={{ marginBottom: 12 }}>
-                      <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>FMX API password</label>
-                      <input style={inputStyle} type="password" placeholder="••••••••" value={fmxApiPassword} onChange={e => { setFmxApiPassword(e.target.value); setCreateConnStatus(null); setCreateConnVerified(false); }} />
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                      <button
-                        type="button"
-                        onClick={handleTestCreateConn}
-                        disabled={!fmxSiteUrl || !fmxApiEmail || !fmxApiPassword || createConnLoading}
-                        style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', border: '1px solid #D1D5DB', background: '#fff', whiteSpace: 'nowrap' }}
-                      >
-                        {createConnLoading ? 'Testing…' : 'Test connection'}
-                      </button>
-                      {createConnStatus && (
-                        <span style={{ fontSize: 12, color: createConnStatus === 'ok' ? GREEN : '#DC2626', fontWeight: 500 }}>
-                          {createConnMsg}
-                        </span>
-                      )}
-                    </div>
-                    <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Credentials are stored encoded and used for direct FMX push</p>
-                  </div>
-                )}
-
-                {createError && <p style={{ color: '#DC2626', fontSize: 13, margin: '8px 0' }}>{createError}</p>}
-                <button
-                  type="submit" disabled={creating}
-                  style={{ width: '100%', padding: 10, fontSize: 14, fontWeight: 500, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: creating ? 'not-allowed' : 'pointer', opacity: creating ? 0.7 : 1, marginTop: 4 }}
-                >
-                  {creating ? 'Creating…' : 'Create project'}
-                </button>
-                <p style={{ textAlign: 'center', marginTop: 10 }}>
-                  <button type="button" onClick={() => setMode('idle')} style={{ background: 'none', border: 'none', color: '#6B7280', fontSize: 13, cursor: 'pointer' }}>
-                    Cancel
-                  </button>
+        {/* Empty state */}
+        {!loading && displayedProjects.length === 0 && (
+          (() => {
+            const unassignedCount = otherProjects.filter(p => !p.user_id).length;
+            const showUnassignedCta = activeListTab === 'mine' && unassignedCount > 0;
+            return (
+              <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
+                <DocumentPlusIcon />
+                <p style={{ fontSize: 16, fontWeight: 700, color: NAVY, marginTop: 16, marginBottom: 6 }}>
+                  {activeListTab === 'mine' ? 'No projects yet' : 'No other projects'}
                 </p>
-              </form>
-            </div>
-          )}
-
-          {/* STATE C — Project detail */}
-          {mode === 'idle' && selected && (
-            <div>
-              {/* Project header */}
-              <div style={{ padding: '20px 24px 0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  {editingName
-                    ? <input
-                        autoFocus
-                        value={editNameVal}
-                        onChange={e => setEditNameVal(e.target.value)}
-                        onBlur={handleNameBlur}
-                        onKeyDown={e => e.key === 'Enter' && e.target.blur()}
-                        style={{ fontSize: 17, fontWeight: 700, color: NAVY, border: 'none', borderBottom: `2px solid ${ORANGE}`, outline: 'none', flex: 1, background: 'transparent', fontFamily: 'system-ui, -apple-system, sans-serif' }}
-                      />
-                    : <span style={{ fontSize: 17, fontWeight: 700, color: NAVY }}>{selected.name}</span>
-                  }
-                  <button
-                    onClick={() => { setEditingName(true); setEditNameVal(selected.name); }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 14, padding: '2px 4px' }}
-                    title="Edit name"
-                  >✏️</button>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  {selected.fmx_site_url && (
-                    <span style={{ fontSize: 12, color: '#9CA3AF' }}>{selected.fmx_site_url}</span>
-                  )}
-                  {selected.fmx_connection_verified && (
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: GREEN, whiteSpace: 'nowrap' }}>
-                      ✓ FMX Connected
-                    </span>
-                  )}
-                </div>
-
-                {/* Open project button */}
-                <button
-                  onClick={() => onSelectProject(selected)}
-                  style={{ width: '100%', height: 40, fontSize: 14, fontWeight: 600, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', marginTop: 12, marginBottom: 16 }}
-                >
-                  Open project →
-                </button>
-              </div>
-
-              {/* Tab bar */}
-              <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', padding: '0 24px' }}>
-                <button style={tabStyle('imports')} onClick={() => setActiveTab('imports')}>Imports</button>
-                <button style={tabStyle('dependencies')} onClick={() => setActiveTab('dependencies')}>Dependencies</button>
-                <button style={tabStyle('settings')} onClick={() => setActiveTab('settings')}>Settings</button>
-              </div>
-
-              {/* ── IMPORTS TAB ── */}
-              {activeTab === 'imports' && (
-                <div style={{ padding: '16px 24px' }}>
-                  <p style={{ fontSize: 11, color: '#9CA3AF', margin: '0 0 14px' }}>
-                    {statusLoading ? 'Loading…' : `${cnt} of 6 schemas complete`}
-                  </p>
-
-                  {IMPORT_ORDER.map((schema, i) => {
-                    const s = status[schema];
-                    const done = s?.complete;
-                    const isCurrent = !done && IMPORT_ORDER.slice(0, i).every(prev => status[prev]?.complete);
-                    const schemaImports = importsBySchema[schema] || [];
-
-                    return (
-                      <div key={schema} style={{ marginBottom: 16 }}>
-                        {/* Schema header */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: schemaImports.length > 0 ? 8 : 0 }}>
-                          <SchemaIcon done={done} isCurrent={isCurrent} />
-                          <span style={{ fontSize: 13, fontWeight: 600, color: done ? '#374151' : isCurrent ? NAVY : '#9CA3AF', flex: 1 }}>
-                            {schema}
-                          </span>
-                          {schemaImports.length > 1 && (
-                            <span style={{ fontSize: 11, color: '#9CA3AF', background: '#F3F4F6', borderRadius: 10, padding: '1px 7px' }}>
-                              {schemaImports.length}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Import cards */}
-                        {schemaImports.map(rec => (
-                          <ImportCard
-                            key={rec.id}
-                            rec={rec}
-                            hasCreds={hasCreds}
-                            renamingId={renamingId}
-                            renameVal={renameVal}
-                            setRenamingId={setRenamingId}
-                            setRenameVal={setRenameVal}
-                            onRenameSubmit={handleRenameSubmit}
-                            onDownload={() => handleDownloadImport(rec)}
-                            onView={() => handleViewImport(rec)}
-                            onResume={() => handleResumeImport(rec, 3)}
-                            onRepush={() => handleResumeImport(rec, 4)}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* ── DEPENDENCIES TAB ── */}
-              {activeTab === 'dependencies' && (
-                <div style={{ padding: '16px 24px' }}>
-                  <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 16, lineHeight: 1.5 }}>
-                    Reference values saved from completed imports. Downstream schema types rely on these to resolve cross-sheet links at push time.
-                  </p>
-
-                  {DEPENDENCY_CHAINS.map(({ provider, consumers }) => {
-                    const providerRefs = refBySchema[provider] || {};
-                    const allValues = Object.values(providerRefs).flat();
-                    const uniqueValues = [...new Set(allValues)].sort();
-
-                    return (
-                      <div key={provider} style={{ marginBottom: 24 }}>
-                        {/* Chain heading */}
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{provider}</span>
-                          <span style={{ fontSize: 12, color: '#9CA3AF' }}>→</span>
-                          <span style={{ fontSize: 12, color: '#6B7280' }}>{consumers.join(', ')}</span>
-                        </div>
-                        <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: 8 }}>
-                          {uniqueValues.length === 0
-                            ? <p style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', margin: '4px 0 0' }}>
-                                No {provider} data saved yet — complete a {provider} import first.
-                              </p>
-                            : uniqueValues.map(val => (
-                                <div key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid #F9FAFB' }}>
-                                  <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#E6F4EE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                    <span style={{ fontSize: 9, color: GREEN, fontWeight: 700 }}>✓</span>
-                                  </div>
-                                  <span style={{ fontSize: 12, color: '#374151', flex: 1 }}>{val}</span>
-                                  <span style={{ fontSize: 10, color: '#D1D5DB', fontStyle: 'italic' }}>resolved at push</span>
-                                </div>
-                              ))
-                          }
-                        </div>
-                        {uniqueValues.length > 0 && (
-                          <p style={{ fontSize: 11, color: '#9CA3AF', margin: '6px 0 0' }}>
-                            {uniqueValues.length} value{uniqueValues.length !== 1 ? 's' : ''} saved
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* ── SETTINGS TAB ── */}
-              {activeTab === 'settings' && (
-                <div style={{ padding: '16px 24px' }}>
-
-                  {/* FMX site URL */}
-                  <div style={{ marginBottom: 20 }}>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>FMX Site URL</label>
-                    {editingUrl
-                      ? <div style={{ display: 'flex', gap: 8 }}>
-                          <input
-                            autoFocus
-                            value={editUrlVal}
-                            onChange={e => setEditUrlVal(e.target.value)}
-                            onBlur={handleUrlBlur}
-                            onKeyDown={e => e.key === 'Enter' && e.target.blur()}
-                            style={{ ...inputStyle, fontSize: 13, padding: '7px 10px', flex: 1 }}
-                            placeholder="yoursite.gofmx.com"
-                          />
-                        </div>
-                      : <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 13, color: selected.fmx_site_url ? '#374151' : '#9CA3AF', flex: 1 }}>
-                            {selected.fmx_site_url || 'Not set'}
-                          </span>
-                          <button
-                            onClick={() => { setEditingUrl(true); setEditUrlVal(selected.fmx_site_url || ''); }}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', textDecoration: 'underline', padding: 0 }}
-                          >
-                            Edit
-                          </button>
-                        </div>
-                    }
-                  </div>
-
-                  {/* API credentials */}
-                  <div style={{ marginBottom: 20 }}>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
-                      API Credentials
-                      {selected.fmx_connection_verified && (
-                        <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 500, padding: '2px 7px', borderRadius: 8, background: '#E6F4EE', color: GREEN, textTransform: 'none', letterSpacing: 0 }}>✓ Verified</span>
-                      )}
-                    </label>
+                <p style={{ fontSize: 14, color: '#6B7280', marginBottom: 20 }}>
+                  {activeListTab === 'mine' ? 'Create your first migration project to get started' : 'Projects owned by other users will appear here'}
+                </p>
+                {activeListTab === 'mine' && (
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
                     <button
-                      type="button"
-                      onClick={() => { setShowUpdateCreds(v => !v); setUpdateConnStatus(null); }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', padding: 0, textDecoration: 'underline' }}
-                    >
-                      {showUpdateCreds ? 'Cancel' : (selected.fmx_credentials ? 'Update credentials' : 'Add credentials')}
-                    </button>
-                    {showUpdateCreds && (
-                      <div style={{ marginTop: 10, padding: '12px 14px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
-                        <div style={{ marginBottom: 8 }}>
-                          <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API email</label>
-                          <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="email" placeholder="admin@example.com" value={updateEmail} onChange={e => { setUpdateEmail(e.target.value); setUpdateConnStatus(null); }} />
-                        </div>
-                        <div style={{ marginBottom: 8 }}>
-                          <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 3 }}>API password</label>
-                          <input style={{ ...inputStyle, fontSize: 13, padding: '7px 10px' }} type="password" placeholder="••••••••" value={updatePassword} onChange={e => { setUpdatePassword(e.target.value); setUpdateConnStatus(null); }} />
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                          <button
-                            type="button"
-                            onClick={handleTestUpdateConn}
-                            disabled={!updateEmail || !updatePassword || updateConnLoading}
-                            style={{ fontSize: 12, padding: '5px 10px', borderRadius: 5, border: '1px solid #D1D5DB', background: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                          >
-                            {updateConnLoading ? 'Testing…' : 'Test'}
-                          </button>
-                          {updateConnStatus && (
-                            <span style={{ fontSize: 12, color: updateConnStatus === 'ok' ? GREEN : '#DC2626', fontWeight: 500 }}>
-                              {updateConnMsg}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleSaveUpdateCreds}
-                          disabled={!updateEmail || !updatePassword || updateSaving}
-                          style={{ fontSize: 13, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', opacity: (!updateEmail || !updatePassword) ? 0.5 : 1 }}
-                        >
-                          {updateSaving ? 'Saving…' : 'Save credentials'}
-                        </button>
-                      </div>
+                      onClick={() => setMode('create')}
+                      style={{ background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                    >+ Create project</button>
+                    {showUnassignedCta && (
+                      <button
+                        onClick={() => setActiveListTab('others')}
+                        style={{ background: '#fff', color: NAVY, border: `1px solid ${NAVY}`, borderRadius: 6, padding: '8px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                      >View {unassignedCount} unassigned project{unassignedCount === 1 ? '' : 's'}</button>
                     )}
                   </div>
+                )}
+                {showUnassignedCta && (
+                  <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 14 }}>
+                    There {unassignedCount === 1 ? 'is' : 'are'} {unassignedCount} unassigned project{unassignedCount === 1 ? '' : 's'} you can claim.
+                  </p>
+                )}
+              </div>
+            );
+          })()
+        )}
 
-                  <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '16px 0' }} />
+        {/* Project cards grid */}
+        {!loading && displayedProjects.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16, alignItems: 'start' }}>
+            {displayedProjects.map(p => {
+              const isExpanded = expandedId === p.id;
+              const importedSchemas = importSummaryMap[p.id] || new Set();
+              const progress = computeProgress(p, importedSchemas);
+              const pct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
 
-                  {/* Danger zone */}
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>Danger Zone</label>
-                    {!deleteConfirm
-                      ? <button onClick={() => setDeleteConfirm(true)} style={{ background: 'none', border: '1px solid #FECACA', color: '#DC2626', fontSize: 12, cursor: 'pointer', borderRadius: 5, padding: '5px 12px' }}>
-                          Delete project
-                        </button>
-                      : <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '10px 14px', textAlign: 'center' }}>
-                          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#DC2626' }}>Are you sure? This cannot be undone.</p>
-                          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                            <button onClick={handleDelete} style={{ background: '#DC2626', color: '#fff', border: 'none', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Yes, delete</button>
-                            <button onClick={() => setDeleteConfirm(false)} style={{ background: '#fff', border: '1px solid #D1D5DB', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              return (
+                <div key={p.id} style={{ gridColumn: isExpanded ? '1 / -1' : undefined }}>
+                  {/* Card */}
+                  <div
+                    className={isExpanded ? '' : 'proj-card'}
+                    onClick={() => !isExpanded && handleCardClick(p)}
+                    style={{
+                      background: '#fff',
+                      borderRadius: isExpanded ? '10px 10px 0 0' : 10,
+                      border: isExpanded ? `1.5px solid ${ORANGE}` : '0.5px solid #E0E0E0',
+                      borderBottom: isExpanded ? 'none' : undefined,
+                      padding: '20px 24px',
+                      cursor: isExpanded ? 'default' : 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontWeight: 600, fontSize: 16, color: NAVY }}>{p.name}</span>
+                      <StatusBadge completedCount={progress.completed} totalCount={progress.total} />
+                    </div>
+                    {p.description && (
+                      <div
+                        title={p.description}
+                        style={{
+                          fontSize: 12, color: '#6B7280', margin: '0 0 8px',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {p.description}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span>Owner: {profileMap[p.user_id] || 'Unassigned'}</span>
+                      {!p.user_id && !isAdmin && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleClaim(p.id); }}
+                          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#fff', color: ORANGE, border: `1px solid ${ORANGE}`, cursor: 'pointer', fontWeight: 500 }}
+                        >Claim</button>
+                      )}
+                      {p.fmx_site_url && <span>· {p.fmx_site_url}</span>}
+                    </div>
+
+                    {/* Schema progress indicators */}
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {progress.activeSchemas.map(s => {
+                        const done = progress.completedSchemas.has(s);
+                        const moduleSlug = getSchemaModuleSlug(s);
+                        const tooltip = moduleSlug ? `${getBaseSchemaType(s)} · ${moduleSlug}` : s;
+                        return (
+                          <div key={s} title={tooltip} style={{
+                            width: 22, height: 22, borderRadius: '50%',
+                            background: done ? GREEN : '#F3F4F6',
+                            border: done ? 'none' : '1.5px solid #D1D5DB',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 9, fontWeight: 700, color: done ? '#fff' : '#9CA3AF',
+                          }}>
+                            {done ? '✓' : schemaShortLabel(s)}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Progress bar */}
+                    <div style={{ height: 5, background: '#E0E0E0', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', background: ORANGE, borderRadius: 3, width: `${pct}%`, transition: 'width 0.4s ease' }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                      <span style={{ fontSize: 11, color: '#9CA3AF' }}>{progress.completed} of {progress.total} data types complete</span>
+                      <span style={{ fontSize: 11, color: '#9CA3AF' }}>{daysSince(p.updated_at) || ''}</span>
+                    </div>
+                  </div>
+
+                  {/* Expanded detail panel */}
+                  {isExpanded && expanded && (
+                    <div style={{
+                      background: '#fff', borderRadius: '0 0 10px 10px',
+                      border: `1.5px solid ${ORANGE}`, borderTop: `1px solid #E5E7EB`,
+                      padding: '0',
+                    }}>
+                      {/* Expanded header */}
+                      <div style={{ padding: '16px 24px 0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          {editingName
+                            ? <input
+                                autoFocus
+                                value={editNameVal}
+                                onChange={e => setEditNameVal(e.target.value)}
+                                onBlur={handleNameBlur}
+                                onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+                                style={{ fontSize: 17, fontWeight: 700, color: NAVY, border: 'none', borderBottom: `2px solid ${ORANGE}`, outline: 'none', flex: 1, background: 'transparent', fontFamily: 'system-ui, -apple-system, sans-serif' }}
+                              />
+                            : <span style={{ fontSize: 17, fontWeight: 700, color: NAVY }}>{expanded.name}</span>
+                          }
+                          {isAdmin && (
+                            <button
+                              onClick={() => { setEditingName(true); setEditNameVal(expanded.name); }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 14, padding: '2px 4px' }}
+                              title="Edit name"
+                            >✏️</button>
+                          )}
+                          {/* Collapse button */}
+                          <button
+                            onClick={() => setExpandedId(null)}
+                            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 18, lineHeight: 1 }}
+                            title="Collapse"
+                          >×</button>
+                        </div>
+
+                        {/* Owner row */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, color: '#6B7280' }}>Owner:</span>
+                          {ownerEditing && isAdmin ? (
+                            <select
+                              autoFocus
+                              value={expanded.user_id || ''}
+                              onChange={e => handleOwnerChange(e.target.value)}
+                              onBlur={() => setOwnerEditing(false)}
+                              style={{ fontSize: 12, padding: '3px 8px', borderRadius: 4, border: '1px solid #D1D5DB' }}
+                            >
+                              <option value="">Unassigned</option>
+                              {allProfiles.map(pr => (
+                                <option key={pr.id} value={pr.id}>{pr.full_name || pr.email}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <>
+                              <span style={{ fontSize: 12, color: NAVY, fontWeight: 500 }}>
+                                {profileMap[expanded.user_id] || 'Unassigned'}
+                              </span>
+                              {isAdmin && (
+                                <button
+                                  onClick={() => setOwnerEditing(true)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 12, padding: '0 2px' }}
+                                  title="Transfer ownership"
+                                >✏️</button>
+                              )}
+                              {!expanded.user_id && !isAdmin && (
+                                <button
+                                  onClick={() => handleClaim(expanded.id)}
+                                  style={{ fontSize: 11, padding: '2px 10px', borderRadius: 4, background: '#fff', color: ORANGE, border: `1px solid ${ORANGE}`, cursor: 'pointer', fontWeight: 500 }}
+                                >Claim this project</button>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        {/* Connection + URL */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          {expanded.fmx_site_url && (
+                            <span style={{ fontSize: 12, color: '#9CA3AF' }}>{expanded.fmx_site_url}</span>
+                          )}
+                          {expanded.fmx_connection_verified && (
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#E6F4EE', color: GREEN }}>✓ FMX Connected</span>
+                          )}
+                        </div>
+
+                        {/* Open project button */}
+                        <button
+                          onClick={() => onSelectProject(expanded)}
+                          style={{ width: '100%', height: 40, fontSize: 14, fontWeight: 600, background: ORANGE, color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 12 }}
+                        >Open project →</button>
+                      </div>
+
+                      {/* Detail tabs */}
+                      <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', padding: '0 24px' }}>
+                        <button style={detailTabStyle('imports')} onClick={() => setDetailTab('imports')}>Imports</button>
+                        <button style={detailTabStyle('dependencies')} onClick={() => setDetailTab('dependencies')}>Dependencies</button>
+                        <button style={detailTabStyle('settings')} onClick={() => setDetailTab('settings')}>Settings</button>
+                      </div>
+
+                      {/* IMPORTS TAB */}
+                      {detailTab === 'imports' && (
+                        <div style={{ padding: '14px 24px' }}>
+                          <p style={{ fontSize: 11, color: '#9CA3AF', margin: '0 0 12px' }}>
+                            {statusLoading ? 'Loading…' : `${expandedCnt} of ${expandedOrder.length} schemas complete`}
+                          </p>
+                          {expandedOrder.map((schema, i) => {
+                            const s = expandedStatus[schema];
+                            const done = s?.complete;
+                            const isCurrent = !done && expandedOrder.slice(0, i).every(prev => expandedStatus[prev]?.complete);
+                            const schemaImports = importsBySchema[schema] || [];
+                            return (
+                              <div key={schema} style={{ marginBottom: 14 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: schemaImports.length > 0 ? 6 : 0 }}>
+                                  <SchemaIcon done={done} isCurrent={isCurrent} />
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: done ? '#374151' : isCurrent ? NAVY : '#9CA3AF', flex: 1 }}>{schema}</span>
+                                  {schemaImports.length > 1 && (
+                                    <span style={{ fontSize: 11, color: '#9CA3AF', background: '#F3F4F6', borderRadius: 10, padding: '1px 7px' }}>{schemaImports.length}</span>
+                                  )}
+                                </div>
+                                {schemaImports.map(rec => (
+                                  <ImportCard
+                                    key={rec.id} rec={rec} hasCreds={hasCreds}
+                                    renamingId={renamingId} renameVal={renameVal}
+                                    setRenamingId={setRenamingId} setRenameVal={setRenameVal}
+                                    onRenameSubmit={handleRenameSubmit}
+                                    onDownload={() => handleDownloadImport(rec)}
+                                    onView={() => handleViewImport(rec)}
+                                    onResume={() => handleResumeImport(rec, 3)}
+                                    onRepush={() => handleResumeImport(rec, 4)}
+                                  />
+                                ))}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* DEPENDENCIES TAB */}
+                      {detailTab === 'dependencies' && (
+                        <div style={{ padding: '14px 24px' }}>
+                          <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 14, lineHeight: 1.5 }}>
+                            Reference values saved from completed imports. Downstream schema types rely on these to resolve cross-sheet links at push time.
+                          </p>
+                          {DEPENDENCY_CHAINS.map(({ provider, consumers }) => {
+                            const providerRefs = refBySchema[provider] || {};
+                            const allValues = Object.values(providerRefs).flat();
+                            const uniqueValues = [...new Set(allValues)].sort();
+                            return (
+                              <div key={provider} style={{ marginBottom: 20 }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 700, color: NAVY }}>{provider}</span>
+                                  <span style={{ fontSize: 12, color: '#9CA3AF' }}>→</span>
+                                  <span style={{ fontSize: 12, color: '#6B7280' }}>{consumers.join(', ')}</span>
+                                </div>
+                                <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: 8 }}>
+                                  {uniqueValues.length === 0
+                                    ? <p style={{ fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', margin: '4px 0 0' }}>
+                                        No {provider} data saved yet — complete a {provider} import first.
+                                      </p>
+                                    : uniqueValues.map(val => (
+                                        <div key={val} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid #F9FAFB' }}>
+                                          <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#E6F4EE', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                            <span style={{ fontSize: 9, color: GREEN, fontWeight: 700 }}>✓</span>
+                                          </div>
+                                          <span style={{ fontSize: 12, color: '#374151', flex: 1 }}>{val}</span>
+                                          <span style={{ fontSize: 10, color: '#D1D5DB', fontStyle: 'italic' }}>resolved at push</span>
+                                        </div>
+                                      ))
+                                  }
+                                </div>
+                                {uniqueValues.length > 0 && (
+                                  <p style={{ fontSize: 11, color: '#9CA3AF', margin: '6px 0 0' }}>
+                                    {uniqueValues.length} value{uniqueValues.length !== 1 ? 's' : ''} saved
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* SETTINGS TAB — reuses ProjectSettingsView */}
+                      {detailTab === 'settings' && (
+                        <div style={{ padding: '14px 24px' }}>
+                          <ProjectSettingsView
+                            selectedProject={expanded}
+                            onProjectUpdated={async () => { await loadProjects(); }}
+                          />
+
+                          <hr style={{ border: 'none', borderTop: '1px solid #F3F4F6', margin: '20px 0 14px' }} />
+
+                          {/* Danger zone (project delete — stays here since it ties to expandedId state) */}
+                          <div>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>Danger Zone</label>
+                            {!deleteConfirm
+                              ? <button onClick={() => setDeleteConfirm(true)} style={{ background: 'none', border: '1px solid #FECACA', color: '#DC2626', fontSize: 12, cursor: 'pointer', borderRadius: 5, padding: '5px 12px' }}>
+                                  Delete project
+                                </button>
+                              : <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '10px 14px', textAlign: 'center' }}>
+                                  <p style={{ margin: '0 0 8px', fontSize: 13, color: '#DC2626' }}>Are you sure? This cannot be undone.</p>
+                                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                                    <button onClick={handleDelete} style={{ background: '#DC2626', color: '#fff', border: 'none', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Yes, delete</button>
+                                    <button onClick={() => setDeleteConfirm(false)} style={{ background: '#fff', border: '1px solid #D1D5DB', borderRadius: 5, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                                  </div>
+                                </div>
+                            }
                           </div>
                         </div>
-                    }
-                  </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

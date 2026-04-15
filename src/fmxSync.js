@@ -232,6 +232,7 @@ export async function fetchFmxModules(siteUrl, email, password) {
   // 'maintenance' is an assumption, not a spec-backed value — CLAUDE.md §4 names it as a
   // common convention but does not prescribe a Work-Task default.
   const defaults = {
+    orgName: null,
     workRequestModules:    [{ slug: 'maintenance', label: 'Maintenance' }],
     scheduleRequestModules: [{ slug: 'scheduling',  label: 'Scheduling'  }],
     workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
@@ -244,7 +245,12 @@ export async function fetchFmxModules(siteUrl, email, password) {
     if (!res.ok) return defaults;
     const data = await res.json();
 
-    const modules = { ...defaults };
+    const orgName = data.name || null;
+    const modules = {
+      workRequestModules: defaults.workRequestModules,
+      scheduleRequestModules: defaults.scheduleRequestModules,
+      workTaskModules: defaults.workTaskModules,
+    };
 
     // Work request modules — data.workRequestSettings is an array
     const wrSettings = data.workRequestSettings || [];
@@ -270,7 +276,7 @@ export async function fetchFmxModules(siteUrl, email, password) {
       }));
     }
 
-    return modules;
+    return { orgName, ...modules };
   } catch (e) {
     console.warn('[FMX modules] fetch failed, using defaults:', e);
     return defaults;
