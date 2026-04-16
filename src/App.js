@@ -330,9 +330,8 @@ export default function App() {
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         // Only advance when the step's forward-guard is satisfied
-        // (reuses the same checks the Next button applies)
         if (wStep === 1 && csv) setWStep(2);
-        else if (wStep === 2) goToValidate();
+        else if (wStep === 2) setWStep(3); // simplified: step 2→3 (goToValidate builds rows on click, keyboard just advances)
         else if (wStep === 3 && (!hasErrors || certified)) setWStep(4);
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -341,7 +340,7 @@ export default function App() {
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [mainTab, wStep, csv, hasErrors, certified, goToValidate]);
+  }, [mainTab, wStep, csv, hasErrors, certified]);
 
   const handleSelectType = t => {
     setSchemaType(t); setCustomFields([]); setDynamicRates([]);
