@@ -166,7 +166,7 @@ function schemaShortLabel(schema) {
   return base.charAt(0).toUpperCase();
 }
 
-export default function ProjectScreen({ user, onSelectProject, onResumeImport }) {
+export default function ProjectScreen({ user, onSelectProject, onResumeImport, activeProjectId, activeWizardSchema }) {
   const [myProjects, setMyProjects] = useState([]);
   const [otherProjects, setOtherProjects] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -788,7 +788,17 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport })
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontWeight: 600, fontSize: 16, color: NAVY }}>{p.name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontWeight: 600, fontSize: 16, color: NAVY }}>{p.name}</span>
+                        {p.id === activeProjectId && activeWizardSchema && (
+                          <span style={{
+                            fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
+                            background: '#FFF3CD', color: '#856404', whiteSpace: 'nowrap',
+                          }}>
+                            {activeWizardSchema} in progress
+                          </span>
+                        )}
+                      </div>
                       <StatusBadge completedCount={progress.completed} totalCount={progress.total} />
                     </div>
                     {p.description && (

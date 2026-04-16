@@ -602,7 +602,6 @@ export default function App() {
   };
 
   const goToProjects = () => {
-    reset();
     setShowProjectScreen(true);
   };
 
@@ -665,10 +664,26 @@ export default function App() {
     return (
       <ProjectScreen
         user={user}
+        activeProjectId={selectedProject?.id || null}
+        activeWizardSchema={schemaType || null}
         onSelectProject={(project) => {
+          const isSameProject = selectedProject?.id === project.id;
+
+          if (!isSameProject && schemaType) {
+            const confirmed = window.confirm(
+              `You have an in-progress "${schemaType}" import on "${selectedProject?.name}". `
+              + `Switching projects will discard this work. Continue?`
+            );
+            if (!confirmed) return;
+          }
+
+          if (!isSameProject) {
+            reset();
+            setMainTab('overview');
+          }
+
           setSelectedProject(project);
           setShowProjectScreen(false);
-          setMainTab('overview');
           getProjectImports(project.id).then(d => setWizardImports(d || []));
         }}
         onResumeImport={handleResumeImport}
@@ -714,17 +729,27 @@ export default function App() {
       {/* Header */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, height: 52, background: C.navy, padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          {selectedProject && (
+            <button
+              onClick={goToProjects}
+              style={{
+                background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)',
+                color: '#fff', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                padding: '4px 12px', borderRadius: 6, marginRight: 14,
+                display: 'flex', alignItems: 'center', gap: 6,
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.22)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
+            >
+              ← All Projects
+            </button>
+          )}
           <span style={{ color: C.white, fontWeight: 600, fontSize: 15 }}>FMX Data Migration Tool</span>
           {selectedProject && (
             <>
               <span style={{ color: 'rgba(255,255,255,0.4)', margin: '0 10px', fontSize: 15 }}>|</span>
               <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: 400 }}>{selectedProject.name}</span>
-              <button
-                onClick={goToProjects}
-                style={{ background: 'none', border: 'none', color: C.blue, fontSize: 12, cursor: 'pointer', marginLeft: 14, padding: '2px 0' }}
-              >
-                ← Projects
-              </button>
             </>
           )}
         </div>
