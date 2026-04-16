@@ -502,14 +502,6 @@ export default function App() {
   };
 
   const handleExport = async (format = "csv") => {
-    // Building and Equipment Type use "Name" as cross-reference value
-    const crossRefTypes = ['Building', 'Equipment Type'];
-    const baseSt = getBaseSchemaType(schemaType);
-    const refField = crossRefTypes.includes(baseSt) ? 'Name' : null;
-    if (refField) {
-      const vals = [...new Set(mappedRows.map(r => r[refField]).filter(Boolean))];
-      setImportedData(prev => ({ ...prev, [baseSt]: vals }));
-    }
     const baseName = schemaType.replace(/\s+/g, "_");
     setHistory(h => [...h, { type: schemaType, rows: mappedRows.length, time: new Date().toLocaleTimeString() }]);
     if (format === "xlsx") {
@@ -528,24 +520,10 @@ export default function App() {
   };
 
   const handleRefsLoaded = (merged) => {
-    setPersistentRefs(merged);
+    // no-op: persistentRefs state was removed; callers may still invoke this
   };
 
   const handleImportComplete = ({ schemaType: st, referenceValues }) => {
-    // Building and Equipment Type use "Name" as cross-reference value
-    const crossRefTypes = ['Building', 'Equipment Type'];
-    const baseSt = getBaseSchemaType(st);
-    if (crossRefTypes.includes(baseSt)) {
-      const vals = referenceValues
-        .filter(r => r.fieldName === 'Name')
-        .map(r => r.value);
-      if (vals.length > 0) {
-        setImportedData(prev => ({
-          ...prev,
-          [baseSt]: [...new Set([...(prev[baseSt] || []), ...vals])],
-        }));
-      }
-    }
     setChecklistRefreshKey(k => k + 1);
     if (selectedProject?.id) {
       getProjectImports(selectedProject.id).then(d => setWizardImports(d || []));
@@ -561,7 +539,7 @@ export default function App() {
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
-    setPersistentRefs(null);
+
     setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setWStep(step);
     setMainTab('wizard');
@@ -584,7 +562,7 @@ export default function App() {
     setDynamicRates([]);
     setTransformRules({});
     setCertified(false);
-    setPersistentRefs(null);
+
     setFmxSyncData({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
     setShowProjectScreen(false);
     setWStep(step);
@@ -596,7 +574,7 @@ export default function App() {
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
     setMemoryMatches({}); setMappingSources({}); setSavedRules({});
-    setPersistentRefs(null);
+
     setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
     setMainTab('overview');
   };
