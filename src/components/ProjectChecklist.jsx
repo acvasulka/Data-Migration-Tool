@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { C } from "../theme";
 import { getProjectStatus, getAllReferenceValues, saveProjectCredentials } from "../db";
-import { encodeCredentials, testFmxConnection } from "../fmxSync";
+import { testFmxConnection } from "../fmxSync";
 import { IMPORT_ORDER } from "../schemas";
 
 const NAVY = C.navy;
@@ -69,9 +69,14 @@ export default function ProjectChecklist({ history, projectId, refreshKey, selec
 
   const handleSaveCred = async () => {
     setCredSaving(true);
-    const encoded = encodeCredentials(credEmail, credPassword);
     const verified = credConnStatus === 'ok';
-    const updated = await saveProjectCredentials(selectedProject.id, encoded, verified);
+    const updated = await saveProjectCredentials({
+      projectId: selectedProject.id,
+      siteUrl: selectedProject?.fmx_site_url,
+      email: credEmail,
+      password: credPassword,
+      verified,
+    });
     if (updated && onCredentialsSaved) onCredentialsSaved(updated);
     setShowCredForm(false);
     setCredEmail('');

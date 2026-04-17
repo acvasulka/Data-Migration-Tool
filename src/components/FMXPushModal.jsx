@@ -4,7 +4,7 @@ import Modal from "./Modal";
 import { resolveEndpoint, FMX_ASSIGNMENT_FIELDS } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache, fetchAllRecords } from "../fmxTransform";
 import { deriveFieldMap, deriveLookupFields } from "../fmxFieldMetadata";
-import { decodeCredentials, fetchPostOptions } from "../fmxSync";
+import { fetchPostOptions } from "../fmxSync";
 import { fmxFetch } from "../apiClient";
 import { downloadCSV } from "../utils";
 import { getAllDependencyCaches } from "../db";
@@ -47,8 +47,10 @@ export default function FMXPushModal({
   useEffect(() => {
     if (fmxSiteUrl) setSiteUrl(fmxSiteUrl);
     if (fmxCredentials) {
-      const { email: savedEmail } = decodeCredentials(fmxCredentials);
-      if (savedEmail) { setEmail(savedEmail); setUseSaved(true); }
+      // Saved creds are encrypted server-side; we only know the plaintext email
+      // because it's stored alongside as a display-only column.
+      if (fmxEmail) { setEmail(fmxEmail); setUseSaved(true); }
+      else setUseSaved(true);
     } else if (fmxEmail) {
       setEmail(fmxEmail);
     }
@@ -58,8 +60,17 @@ export default function FMXPushModal({
   const [connMsg, setConnMsg] = useState('');
   const [connLoading, setConnLoading] = useState(false);
 
-  const effectiveEmail = useSaved && fmxCredentials ? decodeCredentials(fmxCredentials).email : email;
-  const effectivePassword = useSaved && fmxCredentials ? decodeCredentials(fmxCredentials).password : password;
+  // Only meaningful for the plaintext-entry path. When useSaved is true the
+  // backend resolves everything from projectId — these locals are unused.
+  const effectiveEmail = email;
+  const effectivePassword = password;
+
+  // Creds object handed to every fmxFetch / helper call. projectId mode uses
+  // the stored encrypted credentials server-side; otherwise the user-entered
+  // plaintext is passed for the verify-before-save flow.
+  const makeCreds = () => (useSaved && fmxCredentials && projectId)
+    ? { projectId }
+    : { siteUrl: siteUrl.trim(), email: email.trim(), password };
 
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
@@ -73,13 +84,13 @@ export default function FMXPushModal({
   const [skipInvalid, setSkipInvalid] = useState(true);
 
   const cancelledRef = useRef(false);
-  const canPush = siteUrl.trim() && effectiveEmail.trim() && (useSaved ? !!fmxCredentials : password.trim());
+  const canPush = siteUrl.trim() && (useSaved ? !!fmxCredentials : (email.trim() && password.trim()));
 
   const testConnection = async () => {
     setConnLoading(true); setConnStatus(null);
     try {
       const res = await fmxFetch({
-        siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword,
+        ...makeCreds(),
         endpoint: '/v1/session/user', method: 'GET',
       });
       if (res.ok || res.status === 200) {
@@ -104,9 +115,7 @@ export default function FMXPushModal({
     cancelledRef.current = false;
 
     (async () => {
-      const url = siteUrl.trim();
-      const em = effectiveEmail.trim();
-      const pw = effectivePassword;
+      const creds = makeCreds();
 
       // Derive dynamic field/lookup/type maps from allFields
       const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
@@ -121,7 +130,7 @@ export default function FMXPushModal({
       let idCache = {};
       try {
         const depCaches = projectId ? await getAllDependencyCaches(projectId) : [];
-        const result = await buildIdCache(mappedRows, schemaType, url, em, pw, depCaches, dynLookups);
+        const result = await buildIdCache(mappedRows, schemaType, creds, depCaches, dynLookups);
         idCache = result.idCache;
         if (result.unresolved?.length > 0) {
           console.warn('Unresolved references:', result.unresolved);
@@ -136,7 +145,7 @@ export default function FMXPushModal({
       let sysFields = systemFieldMetadata || [];
       let cfMeta = customFieldMetadata || [];
       try {
-        const freshOpts = await fetchPostOptions(url, em, pw, schemaType, fmxModules);
+        const freshOpts = await fetchPostOptions(creds, schemaType, fmxModules);
         if (freshOpts.systemFields.length > 0) sysFields = freshOpts.systemFields;
         if (freshOpts.customFields.length > 0) cfMeta = freshOpts.customFields;
       } catch {}
@@ -188,9 +197,7 @@ export default function FMXPushModal({
 
     (async () => {
       const endpoint = resolveEndpoint(schemaType, fmxModules);
-      const url = siteUrl.trim();
-      const em = effectiveEmail.trim();
-      const pw = effectivePassword;
+      const creds = makeCreds();
 
       // Derive dynamic field/lookup/type maps from allFields
       const dynFieldMap = allFields?.length ? deriveFieldMap(allFields) : null;
@@ -208,14 +215,14 @@ export default function FMXPushModal({
         // Fetch fresh post-options for field constraints (CLAUDE.md §2)
         let cfMeta = customFieldMetadata || [];
         try {
-          const freshOpts = await fetchPostOptions(url, em, pw, schemaType, fmxModules);
+          const freshOpts = await fetchPostOptions(creds, schemaType, fmxModules);
           if (freshOpts.customFields.length > 0) cfMeta = freshOpts.customFields;
         } catch {}
 
         setStatusMsg('Preparing \u2014 resolving reference IDs\u2026');
         try {
           const depCaches = projectId ? await getAllDependencyCaches(projectId) : [];
-          const result = await buildIdCache(mappedRows, schemaType, url, em, pw, depCaches, dynLookups);
+          const result = await buildIdCache(mappedRows, schemaType, creds, depCaches, dynLookups);
           idCache = result.idCache;
         } catch {}
         if (cancelledRef.current) return;
@@ -231,7 +238,7 @@ export default function FMXPushModal({
         try {
           const nameKey = payloads[0]?.tag !== undefined ? 'tag'
             : payloads[0]?.title !== undefined ? 'title' : 'name';
-          const records = await fetchAllRecords(url, em, pw, endpoint, `id,${nameKey}`);
+          const records = await fetchAllRecords(creds, endpoint, `id,${nameKey}`);
           for (const r of records) {
             const key = String(r[nameKey] || '').toLowerCase().trim();
             if (key) existingEntityMap[key] = r.id;
@@ -313,7 +320,7 @@ export default function FMXPushModal({
             httpMethod = pushMode === 'delete' ? 'DELETE' : 'PUT';
           }
 
-          const fetchOpts = { siteUrl: url, email: em, password: pw, endpoint: reqEndpoint, method: httpMethod };
+          const fetchOpts = { ...creds, endpoint: reqEndpoint, method: httpMethod };
           if (pushMode !== 'delete') fetchOpts.payload = payloads[i];
           const res = await fmxFetch(fetchOpts);
           ok = res.ok || res.status === 200 || res.status === 201 || res.status === 204;
@@ -363,7 +370,7 @@ export default function FMXPushModal({
                   }
 
                   await fmxFetch({
-                    siteUrl: url, email: em, password: pw,
+                    ...creds,
                     endpoint: `${endpoint}/${createdIds[i]}/assignments`,
                     payload: assignPayload,
                   });
@@ -424,7 +431,7 @@ export default function FMXPushModal({
             {hasSavedCreds && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: C.textDark, cursor: 'pointer' }}>
                 <input type="checkbox" checked={useSaved} onChange={e => setUseSaved(e.target.checked)} style={{ width: 14, height: 14 }} />
-                Use saved credentials ({decodeCredentials(fmxCredentials).email})
+                Use saved credentials{fmxEmail ? ` (${fmxEmail})` : ''}
               </label>
             )}
             {!useSaved && (

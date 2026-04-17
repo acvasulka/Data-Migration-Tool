@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { getProjectsByOwner, getOtherProjects, createProject, deleteProject, getProjectStatus, updateProject, getProjectImports, getImportRows, renameImport, getAllReferenceValues, getAllProfiles, getCurrentProfile, updateProjectOwner, getProjectByFmxUrl, getImportSummaryForProjects, updateProjectModules, claimProject } from '../db';
-import { encodeCredentials, testFmxConnection, fetchFmxModules } from '../fmxSync';
+import { getProjectsByOwner, getOtherProjects, createProject, deleteProject, getProjectStatus, updateProject, getProjectImports, getImportRows, renameImport, getAllReferenceValues, getAllProfiles, getCurrentProfile, updateProjectOwner, getProjectByFmxUrl, getImportSummaryForProjects, updateProjectModules, claimProject, saveProjectCredentials } from '../db';
+import { testFmxConnection, fetchFmxModules } from '../fmxSync';
 import { downloadCSV } from '../utils';
 import { IMPORT_ORDER, getImportOrder, getBaseSchemaType, getSchemaModuleSlug } from '../schemas';
 import { supabase } from '../supabase';
@@ -342,7 +342,9 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport, a
 
     // Step 2: Fetch org info
     setCreateStep('fetching');
-    const { orgName: fetchedOrgName, ...modules } = await fetchFmxModules(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
+    const { orgName: fetchedOrgName, ...modules } = await fetchFmxModules({
+      siteUrl: fmxSiteUrl, email: fmxApiEmail, password: fmxApiPassword,
+    });
 
     if (!fetchedOrgName) {
       setNeedsManualName(true);
@@ -362,16 +364,25 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport, a
       return;
     }
 
-    // Step 4: Create project
+    // Step 4: Create project row (no credentials yet — those are encrypted server-side
+    // in a follow-up call so plaintext never hits the projects row directly).
     setCreateStep('creating');
-    const encoded = encodeCredentials(fmxApiEmail, fmxApiPassword);
-    const project = await createProject(fetchedOrgName, description.trim() || null, fmxSiteUrl.trim(), encoded, true, user.id);
+    const project = await createProject(fetchedOrgName, description.trim() || null, fmxSiteUrl.trim(), user.id);
     if (!project) {
       setCreateError('Failed to create project. Please try again.');
       setCreating(false);
       setCreateStep('');
       return;
     }
+
+    // Step 4b: Encrypt + persist credentials via /api/fmx-credentials.
+    await saveProjectCredentials({
+      projectId: project.id,
+      siteUrl: fmxSiteUrl.trim(),
+      email: fmxApiEmail,
+      password: fmxApiPassword,
+      verified: true,
+    });
 
     // Step 5: Save modules
     await updateProjectModules(project.id, modules);
@@ -393,15 +404,23 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport, a
     setCreateError('');
     setCreateStep('creating');
 
-    const encoded = encodeCredentials(fmxApiEmail, fmxApiPassword);
-    const { orgName: _o, ...modules } = await fetchFmxModules(fmxSiteUrl, fmxApiEmail, fmxApiPassword);
-    const project = await createProject(manualName.trim(), description.trim() || null, fmxSiteUrl.trim(), encoded, true, user.id);
+    const { orgName: _o, ...modules } = await fetchFmxModules({
+      siteUrl: fmxSiteUrl, email: fmxApiEmail, password: fmxApiPassword,
+    });
+    const project = await createProject(manualName.trim(), description.trim() || null, fmxSiteUrl.trim(), user.id);
     if (!project) {
       setCreateError('Failed to create project.');
       setCreating(false);
       setCreateStep('');
       return;
     }
+    await saveProjectCredentials({
+      projectId: project.id,
+      siteUrl: fmxSiteUrl.trim(),
+      email: fmxApiEmail,
+      password: fmxApiPassword,
+      verified: true,
+    });
     await updateProjectModules(project.id, modules);
     await loadProjects();
     setMode('idle');
