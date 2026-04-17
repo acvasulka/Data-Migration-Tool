@@ -542,3 +542,58 @@ export async function getAllReferenceValues(projectId) {
     []
   );
 }
+
+// --- FMX PUSHES (for Undo) ---
+
+export async function savePush(projectId, {
+  schemaType, mode, siteUrl, endpointBase,
+  createdIds, snapshots, rowCount, succeeded, failed,
+}) {
+  try {
+    const { data, error } = await supabase
+      .from('project_pushes')
+      .insert({
+        project_id: projectId,
+        schema_type: schemaType,
+        mode,
+        fmx_site_url: siteUrl,
+        endpoint_base: endpointBase,
+        created_ids: createdIds ?? null,
+        update_snapshots: snapshots ?? null,
+        row_count: rowCount,
+        succeeded,
+        failed,
+      })
+      .select('id')
+      .single();
+    if (error) return null;
+    return data?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getProjectPushes(projectId) {
+  return dbQuery(
+    () => supabase.from('project_pushes')
+      .select('id, schema_type, mode, fmx_site_url, endpoint_base, row_count, succeeded, failed, pushed_at, undone_at, undo_result')
+      .eq('project_id', projectId)
+      .order('pushed_at', { ascending: false }),
+    []
+  );
+}
+
+export async function getPush(pushId) {
+  return dbQuery(
+    () => supabase.from('project_pushes').select('*').eq('id', pushId).single(),
+    null
+  );
+}
+
+export async function markPushUndone(pushId, undoResult) {
+  return dbMutate(
+    () => supabase.from('project_pushes')
+      .update({ undone_at: new Date().toISOString(), undo_result: undoResult })
+      .eq('id', pushId)
+  );
+}

@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { C } from "../theme";
 import Modal from "./Modal";
-import { resolveEndpoint, FMX_ASSIGNMENT_FIELDS } from "../fmxEndpoints";
+import { resolveEndpoint, FMX_ASSIGNMENT_FIELDS, getModeCapabilities, supportsMode } from "../fmxEndpoints";
 import { transformRowToPayload, buildIdCache, fetchAllRecords } from "../fmxTransform";
 import { deriveFieldMap, deriveLookupFields } from "../fmxFieldMetadata";
 import { decodeCredentials, fetchPostOptions } from "../fmxSync";
 import { fmxFetch } from "../apiClient";
 import { downloadCSV } from "../utils";
-import { getAllDependencyCaches } from "../db";
+import { getAllDependencyCaches, savePush, markPushUndone } from "../db";
 import { validatePayload, applyDefaults } from "../fmxValidation";
+import { executePushUndo } from "../fmxUndo";
 
 const ANIM = `
   @keyframes fmx-check-draw {
@@ -36,8 +37,20 @@ export default function FMXPushModal({
   onClose,
   onSuccess,
 }) {
-  const [phase, setPhase] = useState('setup'); // 'setup' | 'validating' | 'pushing' | 'done'
+  const [phase, setPhase] = useState('setup'); // 'setup' | 'validating' | 'pushing' | 'done' | 'undoing' | 'undone'
   const [pushMode, setPushMode] = useState('create'); // 'create' | 'update' | 'delete'
+
+  // Which push modes this schema type actually supports on the FMX API.
+  const modeCaps = getModeCapabilities(schemaType);
+  const availableModes = ['create', 'update', 'delete'].filter(m => modeCaps[m]);
+  const missingModes = ['create', 'update', 'delete'].filter(m => !modeCaps[m]);
+
+  // If the currently-selected mode isn't supported, fall back to the first available (always 'create').
+  useEffect(() => {
+    if (!supportsMode(schemaType, pushMode)) {
+      setPushMode(availableModes[0] || 'create');
+    }
+  }, [schemaType]);
   const [siteUrl, setSiteUrl] = useState('');
   const [email, setEmail] = useState('');
   const [useSaved, setUseSaved] = useState(false);
@@ -73,7 +86,22 @@ export default function FMXPushModal({
   const [skipInvalid, setSkipInvalid] = useState(true);
 
   const cancelledRef = useRef(false);
-  const canPush = siteUrl.trim() && effectiveEmail.trim() && (useSaved ? !!fmxCredentials : password.trim());
+
+  // A push is irreversible via our Undo system when:
+  //   - create mode on a type whose FMX endpoint doesn't accept DELETE
+  //   - delete mode (always)
+  // Update mode is reversible via snapshot+PUT, so no acknowledgment required.
+  const isIrreversible =
+    (pushMode === 'create' && !supportsMode(schemaType, 'delete')) ||
+    pushMode === 'delete';
+  const [ackIrreversible, setAckIrreversible] = useState(false);
+  useEffect(() => { setAckIrreversible(false); }, [pushMode, schemaType]);
+
+  const canPush =
+    siteUrl.trim() &&
+    effectiveEmail.trim() &&
+    (useSaved ? !!fmxCredentials : password.trim()) &&
+    (!isIrreversible || ackIrreversible);
 
   const testConnection = async () => {
     setConnLoading(true); setConnStatus(null);
@@ -180,6 +208,11 @@ export default function FMXPushModal({
   const idCacheRef = useRef({});
   const payloadsRef = useRef([]);
   const createdIdsRef = useRef({});
+  const snapshotsRef = useRef([]); // [{ id, body }] pre-push state for update mode
+  const endpointBaseRef = useRef(''); // e.g. /v1/equipment, with parent tokens already substituted
+  const pushIdRef = useRef(null); // row id from project_pushes after persistence
+  const [undoResult, setUndoResult] = useState(null);
+  const [undoProgress, setUndoProgress] = useState({ done: 0, total: 0 });
 
   // Push phase — sends validated payloads to FMX
   useEffect(() => {
@@ -253,6 +286,7 @@ export default function FMXPushModal({
       let failCount = 0;
       const failures = [];
       const createdIds = {};
+      const snapshots = []; // pre-push state for update-mode rows that succeed
 
       for (let i = 0; i < payloads.length; i++) {
         if (cancelledRef.current) break;
@@ -313,6 +347,17 @@ export default function FMXPushModal({
             httpMethod = pushMode === 'delete' ? 'DELETE' : 'PUT';
           }
 
+          // For update mode: GET the existing record first so we can restore it via Undo.
+          // If the GET fails, skip snapshotting for this row (undo won't be able to restore it)
+          // but still proceed with the PUT.
+          let preSnapshot = null;
+          if (pushMode === 'update') {
+            try {
+              const snapRes = await fmxFetch({ siteUrl: url, email: em, password: pw, endpoint: reqEndpoint, method: 'GET' });
+              if (snapRes.ok) preSnapshot = await snapRes.json();
+            } catch {}
+          }
+
           const fetchOpts = { siteUrl: url, email: em, password: pw, endpoint: reqEndpoint, method: httpMethod };
           if (pushMode !== 'delete') fetchOpts.payload = payloads[i];
           const res = await fmxFetch(fetchOpts);
@@ -340,6 +385,19 @@ export default function FMXPushModal({
 
         if (ok) {
           successCount++;
+
+          // Remember base endpoint (with any parent tokens resolved) for undo path construction.
+          // For create, the base is `reqEndpoint`. For update/delete it's reqEndpoint minus `/{id}`.
+          if (!endpointBaseRef.current) {
+            endpointBaseRef.current = (pushMode === 'create')
+              ? reqEndpoint
+              : reqEndpoint.replace(/\/\d+$/, '');
+          }
+
+          // For update-mode rows with a captured snapshot: record it for undo.
+          if (pushMode === 'update' && preSnapshot && preSnapshot.id != null) {
+            snapshots.push({ id: preSnapshot.id, body: preSnapshot });
+          }
 
           // Chain assignment for Work Requests after successful create
           const baseType = schemaType.split(':')[0];
@@ -387,16 +445,68 @@ export default function FMXPushModal({
       }
 
       createdIdsRef.current = createdIds;
+      snapshotsRef.current = snapshots;
       setProgress(100);
       setFailedRows(failures);
+
+      // Persist push so it can be undone later from Push History.
+      // Only persist 'create'/'update' — delete is irreversible.
+      // Skip if we have nothing to undo (no created IDs / no snapshots).
+      const canUndo = (pushMode === 'create' && Object.keys(createdIds).length > 0 && supportsMode(schemaType, 'delete'))
+                   || (pushMode === 'update' && snapshots.length > 0 && supportsMode(schemaType, 'update'));
+      if (canUndo && projectId) {
+        try {
+          const pushId = await savePush(projectId, {
+            schemaType,
+            mode: pushMode,
+            siteUrl: url,
+            endpointBase: endpointBaseRef.current || endpoint,
+            createdIds: pushMode === 'create' ? createdIds : null,
+            snapshots: pushMode === 'update' ? snapshots : null,
+            rowCount: total,
+            succeeded: successCount,
+            failed: failCount,
+          });
+          pushIdRef.current = pushId;
+        } catch (e) {
+          console.warn('Failed to persist push record:', e);
+        }
+      }
+
       setPhase('done');
+    })();
+  }, [phase]);
+
+  // Undo phase — reverses the just-completed push
+  useEffect(() => {
+    if (phase !== 'undoing') return;
+    (async () => {
+      const creds = { siteUrl: siteUrl.trim(), email: effectiveEmail.trim(), password: effectivePassword };
+      const push = {
+        mode: pushMode,
+        endpoint_base: endpointBaseRef.current || resolveEndpoint(schemaType, fmxModules),
+        created_ids: createdIdsRef.current,
+        update_snapshots: snapshotsRef.current,
+      };
+      const total = pushMode === 'create'
+        ? Object.keys(createdIdsRef.current || {}).length
+        : (snapshotsRef.current || []).length;
+      setUndoProgress({ done: 0, total });
+      const result = await executePushUndo(push, creds, ({ done }) => {
+        setUndoProgress({ done, total });
+      });
+      setUndoResult(result);
+      if (pushIdRef.current) {
+        try { await markPushUndone(pushIdRef.current, result); } catch {}
+      }
+      setPhase('undone');
     })();
   }, [phase]);
 
   const allOk = failed === 0 && phase === 'done';
 
   return (
-    <Modal width={480} onClose={(phase === 'pushing' || phase === 'validating') ? undefined : onClose}>
+    <Modal width={480} onClose={(phase === 'pushing' || phase === 'validating' || phase === 'undoing') ? undefined : onClose}>
       <style>{ANIM}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: C.navy }}>
@@ -404,8 +514,10 @@ export default function FMXPushModal({
           {phase === 'validating' && (!validationResult ? 'Validating\u2026' : 'Validation results')}
           {phase === 'pushing' && (pushMode === 'delete' ? 'Deleting from FMX\u2026' : 'Pushing to FMX\u2026')}
           {phase === 'done' && (allOk ? (pushMode === 'delete' ? 'All records deleted!' : 'All records pushed!') : (pushMode === 'delete' ? 'Delete complete' : 'Push complete'))}
+          {phase === 'undoing' && 'Undoing push\u2026'}
+          {phase === 'undone' && 'Undo complete'}
         </p>
-        {phase !== 'pushing' && phase !== 'validating' && (
+        {phase !== 'pushing' && phase !== 'validating' && phase !== 'undoing' && (
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: C.textMid, lineHeight: 1, padding: '0 4px' }}>\u00d7</button>
         )}
       </div>
@@ -451,7 +563,7 @@ export default function FMXPushModal({
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            {['create', 'update', 'delete'].map(mode => (
+            {availableModes.map(mode => (
               <button key={mode} onClick={() => setPushMode(mode)} style={{
                 flex: 1, padding: '7px 0', fontSize: 12, fontWeight: 500, borderRadius: 6, cursor: 'pointer',
                 border: `1px solid ${pushMode === mode ? (mode === 'delete' ? '#DC2626' : C.orange) : C.border}`,
@@ -463,10 +575,35 @@ export default function FMXPushModal({
             ))}
           </div>
 
-          {pushMode === 'delete' && (
-            <p style={{ margin: '8px 0 0', fontSize: 11, color: '#DC2626', fontWeight: 500 }}>
-              Records will be permanently deleted from FMX. This cannot be undone.
+          {missingModes.length > 0 && (
+            <p style={{ margin: '6px 0 0', fontSize: 11, color: C.textLight }}>
+              FMX does not support {missingModes.join(', ')} for {schemaType} via API.
             </p>
+          )}
+
+          {isIrreversible && (
+            <div style={{
+              marginTop: 10,
+              background: '#FEF2F2',
+              border: '1px solid #FECACA',
+              borderRadius: 6,
+              padding: '10px 12px',
+            }}>
+              <p style={{ margin: '0 0 8px', fontSize: 11, color: '#DC2626', fontWeight: 500, lineHeight: 1.4 }}>
+                {pushMode === 'delete'
+                  ? 'Records will be permanently deleted from FMX.'
+                  : `FMX does not support deleting ${schemaType} records via API, so this push cannot be reversed from Push History.`}
+              </p>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#7F1D1D', cursor: 'pointer', lineHeight: 1.35 }}>
+                <input
+                  type="checkbox"
+                  checked={ackIrreversible}
+                  onChange={e => setAckIrreversible(e.target.checked)}
+                  style={{ width: 14, height: 14, marginTop: 1, flexShrink: 0 }}
+                />
+                <span>I understand this action cannot easily be undone.</span>
+              </label>
+            </div>
           )}
 
           <button className="fmx-btn-primary" style={{
@@ -605,6 +742,84 @@ export default function FMXPushModal({
             </p>
           )}
 
+          {(() => {
+            const canUndoCreate = pushMode === 'create' && Object.keys(createdIdsRef.current).length > 0 && supportsMode(schemaType, 'delete');
+            const canUndoUpdate = pushMode === 'update' && snapshotsRef.current.length > 0 && supportsMode(schemaType, 'update');
+            const showUndo = canUndoCreate || canUndoUpdate;
+            if (!showUndo) {
+              return (
+                <button className="fmx-btn-primary" style={{ width: '100%', fontSize: 13, padding: '10px 0' }} onClick={onSuccess}>Done</button>
+              );
+            }
+            const countUndoable = pushMode === 'create' ? Object.keys(createdIdsRef.current).length : snapshotsRef.current.length;
+            return (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={{
+                    flex: 1, background: C.white, color: '#DC2626',
+                    border: '1px solid #DC2626', borderRadius: 6, padding: '10px 0',
+                    fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                  }}
+                  onClick={() => {
+                    const verb = pushMode === 'create' ? 'delete' : 'revert';
+                    if (confirm(`This will ${verb} ${countUndoable} record${countUndoable !== 1 ? 's' : ''} in FMX. Continue?`)) {
+                      setPhase('undoing');
+                    }
+                  }}
+                >
+                  Undo this push
+                </button>
+                <button className="fmx-btn-primary" style={{ flex: 1, fontSize: 13, padding: '10px 0' }} onClick={onSuccess}>Done</button>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* -- UNDOING -- */}
+      {phase === 'undoing' && (
+        <div>
+          <p style={{ fontSize: 13, color: C.textMid, margin: '0 0 12px' }}>
+            {pushMode === 'create' ? 'Deleting' : 'Restoring'} {undoProgress.total} record{undoProgress.total !== 1 ? 's' : ''} in FMX\u2026
+          </p>
+          <div style={{ height: 8, background: C.bgPage, borderRadius: 4, overflow: 'hidden', marginBottom: 6 }}>
+            <div style={{
+              height: '100%',
+              width: `${undoProgress.total ? Math.round((undoProgress.done / undoProgress.total) * 100) : 0}%`,
+              background: '#DC2626', borderRadius: 4, transition: 'width 0.2s ease',
+            }} />
+          </div>
+          <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>
+            {undoProgress.done} / {undoProgress.total}
+          </p>
+        </div>
+      )}
+
+      {/* -- UNDONE -- */}
+      {phase === 'undone' && undoResult && (
+        <div>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1, background: '#E6F7EF', borderRadius: 8, padding: '10px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: '#1A7F4E' }}>{undoResult.reversed}</div>
+              <div style={{ fontSize: 11, color: '#1A7F4E', fontWeight: 500, marginTop: 2 }}>Reversed</div>
+            </div>
+            <div style={{ flex: 1, background: undoResult.failed > 0 ? '#FEE2E2' : C.bgPage, borderRadius: 8, padding: '10px 0', textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: undoResult.failed > 0 ? '#DC2626' : C.textLight }}>{undoResult.failed}</div>
+              <div style={{ fontSize: 11, color: undoResult.failed > 0 ? '#DC2626' : C.textLight, fontWeight: 500, marginTop: 2 }}>Failed</div>
+            </div>
+          </div>
+          {undoResult.failures.length > 0 && (
+            <button
+              onClick={() => downloadCSV(
+                `${schemaType.replace(/\s+/g, '_')}_undo_failures.csv`,
+                ['id', 'error'],
+                undoResult.failures,
+              )}
+              style={{ display: 'block', fontSize: 12, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', marginBottom: 12, padding: 0 }}
+            >
+              Download {undoResult.failures.length} failed item{undoResult.failures.length !== 1 ? 's' : ''} as CSV
+            </button>
+          )}
           <button className="fmx-btn-primary" style={{ width: '100%', fontSize: 13, padding: '10px 0' }} onClick={onSuccess}>Done</button>
         </div>
       )}
