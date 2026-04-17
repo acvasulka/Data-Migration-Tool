@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { updateProfileRole, deleteUserViaEdgeFunction } from '../db';
+import { updateProfileRole, deleteUserViaEdgeFunction, createUserViaEdgeFunction } from '../db';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -8,6 +8,41 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
   const [busy, setBusy] = useState(null); // userId currently being operated on
   const [errorMsg, setErrorMsg] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+
+  // Add-user form
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [newFullName, setNewFullName] = useState('');
+  const [newRole, setNewRole] = useState('user');
+  const [newPassword, setNewPassword] = useState('');
+
+  const resetAddForm = () => {
+    setNewEmail('');
+    setNewFullName('');
+    setNewRole('user');
+    setNewPassword('');
+  };
+
+  const handleAddUser = async (e) => {
+    e.preventDefault();
+    setErrorMsg('');
+    setAddBusy(true);
+    const result = await createUserViaEdgeFunction({
+      email: newEmail.trim(),
+      fullName: newFullName.trim(),
+      role: newRole,
+      password: newPassword,
+    });
+    if (result?.error) {
+      setErrorMsg(result.error);
+    } else {
+      await onProfilesChanged?.();
+      resetAddForm();
+      setShowAddForm(false);
+    }
+    setAddBusy(false);
+  };
 
   // Count admins to prevent demoting the last one
   const adminCount = useMemo(
@@ -66,8 +101,79 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
             <h2 style={{ fontSize: 18, fontWeight: 700, color: NAVY, margin: 0 }}>Admin Settings</h2>
             <p style={{ fontSize: 12, color: '#9CA3AF', margin: '4px 0 0' }}>{allProfiles.length} users</p>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: '#9CA3AF', cursor: 'pointer', lineHeight: 1 }}>×</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              onClick={() => { setErrorMsg(''); setShowAddForm(v => !v); }}
+              style={{ fontSize: 12, padding: '6px 12px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+            >
+              {showAddForm ? 'Cancel' : '+ Add user'}
+            </button>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: '#9CA3AF', cursor: 'pointer', lineHeight: 1 }}>×</button>
+          </div>
         </div>
+
+        {/* Add-user form */}
+        {showAddForm && (
+          <form
+            onSubmit={handleAddUser}
+            style={{ padding: '14px 28px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}
+          >
+            <div>
+              <label style={addLabel}>Full name</label>
+              <input
+                type="text" required
+                value={newFullName}
+                onChange={e => setNewFullName(e.target.value)}
+                placeholder="Jane Smith"
+                style={addInput}
+              />
+            </div>
+            <div>
+              <label style={addLabel}>Email</label>
+              <input
+                type="email" required
+                value={newEmail}
+                onChange={e => setNewEmail(e.target.value)}
+                placeholder="jane@example.com"
+                style={addInput}
+              />
+            </div>
+            <div>
+              <label style={addLabel}>Role</label>
+              <select
+                value={newRole}
+                onChange={e => setNewRole(e.target.value)}
+                style={addInput}
+              >
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div>
+              <label style={addLabel}>Temporary password</label>
+              <input
+                type="text" required minLength={8}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Minimum 8 characters"
+                style={addInput}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+              <button
+                type="button"
+                onClick={() => { resetAddForm(); setShowAddForm(false); setErrorMsg(''); }}
+                disabled={addBusy}
+                style={{ fontSize: 12, padding: '6px 14px', borderRadius: 5, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer' }}
+              >Cancel</button>
+              <button
+                type="submit"
+                disabled={addBusy}
+                style={{ fontSize: 12, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: addBusy ? 'not-allowed' : 'pointer', opacity: addBusy ? 0.7 : 1 }}
+              >{addBusy ? 'Creating…' : 'Create user'}</button>
+            </div>
+          </form>
+        )}
 
         {/* Error */}
         {errorMsg && (
@@ -184,3 +290,10 @@ const th = {
   borderBottom: '1px solid #E5E7EB', fontSize: 12, whiteSpace: 'nowrap',
 };
 const td = { padding: '10px 16px', verticalAlign: 'middle' };
+
+const addLabel = { display: 'block', fontSize: 11, fontWeight: 500, color: '#374151', marginBottom: 3 };
+const addInput = {
+  width: '100%', padding: '6px 9px', fontSize: 13, borderRadius: 5,
+  border: '1px solid #D1D5DB', outline: 'none', boxSizing: 'border-box',
+  background: '#fff',
+};
