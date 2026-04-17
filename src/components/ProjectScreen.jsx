@@ -8,6 +8,7 @@ import UserMenu from './UserMenu';
 import ProfileEditModal from './ProfileEditModal';
 import AdminPanelModal from './AdminPanelModal';
 import ProjectSettingsView from './ProjectSettingsView';
+import PushHistoryView from './PushHistoryView';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -967,6 +968,7 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport, a
                       <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', padding: '0 24px' }}>
                         <button style={detailTabStyle('imports')} onClick={() => setDetailTab('imports')}>Imports</button>
                         <button style={detailTabStyle('dependencies')} onClick={() => setDetailTab('dependencies')}>Dependencies</button>
+                        <button style={detailTabStyle('pushes')} onClick={() => setDetailTab('pushes')}>Push History</button>
                         <button style={detailTabStyle('settings')} onClick={() => setDetailTab('settings')}>Settings</button>
                       </div>
 
@@ -1053,6 +1055,10 @@ export default function ProjectScreen({ user, onSelectProject, onResumeImport, a
                       )}
 
                       {/* SETTINGS TAB — reuses ProjectSettingsView */}
+                      {detailTab === 'pushes' && (
+                        <PushHistoryView project={expanded} />
+                      )}
+
                       {detailTab === 'settings' && (
                         <div style={{ padding: '14px 24px' }}>
                           <ProjectSettingsView

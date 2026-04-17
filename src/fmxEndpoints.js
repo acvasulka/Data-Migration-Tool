@@ -60,6 +60,41 @@ export function resolvePutOptionsEndpoint(schemaType, entityId, modules) {
   return base ? `${base}/${entityId}/put-options` : null;
 }
 
+// Per-schema-type capability map — what push modes the FMX API actually supports.
+// Source of truth: FMX OpenAPI spec. Update when the spec changes.
+// Shape: { create: boolean, update: boolean, delete: boolean }
+export const FMX_MODE_CAPABILITIES = {
+  'Building':               { create: true,  update: false, delete: false },
+  'Resource':               { create: true,  update: true,  delete: true  },
+  'User':                   { create: true,  update: true,  delete: true  },
+  'Equipment Type':         { create: true,  update: false, delete: false },
+  'Equipment':              { create: true,  update: true,  delete: true  },
+  'Inventory':              { create: true,  update: true,  delete: false },
+  'Transportation Request': { create: true,  update: true,  delete: true  },
+  'Accounting Account':     { create: true,  update: true,  delete: true  },
+  'Requisition':            { create: true,  update: false, delete: false },
+  'Utility Provider':       { create: true,  update: false, delete: false },
+  'Equipment Log':          { create: true,  update: true,  delete: false },
+  'Inventory Adjustment':   { create: true,  update: false, delete: false },
+  'Inventory Transfer':     { create: true,  update: false, delete: false },
+};
+
+// Work Request:*, Schedule Request:*, Work Task:* all support C/U/D per FMX spec.
+export function getModeCapabilities(schemaType) {
+  if (!schemaType) return { create: false, update: false, delete: false };
+  if (FMX_MODE_CAPABILITIES[schemaType]) return FMX_MODE_CAPABILITIES[schemaType];
+  if (schemaType.startsWith('Work Request:')
+   || schemaType.startsWith('Schedule Request:')
+   || schemaType.startsWith('Work Task:')) {
+    return { create: true, update: true, delete: true };
+  }
+  return { create: false, update: false, delete: false };
+}
+
+export function supportsMode(schemaType, mode) {
+  return !!getModeCapabilities(schemaType)[mode];
+}
+
 // Assignment fields for Work Requests — these are separated from the main payload
 // and posted to /v1/{module}-requests/{id}/assignments after creation.
 const FMX_ASSIGNMENT_FIELDS = {
