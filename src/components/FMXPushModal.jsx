@@ -311,10 +311,11 @@ export default function FMXPushModal({
 
         let ok = false;
         let errorMsg = '';
+        let reqEndpoint = endpoint;
+        let preSnapshot = null;
         try {
           // For nested resources (e.g. Equipment Logs, Inventory Adjustments/Transfers),
           // substitute parent ID tokens in the endpoint URL using resolved IDs from the payload.
-          let reqEndpoint = endpoint;
           const parentTokens = { '{equipmentID}': 'equipmentID', '{inventoryID}': 'inventoryID' };
           for (const [token, field] of Object.entries(parentTokens)) {
             if (reqEndpoint.includes(token)) {
@@ -350,7 +351,6 @@ export default function FMXPushModal({
           }
 
           // For update mode: GET the existing record first so we can restore it via Undo.
-          let preSnapshot = null;
           if (pushMode === 'update') {
             try {
               const snapRes = await fmxFetch({ ...creds, endpoint: reqEndpoint, method: 'GET' });
