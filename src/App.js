@@ -330,7 +330,7 @@ export default function App() {
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         // Only advance when the step's forward-guard is satisfied
-        if (wStep === 1 && csv) setWStep(2);
+        if (wStep === 1 && csv && !aiLoading) suggestAndAdvance();
         else if (wStep === 2) setWStep(3); // simplified: step 2→3 (goToValidate builds rows on click, keyboard just advances)
         else if (wStep === 3 && (!hasErrors || certified)) setWStep(4);
       } else if (e.key === 'Escape') {
@@ -362,19 +362,25 @@ export default function App() {
     }
   };
 
-  const processCSV = async (csvStr, info) => {
+  // Parse file and show spreadsheet preview — stays on step 1
+  const parseAndPreview = (csvStr, info) => {
     const parsed = parseCSV(csvStr);
     setCsv(parsed);
     setFileInfo({ ...info, rowCount: parsed.rows.length });
+  };
+
+  // Run AI/memory/heuristic mapping suggestions using current csv state, then advance to step 2
+  const suggestAndAdvance = async () => {
+    if (!csv) return;
     setAiLoading(true);
-    const suggested = suggestMapping(parsed.headers, allFields);
+    const suggested = suggestMapping(csv.headers, allFields);
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
         claudeFetch({
           max_tokens: 1000,
-          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(parsed.headers)}. FMX fields: ${JSON.stringify(allFields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(csv.headers)}. FMX fields: ${JSON.stringify(allFields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
         }).catch(() => null),
-        getMappingSuggestions(schemaType, parsed.headers),
+        getMappingSuggestions(schemaType, csv.headers),
         getSavedRulesForSchema(schemaType),
       ]);
 
@@ -424,7 +430,7 @@ export default function App() {
     const ext = file.name.split(".").pop().toLowerCase();
     const reader = new FileReader();
     if (ext === "csv") {
-      reader.onload = e => processCSV(e.target.result, { type: "CSV", sheetName: null });
+      reader.onload = e => parseAndPreview(e.target.result, { type: "CSV", sheetName: null });
       reader.readAsText(file);
     } else {
       reader.onload = async e => {
@@ -436,7 +442,7 @@ export default function App() {
           const sheetName = wb.SheetNames[0];
           const ws = wb.Sheets[sheetName];
           const csvStr = XLSX.utils.sheet_to_csv(ws);
-          await processCSV(csvStr, { type: typeLabel, sheetName });
+          parseAndPreview(csvStr, { type: typeLabel, sheetName });
         } else {
           // Multiple sheets — show picker
           setXlsxWorkbook({ wb, typeLabel });
@@ -476,11 +482,11 @@ export default function App() {
           }).join(',')
         ),
       ];
-      await processCSV(csvLines.join('\n'), { type: typeLabel, sheetName: `Merged (${wb.SheetNames.length} sheets)` });
+      parseAndPreview(csvLines.join('\n'), { type: typeLabel, sheetName: `Merged (${wb.SheetNames.length} sheets)` });
     } else {
       const ws = wb.Sheets[selection];
       const csvStr = XLSX.utils.sheet_to_csv(ws);
-      await processCSV(csvStr, { type: typeLabel, sheetName: selection });
+      parseAndPreview(csvStr, { type: typeLabel, sheetName: selection });
     }
   };
 
@@ -947,11 +953,12 @@ export default function App() {
                 >‹ Prev</button>
                 <button
                   onClick={() => {
+                    if (wStep === 1 && csv && !aiLoading) { suggestAndAdvance(); return; }
                     if (wStep === 2) goToValidate();
                     else if (wStep === 3 && canProceed) setWStep(4);
                     else if (wStep < 4 && canProceed) setWStep(wStep + 1);
                   }}
-                  disabled={wStep >= 4 || !canProceed}
+                  disabled={(wStep === 1 && (!csv || aiLoading)) || wStep >= 4 || (wStep > 1 && !canProceed)}
                   title="Next step (→)"
                   style={{
                     background: (wStep >= 4 || !canProceed) ? '#E5E7EB' : C.orange,
@@ -978,6 +985,8 @@ export default function App() {
                 fmxSyncFromCache={fmxSyncData.fromCache}
                 xlsxSheetNames={xlsxWorkbook ? xlsxWorkbook.wb.SheetNames : null}
                 onSheetSelect={handleSheetSelect}
+                csv={csv}
+                setCsv={setCsv}
               />
             )}
 
@@ -991,8 +1000,6 @@ export default function App() {
                 setMapping={setMapping}
                 transformRules={transformRules}
                 setTransformRules={setTransformRules}
-                customFields={customFields}
-                setCustomFields={setCustomFields}
                 dynamicRates={dynamicRates}
                 setDynamicRates={setDynamicRates}
                 fileInfo={fileInfo}
@@ -1056,6 +1063,11 @@ export default function App() {
             }}>
               <button className="fmx-btn-nav-back" onClick={handleBack}>← Back</button>
               <div>
+                {wStep === 1 && csv && (
+                  <button className="fmx-btn-primary" onClick={suggestAndAdvance} disabled={aiLoading}>
+                    {aiLoading ? 'Analyzing columns…' : 'Map columns →'}
+                  </button>
+                )}
                 {wStep === 2 && (
                   <button className="fmx-btn-primary" onClick={goToValidate}>Validate →</button>
                 )}

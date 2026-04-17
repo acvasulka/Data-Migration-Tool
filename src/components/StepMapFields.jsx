@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { C } from "../theme";
 import { getFieldTypeLabel, FMX_FIELD_TYPE_MAP } from "../fmxFieldTypes";
 
@@ -11,8 +11,6 @@ export default function StepMapFields({
   setMapping,
   transformRules,
   setTransformRules,
-  customFields,
-  setCustomFields,
   dynamicRates,
   setDynamicRates,
   fileInfo,
@@ -25,11 +23,25 @@ export default function StepMapFields({
   onCustomFieldTypeChange,
 }) {
   const [hideEmptyUnmapped, setHideEmptyUnmapped] = useState(false);
+  const [sourceColWidth, setSourceColWidth] = useState(null);
+
+  const startResize = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sourceColWidth || 280;
+    const onMove = ev => {
+      const w = Math.max(160, Math.min(600, startW + ev.clientX - startX));
+      setSourceColWidth(w);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [sourceColWidth]);
   const getColPreview = col =>
     !csv || !col ? [] : [...new Set(csv.rows.map(r => r[col]).filter(v => v !== undefined))].slice(0, 20);
-
-  // FMX API supports custom fields on all entity types via post-options
-  const supportsCustomFields = true;
 
   const mappedCols = new Set(Object.values(mapping).filter(Boolean));
   const unmappedHeaders = csv.headers.filter(h => !mappedCols.has(h));
@@ -74,7 +86,7 @@ export default function StepMapFields({
   };
 
   const ROW_STYLE = (hasRule, i) => ({
-    display: "grid", gridTemplateColumns: "170px 14px 1fr auto auto auto",
+    display: "grid", gridTemplateColumns: `170px 14px ${sourceColWidth ? sourceColWidth + 'px' : '1fr'} auto auto auto`,
     alignItems: "center", gap: 8, padding: "5px 10px",
     borderBottom: `1px solid ${C.border}`,
     background: hasRule ? C.navyTint : i % 2 === 0 ? C.white : C.bgPage,
@@ -107,6 +119,28 @@ export default function StepMapFields({
           </button>
         </div>
       )}
+
+      {/* Column header row with resize handle */}
+      <div style={{
+        display: "grid", gridTemplateColumns: `170px 14px ${sourceColWidth ? sourceColWidth + 'px' : '1fr'} auto auto auto`,
+        gap: 8, padding: "4px 10px", marginBottom: 8,
+        fontSize: 10, fontWeight: 600, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>
+        <span>FMX Field</span>
+        <span />
+        <span style={{ position: 'relative' }}>
+          Source Column
+          <div
+            onMouseDown={startResize}
+            style={{ position: 'absolute', right: -4, top: -2, bottom: -2, width: 8, cursor: 'col-resize', background: 'transparent', borderRadius: 2 }}
+            onMouseEnter={e => e.currentTarget.style.background = '#D1D5DB'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+          />
+        </span>
+        <span />
+        <span />
+        <span />
+      </div>
 
       {Object.entries(groupedFields)
         .filter(([group]) => group !== "Custom Fields")
@@ -162,6 +196,11 @@ export default function StepMapFields({
                           Saved rule — apply?
                         </button>
                       )}
+                      {mappedCol && !hasRule && (
+                        <div style={{ fontSize: 11, color: C.textLight, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {getColPreview(mappedCol).slice(0, 5).join(' · ') || '(empty)'}
+                        </div>
+                      )}
                     </div>
                     {badge ? (
                       <span style={{
@@ -193,65 +232,6 @@ export default function StepMapFields({
                 );
               })}
 
-              {/* Custom fields at the bottom of Core Fields */}
-              {group === "Core Fields" && supportsCustomFields && (
-                <>
-                  {customFields.map((cf, i) => (
-                    <div key={i} style={{
-                      display: "grid", gridTemplateColumns: "170px 14px 1fr auto auto auto",
-                      alignItems: "center", gap: 8, padding: "5px 10px",
-                      borderBottom: `1px solid ${C.border}`,
-                      background: C.navyTint,
-                    }}>
-                      <input
-                        className="fmx-input"
-                        value={cf.name}
-                        onChange={e => {
-                          const oldName = cf.name;
-                          const newName = e.target.value;
-                          setMapping(m => { const n = { ...m }; if (oldName) delete n[oldName]; return n; });
-                          setCustomFields(fs => fs.map((f, j) => j === i ? { ...f, name: newName } : f));
-                        }}
-                        placeholder="Custom field name"
-                        style={{ fontSize: 13, padding: "3px 8px" }}
-                      />
-                      <div style={{ textAlign: "center", color: C.textLight, fontSize: 12 }}>→</div>
-                      <select
-                        className="fmx-select"
-                        style={{ fontSize: 13 }}
-                        value={mapping[cf.name] ?? ""}
-                        onChange={e => setMapping(m => ({ ...m, [cf.name]: e.target.value || undefined }))}
-                      >
-                        <option value="">— skip —</option>
-                        {csv.headers.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                      <span />
-                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: C.textMid, whiteSpace: "nowrap", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={cf.required || false}
-                          onChange={e => setCustomFields(fs => fs.map((f, j) => j === i ? { ...f, required: e.target.checked } : f))}
-                        />
-                        Req.
-                      </label>
-                      <button
-                        onClick={() => {
-                          setMapping(m => { const n = { ...m }; delete n[cf.name]; return n; });
-                          setCustomFields(fs => fs.filter((_, j) => j !== i));
-                        }}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: C.textLight, fontSize: 16, padding: "0 4px", lineHeight: 1 }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  <div style={{ padding: "6px 10px", background: C.bgPage, borderTop: customFields.length > 0 ? "none" : undefined }}>
-                    <button className="fmx-btn-secondary" style={{ fontSize: 12, padding: "4px 12px" }} onClick={() => setCustomFields(fs => [...fs, { name: "", required: false }])}>
-                      + Add custom field
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
           </div>
         ))}
@@ -282,9 +262,16 @@ export default function StepMapFields({
                     background: i % 2 === 0 ? C.bgPage : C.white,
                   }}>
                     <span style={{ color: C.textDark, fontWeight: 500 }}>{h}</span>
-                    <span style={{ color: C.textLight, fontStyle: "italic" }}>
+                    <span style={{ color: C.textLight, fontStyle: "italic", flex: 1 }}>
                       {sample ? `e.g. "${sample}"` : "(no data)"}
                     </span>
+                    <button
+                      className="fmx-btn-xs"
+                      style={{ fontSize: 11, padding: "2px 7px" }}
+                      onClick={() => setPreview({ header: h, values: getColPreview(h) })}
+                    >
+                      View data
+                    </button>
                   </div>
                 );
               })}

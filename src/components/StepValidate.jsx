@@ -78,9 +78,21 @@ export default function StepValidate({
   const [suggestions, setSuggestions] = useState(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
+  // Remove duplicates
+  const [dedupMenuOpen, setDedupMenuOpen] = useState(false);
+  const [dedupResult, setDedupResult] = useState(null);
+
   // Dep modal
   const [depResolveHeader, setDepResolveHeader] = useState(null);
   const [showDepModal, setShowDepModal] = useState(false);
+
+  // Close dedup menu on outside click
+  useEffect(() => {
+    if (!dedupMenuOpen) return;
+    const handler = () => setDedupMenuOpen(false);
+    const id = setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    return () => { clearTimeout(id); document.removeEventListener('mousedown', handler); };
+  }, [dedupMenuOpen]);
 
   // Column visibility — persisted to localStorage per schema type
   const [hiddenCols, setHiddenCols] = useState(() => {
@@ -269,6 +281,25 @@ export default function StepValidate({
     setMappedRows(undoSnapshot);
     if (onRowsUpdated) onRowsUpdated(undoSnapshot);
     setUndoSnapshot(null);
+    setDedupResult(null);
+  };
+
+  const removeDuplicates = (columnName) => {
+    setUndoSnapshot([...mappedRows]);
+    const seen = new Set();
+    const filtered = mappedRows.filter(row => {
+      const v = row[columnName] ?? '';
+      if (seen.has(v)) return false;
+      seen.add(v);
+      return true;
+    });
+    const removedCount = mappedRows.length - filtered.length;
+    setMappedRows(filtered);
+    if (onRowsUpdated) onRowsUpdated(filtered);
+    setDedupResult({ count: removedCount });
+    setDedupMenuOpen(false);
+    setPage(0);
+    setTimeout(() => setDedupResult(null), 4000);
   };
 
   const handlePageChange = (updatedPageRows) => {
@@ -472,6 +503,41 @@ export default function StepValidate({
             </div>
           )}
         </div>
+
+        {/* Remove duplicates dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button className="fmx-btn-xs" onClick={() => setDedupMenuOpen(v => !v)}>Remove duplicates ▾</button>
+          {dedupMenuOpen && (
+            <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 0', zIndex: 100, minWidth: 220, maxHeight: 320, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)' }}>
+              <div style={{ padding: '4px 14px 8px', borderBottom: `1px solid ${C.border}`, marginBottom: 2, fontSize: 11, fontWeight: 600, color: C.navy }}>
+                Keep first row, remove duplicates by:
+              </div>
+              {mappedHeaders.filter(h => !hiddenCols.has(h)).map(h => (
+                <button
+                  key={h}
+                  onClick={() => removeDuplicates(h)}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '6px 14px', fontSize: 12, color: C.textDark,
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    fontFamily: 'system-ui, -apple-system, sans-serif',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = C.bgPage}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  {h}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Dedup result toast */}
+        {dedupResult && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: dedupResult.count > 0 ? '#1A7F4E' : C.textMid, background: dedupResult.count > 0 ? '#E6F4EE' : undefined, padding: '2px 8px', borderRadius: 6 }}>
+            {dedupResult.count > 0 ? `Removed ${dedupResult.count} duplicate row${dedupResult.count !== 1 ? 's' : ''}` : 'No duplicates found'}
+          </span>
+        )}
 
         {/* Hidden columns count */}
         {hiddenCols.size > 0 && (
