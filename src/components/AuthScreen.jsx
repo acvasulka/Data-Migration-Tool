@@ -5,18 +5,10 @@ const NAVY = '#041662';
 const ORANGE = '#CF4A12';
 
 export default function AuthScreen() {
-  const [mode, setMode] = useState('signin'); // 'signin' | 'signup' | 'forgot'
+  const [mode, setMode] = useState('signin'); // 'signin' | 'forgot'
 
-  // signin fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-
-  // signup fields
-  const [fullName, setFullName] = useState('');
-  const [signupEmail, setSignupEmail] = useState('');
-  const [signupPassword, setSignupPassword] = useState('');
-
-  // forgot fields
   const [forgotEmail, setForgotEmail] = useState('');
 
   const [error, setError] = useState('');
@@ -31,25 +23,6 @@ export default function AuthScreen() {
     setLoading(true);
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
     if (err) setError(err.message);
-    setLoading(false);
-  };
-
-  const handleSignUp = async e => {
-    e.preventDefault();
-    clearMessages();
-    setLoading(true);
-    const { error: err } = await supabase.auth.signUp({
-      email: signupEmail,
-      password: signupPassword,
-      options: { data: { full_name: fullName, email: signupEmail } },
-    });
-    if (err) {
-      setError(err.message);
-      setLoading(false);
-      return;
-    }
-    setSuccess('Check your email to confirm your account, then sign in.');
-    setMode('signin');
     setLoading(false);
   };
 
@@ -103,12 +76,11 @@ export default function AuthScreen() {
           </span>
         </div>
 
-        <div style={{ padding: '0 28px 28px' }}>
+        <div style={{ padding: '24px 28px 28px' }}>
 
-          {/* FORGOT MODE */}
           {mode === 'forgot' && (
             <form onSubmit={handleForgot}>
-              <h2 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 18, color: '#111' }}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginTop: 0, marginBottom: 18, color: '#111' }}>
                 Reset your password
               </h2>
               <div style={fieldStyle}>
@@ -136,101 +108,45 @@ export default function AuthScreen() {
             </form>
           )}
 
-          {/* SIGNIN / SIGNUP TABS */}
-          {mode !== 'forgot' && (
-            <>
-              {/* Tab bar */}
-              <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', marginBottom: 22 }}>
-                {[['signin', 'Sign in'], ['signup', 'Create account']].map(([m, label]) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => { clearMessages(); setMode(m); }}
-                    style={{
-                      flex: 1, padding: '14px 0', fontSize: 14, background: 'none', border: 'none',
-                      borderBottom: mode === m ? `2px solid ${ORANGE}` : '2px solid transparent',
-                      fontWeight: mode === m ? 700 : 400,
-                      color: mode === m ? ORANGE : '#6B7280',
-                      cursor: 'pointer', transition: 'all 0.15s',
-                      fontFamily: 'system-ui, -apple-system, sans-serif',
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+          {mode === 'signin' && (
+            <form onSubmit={handleSignIn}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginTop: 0, marginBottom: 18, color: '#111' }}>
+                Sign in
+              </h2>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Email</label>
+                <input
+                  style={inputStyle} type="email" required
+                  value={email} onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                />
               </div>
-
-              {/* SIGN IN FORM */}
-              {mode === 'signin' && (
-                <form onSubmit={handleSignIn}>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Email</label>
-                    <input
-                      style={inputStyle} type="email" required
-                      value={email} onChange={e => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                    />
-                  </div>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Password</label>
-                    <input
-                      style={inputStyle} type="password" required
-                      value={password} onChange={e => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                    />
-                  </div>
-                  {error && <p style={{ color: '#DC2626', fontSize: 13, margin: '0 0 12px' }}>{error}</p>}
-                  {success && <p style={{ color: '#16A34A', fontSize: 13, margin: '0 0 12px' }}>{success}</p>}
-                  <button type="submit" style={btnStyle} disabled={loading}>
-                    {loading ? 'Signing in…' : 'Sign in'}
-                  </button>
-                  <p style={{ textAlign: 'center', marginTop: 12, fontSize: 13 }}>
-                    <button
-                      type="button"
-                      onClick={() => { clearMessages(); setMode('forgot'); }}
-                      style={{ background: 'none', border: 'none', color: ORANGE, cursor: 'pointer', fontSize: 13, padding: 0 }}
-                    >
-                      Forgot password?
-                    </button>
-                  </p>
-                </form>
-              )}
-
-              {/* SIGN UP FORM */}
-              {mode === 'signup' && (
-                <form onSubmit={handleSignUp}>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Full name</label>
-                    <input
-                      style={inputStyle} type="text" required
-                      value={fullName} onChange={e => setFullName(e.target.value)}
-                      placeholder="Jane Smith"
-                    />
-                  </div>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Email</label>
-                    <input
-                      style={inputStyle} type="email" required
-                      value={signupEmail} onChange={e => setSignupEmail(e.target.value)}
-                      placeholder="you@example.com"
-                    />
-                  </div>
-                  <div style={fieldStyle}>
-                    <label style={labelStyle}>Password</label>
-                    <input
-                      style={inputStyle} type="password" required minLength={8}
-                      value={signupPassword} onChange={e => setSignupPassword(e.target.value)}
-                      placeholder="Minimum 8 characters"
-                    />
-                  </div>
-                  {error && <p style={{ color: '#DC2626', fontSize: 13, margin: '0 0 12px' }}>{error}</p>}
-                  {success && <p style={{ color: '#16A34A', fontSize: 13, margin: '0 0 12px' }}>{success}</p>}
-                  <button type="submit" style={btnStyle} disabled={loading}>
-                    {loading ? 'Creating account…' : 'Create account'}
-                  </button>
-                </form>
-              )}
-            </>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Password</label>
+                <input
+                  style={inputStyle} type="password" required
+                  value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+              </div>
+              {error && <p style={{ color: '#DC2626', fontSize: 13, margin: '0 0 12px' }}>{error}</p>}
+              {success && <p style={{ color: '#16A34A', fontSize: 13, margin: '0 0 12px' }}>{success}</p>}
+              <button type="submit" style={btnStyle} disabled={loading}>
+                {loading ? 'Signing in…' : 'Sign in'}
+              </button>
+              <p style={{ textAlign: 'center', marginTop: 12, fontSize: 13 }}>
+                <button
+                  type="button"
+                  onClick={() => { clearMessages(); setMode('forgot'); }}
+                  style={{ background: 'none', border: 'none', color: ORANGE, cursor: 'pointer', fontSize: 13, padding: 0 }}
+                >
+                  Forgot password?
+                </button>
+              </p>
+              <p style={{ textAlign: 'center', marginTop: 16, fontSize: 12, color: '#9CA3AF' }}>
+                Accounts are created by an administrator.
+              </p>
+            </form>
           )}
         </div>
       </div>

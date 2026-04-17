@@ -128,6 +128,26 @@ export async function deleteUserViaEdgeFunction(userId) {
   }
 }
 
+// Invoke the create-user Edge Function. Returns { success: true, userId } or { error: '...' }.
+export async function createUserViaEdgeFunction({ email, fullName, role, password }) {
+  try {
+    const { data, error } = await supabase.functions.invoke('create-user', {
+      body: { email, fullName, role, password },
+    });
+    if (error) {
+      // Edge function non-2xx responses include the JSON body on error.context
+      try {
+        const body = await error.context?.json?.();
+        if (body?.error) return { error: body.error };
+      } catch { /* fall through */ }
+      return { error: error.message || 'Failed to create user' };
+    }
+    return data || { error: 'Unknown response' };
+  } catch (e) {
+    return { error: e?.message || 'Network error' };
+  }
+}
+
 export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
   return dbQuery(
     () => supabase.from('projects').update({
