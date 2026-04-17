@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { IMPORT_ORDER } from './schemas';
+import { saveFmxCredentialsRequest, clearFmxCredentialsRequest } from './apiClient';
 
 async function dbQuery(queryFn, fallback) {
   try {
@@ -29,14 +30,14 @@ export async function getProjects() {
   );
 }
 
-export async function createProject(name, description, fmxSiteUrl, encodedCredentials, connectionVerified = false, userId = null) {
+// Credentials are NOT written here. Callers create the project row first, then
+// save credentials through saveProjectCredentials so they get encrypted server-side.
+export async function createProject(name, description, fmxSiteUrl, userId = null) {
   return dbQuery(
     () => supabase.from('projects').insert({
       name,
       description: description || null,
       fmx_site_url: fmxSiteUrl || null,
-      fmx_credentials: encodedCredentials || null,
-      fmx_connection_verified: connectionVerified,
       user_id: userId || null,
     }).select().single(),
     null
@@ -148,14 +149,26 @@ export async function createUserViaEdgeFunction({ email, fullName, role, passwor
   }
 }
 
-export async function saveProjectCredentials(projectId, encodedCredentials, connectionVerified) {
-  return dbQuery(
-    () => supabase.from('projects').update({
-      fmx_credentials: encodedCredentials,
-      fmx_connection_verified: connectionVerified,
-    }).eq('id', projectId).select().single(),
-    null
-  );
+// Routed through /api/fmx-credentials so the password is encrypted server-side
+// (AES-256-GCM) before hitting the database. The browser never writes the
+// plaintext credential directly to Supabase, and the stored value is not
+// recoverable without FMX_CRED_KEY.
+export async function saveProjectCredentials({ projectId, siteUrl, email, password, verified }) {
+  try {
+    return await saveFmxCredentialsRequest({ projectId, siteUrl, email, password, verified });
+  } catch (e) {
+    console.error('saveProjectCredentials failed:', e);
+    return null;
+  }
+}
+
+export async function clearProjectCredentials(projectId) {
+  try {
+    return await clearFmxCredentialsRequest(projectId);
+  } catch (e) {
+    console.error('clearProjectCredentials failed:', e);
+    return null;
+  }
 }
 
 export async function updateProjectModules(projectId, modules) {

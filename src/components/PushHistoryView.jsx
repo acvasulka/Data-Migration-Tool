@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { C } from "../theme";
 import Modal from "./Modal";
 import { getProjectPushes, getPush, markPushUndone } from "../db";
-import { decodeCredentials } from "../fmxSync";
 import { executePushUndo } from "../fmxUndo";
 import { downloadCSV } from "../utils";
 
@@ -18,10 +17,9 @@ export default function PushHistoryView({ project }) {
   const [pushes, setPushes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [undoTarget, setUndoTarget] = useState(null); // push row being undone
-  const [undoPhase, setUndoPhase] = useState('idle'); // 'idle' | 'need-password' | 'running' | 'done'
+  const [undoPhase, setUndoPhase] = useState('idle'); // 'idle' | 'confirm' | 'running' | 'done'
   const [undoProgress, setUndoProgress] = useState({ done: 0, total: 0 });
   const [undoResult, setUndoResult] = useState(null);
-  const [password, setPassword] = useState('');
 
   const projectId = project?.id;
 
@@ -42,14 +40,12 @@ export default function PushHistoryView({ project }) {
     }
     setUndoTarget(push);
     setUndoResult(null);
-    setUndoPhase('need-password');
-    setPassword('');
+    setUndoPhase('confirm');
   };
 
   const runUndo = async () => {
     const push = undoTarget;
     if (!push) return;
-    const saved = decodeCredentials(project.fmx_credentials);
     // Full push row with snapshots/ids (the listing query doesn't select them).
     const full = await getPush(push.id);
     if (!full) {
@@ -57,11 +53,8 @@ export default function PushHistoryView({ project }) {
       setUndoPhase('idle');
       return;
     }
-    const creds = {
-      siteUrl: full.fmx_site_url || project.fmx_site_url,
-      email: saved.email,
-      password: password || saved.password,
-    };
+    // Credentials are stored encrypted server-side — reference them by projectId.
+    const creds = { projectId: project.id };
     setUndoPhase('running');
     const total = full.mode === 'create'
       ? Object.keys(full.created_ids || {}).length
@@ -80,7 +73,6 @@ export default function PushHistoryView({ project }) {
     setUndoTarget(null);
     setUndoPhase('idle');
     setUndoResult(null);
-    setPassword('');
   };
 
   return (
@@ -141,19 +133,11 @@ export default function PushHistoryView({ project }) {
             {undoTarget.schema_type} \u2014 {undoTarget.succeeded} record{undoTarget.succeeded !== 1 ? 's' : ''} pushed on {formatDate(undoTarget.pushed_at)}
           </p>
 
-          {undoPhase === 'need-password' && (
+          {undoPhase === 'confirm' && (
             <>
-              <p style={{ fontSize: 12, color: C.textMid, margin: '0 0 8px' }}>
-                Re-enter your FMX password to confirm. This will {undoTarget.mode === 'create' ? 'delete' : 'restore'} {undoTarget.succeeded} record{undoTarget.succeeded !== 1 ? 's' : ''} in FMX.
+              <p style={{ fontSize: 12, color: C.textMid, margin: '0 0 12px' }}>
+                This will {undoTarget.mode === 'create' ? 'delete' : 'restore'} {undoTarget.succeeded} record{undoTarget.succeeded !== 1 ? 's' : ''} in FMX using the saved credentials for this project.
               </p>
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="FMX password (leave blank to use saved)"
-                className="fmx-input"
-                style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12 }}
-              />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={closeUndoModal} className="fmx-btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px 0' }}>Cancel</button>
                 <button onClick={runUndo} style={{ flex: 1, fontSize: 12, padding: '8px 0', background: '#DC2626', color: C.white, border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 500 }}>

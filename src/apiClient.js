@@ -1,12 +1,50 @@
 export const CLAUDE_MODEL = "claude-sonnet-4-20250514";
 
-export async function fmxFetch({ siteUrl, email, password, endpoint, method, payload }) {
+// fmxFetch proxies requests through /api/fmx. Two accepted shapes:
+//   1. { projectId, endpoint, ... }                         ← preferred for saved creds
+//   2. { siteUrl, email, password, endpoint, ... }          ← only verify-before-save flows
+// Plaintext credentials should only appear in shape (2), and only during
+// the initial credential setup, to keep passwords off the wire thereafter.
+export async function fmxFetch(opts) {
+  const { projectId, siteUrl, email, password, endpoint, method, payload } = opts || {};
+  const body = projectId
+    ? { projectId, endpoint, method, payload }
+    : { siteUrl, email, password, endpoint, method, payload };
   const res = await fetch('/api/fmx', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ siteUrl, email, password, endpoint, method, payload }),
+    body: JSON.stringify(body),
   });
   return res;
+}
+
+// Save/encrypt FMX credentials server-side. Plaintext password crosses the
+// browser/server boundary exactly once (here); thereafter the client refers
+// to them only by projectId.
+export async function saveFmxCredentialsRequest({ projectId, siteUrl, email, password, verified }) {
+  const res = await fetch('/api/fmx-credentials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, siteUrl, email, password, verified }),
+  });
+  if (!res.ok) {
+    let msg = 'Failed to save credentials';
+    try { const d = await res.json(); if (d?.error) msg = d.error; } catch {}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  return data.project;
+}
+
+export async function clearFmxCredentialsRequest(projectId) {
+  const res = await fetch('/api/fmx-credentials', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!res.ok) throw new Error('Failed to clear credentials');
+  const data = await res.json();
+  return data.project;
 }
 
 export async function claudeFetch({ messages, max_tokens, system }) {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { updateProject, saveProjectCredentials, updateProjectModules, updateCardSetting } from "../db";
-import { encodeCredentials, decodeCredentials, testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
+import { testFmxConnection, fetchFmxModules, normalizeModules, mergeModules } from "../fmxSync";
 import { getImportOrder, getSchemaDisplayName } from "../schemas";
 
 const NAVY = '#041662';
@@ -84,24 +84,37 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
 
   const handleSaveCred = async () => {
     setCredSaving(true);
-    const encoded = encodeCredentials(credEmail, credPassword);
     const verified = credConnStatus === 'ok';
-    const updated = await saveProjectCredentials(selectedProject.id, encoded, verified);
+    const url = selectedProject?.fmx_site_url;
+    let updated = null;
+    try {
+      updated = await saveProjectCredentials({
+        projectId: selectedProject.id,
+        siteUrl: url,
+        email: credEmail,
+        password: credPassword,
+        verified,
+      });
+    } catch (err) {
+      console.error('Save credentials failed:', err);
+    }
     if (updated && onProjectUpdated) onProjectUpdated(updated);
     setShowCredForm(false);
+    const pwForModules = credPassword;
+    const emailForModules = credEmail;
     setCredEmail(''); setCredPassword(''); setCredConnStatus(null);
     setCredSaving(false);
 
-    // Auto-detect modules immediately after a verified credential save.
-    // Read url/email/pw from the fresh DB row and local closure values
-    // (not from selectedProject which may be stale on new projects).
+    // Auto-detect modules immediately after a verified credential save. We still
+    // have the plaintext in this closure (never persisted) — prefer projectId
+    // for subsequent calls once saved.
     if (updated && verified) {
-      const url = updated.fmx_site_url;   // fresh DB row — never stale
-      const email = credEmail;             // capture before React state clears
-      const pw = credPassword;
-      if (url && email && pw) {
+      const siteUrl2 = updated.fmx_site_url;
+      if (siteUrl2) {
         try {
-          const { orgName: _org1, ...fresh } = await fetchFmxModules(url, email, pw);
+          const { orgName: _org1, ...fresh } = await fetchFmxModules({
+            siteUrl: siteUrl2, email: emailForModules, password: pwForModules,
+          });
           const existing = normalizeModules(updated.fmx_modules);
           const { merged, changed } = mergeModules(existing, fresh);
           if (changed) {
@@ -116,13 +129,15 @@ export default function ProjectSettingsView({ selectedProject, onProjectUpdated 
   };
 
   const handleAutoDetectModules = async () => {
-    const { email, password } = decodeCredentials(selectedProject?.fmx_credentials || '');
+    // Post-save we no longer have plaintext credentials in the browser. The
+    // server-side proxy fetches /v1/organization using the stored encrypted
+    // credentials; we go through fmxFetch with projectId instead of fetchFmxModules.
     const url = selectedProject?.fmx_site_url;
-    if (!url || !email) { setModulesMsg('Site URL and credentials are required.'); return; }
+    if (!url || !selectedProject?.fmx_credentials) { setModulesMsg('Site URL and credentials are required.'); return; }
     setModulesDetecting(true);
     setModulesMsg('');
     try {
-      const { orgName: _org2, ...fresh } = await fetchFmxModules(url, email, password);
+      const { orgName: _org2, ...fresh } = await fetchFmxModules({ projectId: selectedProject.id });
       const existing = normalizeModules(selectedProject?.fmx_modules);
       const { merged, changed } = mergeModules(existing, fresh);
 

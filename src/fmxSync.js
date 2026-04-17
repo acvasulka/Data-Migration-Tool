@@ -5,19 +5,15 @@ import { FMX_FIELD_TYPE_MAP } from './fmxFieldTypes';
 import { FMX_FIELD_ENRICHMENTS } from './fmxFieldMetadata';
 import { getBaseSchemaType } from './schemas';
 
-export function encodeCredentials(email, password) {
-  return btoa(`${email}:${password}`);
-}
+// Credentials are encrypted at rest on the server (AES-256-GCM). The browser
+// never handles the password after the initial save; it refers to stored creds
+// by projectId. The old btoa/atob helpers were removed because Base64 is not
+// encryption and anyone with DB read access could recover plaintext.
 
-export function decodeCredentials(encoded) {
-  try {
-    const decoded = atob(encoded);
-    const idx = decoded.indexOf(':');
-    if (idx === -1) return { email: '', password: '' };
-    return { email: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
-  } catch {
-    return { email: '', password: '' };
-  }
+// Look up the saved email for display purposes only. Returns '' if no project
+// carries an email column yet; components should fall back to an input field.
+export function getSavedFmxEmail(project) {
+  return project?.fmx_api_email || '';
 }
 
 export async function testFmxConnection(siteUrl, email, password) {
@@ -108,12 +104,14 @@ export function mergeModules(existing, fresh) {
   return { merged, changed };
 }
 
-export async function fetchPostOptions(siteUrl, email, password, schemaType, modules) {
+// `creds` is an object with either { projectId } (preferred) or
+// { siteUrl, email, password } (only for verify-before-save flows).
+export async function fetchPostOptions(creds, schemaType, modules) {
   const endpoint = resolvePostOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], systemFields: [] };
 
   try {
-    const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
+    const res = await fmxFetch({ ...creds, endpoint, method: 'GET' });
     if (!res.ok) return { customFields: [], systemFields: [] };
     const data = await res.json();
 
@@ -168,12 +166,12 @@ const GET_OPTS_DEP_PROPS = {
   sortKeys:        'sort-keys',
 };
 
-async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
+async function fetchGetOptions(creds, schemaType, modules) {
   const endpoint = resolveGetOptionsEndpoint(schemaType, modules);
   if (!endpoint) return { customFields: [], raw: null, depMaps: {} };
 
   try {
-    const res = await fmxFetch({ siteUrl, email, password, endpoint, method: 'GET' });
+    const res = await fmxFetch({ ...creds, endpoint, method: 'GET' });
     if (!res.ok) return { customFields: [], raw: null, depMaps: {} };
     const data = await res.json();
 
@@ -227,7 +225,9 @@ async function fetchGetOptions(siteUrl, email, password, schemaType, modules) {
 //   data.workRequestSettings    — array,  each has .moduleKey (slug) and .moduleName (label)
 //   data.scheduleRequestSettings — object, has .moduleKey and .moduleName
 //   data.workTaskSettings       — array,  each has .moduleKey and .moduleName
-export async function fetchFmxModules(siteUrl, email, password) {
+// `creds` is an object with either { projectId } (preferred; for saved projects)
+// or { siteUrl, email, password } (for the verify-before-save flow).
+export async function fetchFmxModules(creds) {
   // Defaults used only until fetchFmxModules() confirms module slugs from /v1/organization.
   // 'maintenance' is an assumption, not a spec-backed value — CLAUDE.md §4 names it as a
   // common convention but does not prescribe a Work-Task default.
@@ -238,10 +238,7 @@ export async function fetchFmxModules(siteUrl, email, password) {
     workTaskModules:       [{ slug: 'maintenance', label: 'Maintenance' }],
   };
   try {
-    const res = await fmxFetch({
-      siteUrl: siteUrl.trim(), email: email.trim(), password,
-      endpoint: '/v1/organization', method: 'GET',
-    });
+    const res = await fmxFetch({ ...creds, endpoint: '/v1/organization', method: 'GET' });
     if (!res.ok) return defaults;
     const data = await res.json();
 
@@ -363,14 +360,13 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     }
   }
 
-  const { email, password } = decodeCredentials(project.fmx_credentials);
-  const siteUrl = project.fmx_site_url;
+  const creds = { projectId };
 
   try {
     // Fetch both /post-options (system field metadata) and /get-options (custom fields + dep values) in parallel
     const [postOpts, getOpts] = await Promise.all([
-      fetchPostOptions(siteUrl, email, password, schemaType, modules),
-      fetchGetOptions(siteUrl, email, password, schemaType, modules),
+      fetchPostOptions(creds, schemaType, modules),
+      fetchGetOptions(creds, schemaType, modules),
     ]);
 
     // Build synthetic fields from GET OPTIONS sortKeys + enrichments.
@@ -457,7 +453,7 @@ export const DEPENDENCY_TYPES = [
 ];
 
 // Generic paginated fetcher — collects all pages from an FMX list endpoint.
-export async function fetchAllPages(siteUrl, email, password, endpoint, fields = 'id,name', limit = 100) {
+export async function fetchAllPages(creds, endpoint, fields = 'id,name', limit = 100) {
   const allItems = [];
   let offset = 0;
   let totalCount = null;
@@ -465,7 +461,7 @@ export async function fetchAllPages(siteUrl, email, password, endpoint, fields =
   while (true) {
     const sep = endpoint.includes('?') ? '&' : '?';
     const url = `${endpoint}${sep}offset=${offset}&limit=${limit}&fields=${encodeURIComponent(fields)}`;
-    const res = await fmxFetch({ siteUrl, email, password, endpoint: url, method: 'GET' });
+    const res = await fmxFetch({ ...creds, endpoint: url, method: 'GET' });
     if (!res.ok) throw new Error(`FMX returned ${res.status} for ${endpoint}`);
 
     const headerTotal = res.headers.get('FMX-Total-Count');
@@ -517,9 +513,8 @@ export async function fetchAllDependencies(project, onTypeProgress, depKeys = nu
     throw new Error('Missing FMX credentials');
   }
 
-  const { email, password } = decodeCredentials(project.fmx_credentials);
-  const siteUrl = project.fmx_site_url;
   const projectId = project.id;
+  const creds = { projectId };
 
   // Filter to only the requested types; if depKeys is empty array, nothing to fetch
   const depsToFetch = depKeys === null
@@ -532,7 +527,7 @@ export async function fetchAllDependencies(project, onTypeProgress, depKeys = nu
     depsToFetch.map(async dep => {
       try {
         const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
-        const { items, totalCount } = await fetchAllPages(siteUrl, email, password, dep.endpoint, fields);
+        const { items, totalCount } = await fetchAllPages(creds, dep.endpoint, fields);
 
         const cleaned = items.map(item => {
           const entry = { id: item.id, name: item[dep.nameField] };

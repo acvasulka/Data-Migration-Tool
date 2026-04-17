@@ -205,7 +205,8 @@ export function transformRowToPayload(row, schemaType, idCache = {}, customField
 
 // Fetch all records from an endpoint using paginated requests.
 // Used by update-mode to resolve existing entity IDs by name/tag.
-export async function fetchAllRecords(siteUrl, email, password, endpoint, fields) {
+// `creds` is { projectId } (preferred) or { siteUrl, email, password } (verify flows).
+export async function fetchAllRecords(creds, endpoint, fields) {
   const allItems = [];
   let offset = 0;
   const limit = 100;
@@ -214,7 +215,7 @@ export async function fetchAllRecords(siteUrl, email, password, endpoint, fields
   while (offset < totalCount) {
     const qs = `?fields=${encodeURIComponent(fields)}&offset=${offset}&limit=${limit}`;
     const res = await fmxFetch({
-      siteUrl, email, password,
+      ...creds,
       endpoint: `${endpoint}${qs}`,
       method: 'GET',
     });
@@ -288,7 +289,7 @@ function matchDepLookup(value, depLookup) {
 // If dependencyCaches is provided (from getAllDependencyCaches), uses cached name→ID mappings.
 // Unresolved values are batched by endpoint and fetched in parallel bulk requests
 // rather than issuing individual sequential API calls per value.
-export async function buildIdCache(rows, schemaType, siteUrl, email, password, dependencyCaches = [], lookupFieldsOverride = null) {
+export async function buildIdCache(rows, schemaType, creds, dependencyCaches = [], lookupFieldsOverride = null) {
   const lookups = lookupFieldsOverride || {};
   const idCache = {};
   const unresolved = [];
@@ -351,7 +352,7 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
         // Fetch all records from this endpoint with minimal fields
         const fields = `id,name,tag,email`;
         try {
-          const { items: allRecords } = await fetchAllPages(siteUrl, email, password, endpoint, fields);
+          const { items: allRecords } = await fetchAllPages(creds, endpoint, fields);
           const bulkLookup = buildDepLookup(allRecords, nameField);
           // Also build a secondary lookup by 'name' if nameField is 'tag' (or vice versa)
           // to catch matches on either field
@@ -373,7 +374,7 @@ export async function buildIdCache(rows, schemaType, siteUrl, email, password, d
           for (const { cacheKey, value } of items) {
             try {
               const res = await fmxFetch({
-                siteUrl, email, password,
+                ...creds,
                 endpoint: `${endpoint}?search=${encodeURIComponent(value)}&limit=1&fields=id,name,tag`,
                 method: 'GET',
               });
