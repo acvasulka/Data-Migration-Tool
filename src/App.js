@@ -874,13 +874,13 @@ export default function App() {
         )}
 
         {/* Dependencies tab */}
-        {mainTab === 'dependencies' && (
-          <DependenciesView
-            projectId={selectedProject?.id}
-            refreshKey={checklistRefreshKey}
-          />
-        )}
-
+{mainTab === 'dependencies' && (
+  <DependenciesView
+    projectId={selectedProject?.id}
+    project={selectedProject}
+    refreshKey={checklistRefreshKey}
+  />
+)}
         {/* Settings tab */}
         {mainTab === 'settings' && (
           <ProjectSettingsView
