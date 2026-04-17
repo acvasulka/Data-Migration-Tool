@@ -50,7 +50,7 @@ export default function FMXPushModal({
     if (!supportsMode(schemaType, pushMode)) {
       setPushMode(availableModes[0] || 'create');
     }
-  }, [schemaType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [schemaType]);
   const [siteUrl, setSiteUrl] = useState('');
   const [email, setEmail] = useState('');
   const [useSaved, setUseSaved] = useState(false);
@@ -501,7 +501,7 @@ export default function FMXPushModal({
       }
       setPhase('undone');
     })();
-  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   const allOk = failed === 0 && phase === 'done';
 

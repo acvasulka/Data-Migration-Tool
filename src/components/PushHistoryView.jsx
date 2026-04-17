@@ -33,7 +33,7 @@ export default function PushHistoryView({ project }) {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [projectId]);
 
   const startUndo = async (push) => {
     if (!project?.fmx_credentials) {
