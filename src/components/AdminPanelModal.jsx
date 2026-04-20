@@ -1,5 +1,8 @@
 import { useState, useMemo } from 'react';
 import { updateProfileRole, deleteUserViaEdgeFunction, createUserViaEdgeFunction } from '../db';
+import PromptsAdminTab from './PromptsAdminTab';
+import CorrectionsAdminTab from './CorrectionsAdminTab';
+import RunsAdminTab from './RunsAdminTab';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -8,6 +11,7 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
   const [busy, setBusy] = useState(null); // userId currently being operated on
   const [errorMsg, setErrorMsg] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [activeTab, setActiveTab] = useState('users'); // 'users' | 'prompts'
 
   // Add-user form
   const [showAddForm, setShowAddForm] = useState(false);
@@ -99,19 +103,63 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
         <div style={{ padding: '20px 28px 12px', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: NAVY, margin: 0 }}>Admin Settings</h2>
-            <p style={{ fontSize: 12, color: '#9CA3AF', margin: '4px 0 0' }}>{allProfiles.length} users</p>
+            <p style={{ fontSize: 12, color: '#9CA3AF', margin: '4px 0 0' }}>
+              {activeTab === 'users'
+                ? `${allProfiles.length} users`
+                : activeTab === 'prompts' ? 'Admin-editable prompts (PDF extraction + CSV field mapping)'
+                : activeTab === 'corrections' ? 'User corrections across PDF + CSV flows'
+                : activeTab === 'runs' ? 'Every prompt invocation, logged'
+                : ''}
+            </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button
-              onClick={() => { setErrorMsg(''); setShowAddForm(v => !v); }}
-              style={{ fontSize: 12, padding: '6px 12px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 500 }}
-            >
-              {showAddForm ? 'Cancel' : '+ Add user'}
-            </button>
+            {activeTab === 'users' && (
+              <button
+                onClick={() => { setErrorMsg(''); setShowAddForm(v => !v); }}
+                style={{ fontSize: 12, padding: '6px 12px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 500 }}
+              >
+                {showAddForm ? 'Cancel' : '+ Add user'}
+              </button>
+            )}
             <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: '#9CA3AF', cursor: 'pointer', lineHeight: 1 }}>×</button>
           </div>
         </div>
 
+        {/* Tab bar */}
+        <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', background: '#F9FAFB' }}>
+          {[
+            { id: 'users', label: 'Users' },
+            { id: 'prompts', label: 'Prompts' },
+            { id: 'corrections', label: 'Corrections' },
+            { id: 'runs', label: 'Runs' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => { setActiveTab(tab.id); setErrorMsg(''); }}
+              style={{
+                fontSize: 12, padding: '10px 20px',
+                background: 'none', border: 'none',
+                borderBottom: activeTab === tab.id ? `2px solid ${NAVY}` : '2px solid transparent',
+                color: activeTab === tab.id ? NAVY : '#6B7280',
+                fontWeight: activeTab === tab.id ? 600 : 500,
+                cursor: 'pointer',
+                marginBottom: -1,
+              }}
+            >{tab.label}</button>
+          ))}
+        </div>
+
+        {activeTab === 'prompts' && (
+          <PromptsAdminTab currentUserId={currentUser.id} />
+        )}
+        {activeTab === 'corrections' && (
+          <CorrectionsAdminTab currentUserId={currentUser.id} />
+        )}
+        {activeTab === 'runs' && (
+          <RunsAdminTab allProfiles={allProfiles} currentUserId={currentUser.id} />
+        )}
+
+        {activeTab === 'users' && (<>
         {/* Add-user form */}
         {showAddForm && (
           <form
@@ -272,6 +320,8 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
             </tbody>
           </table>
         </div>
+
+        </>)}
 
         {/* Footer */}
         <div style={{ padding: '12px 28px', borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'flex-end' }}>

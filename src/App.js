@@ -4,7 +4,8 @@ import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects, getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, recordCorrections, incrementExampleUsage } from "./db";
+import { buildSystemPrompt, extractUsage } from "./promptTemplates";
 import UserMenu from "./components/UserMenu";
 import ProfileEditModal from "./components/ProfileEditModal";
 import AdminPanelModal from "./components/AdminPanelModal";
@@ -12,6 +13,7 @@ import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import { claudeFetch, parseClaudeText } from "./apiClient";
+import { extractPdfToSheet } from "./pdfExtract";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -144,6 +146,15 @@ export default function App() {
   const [certified, setCertified] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [pdfExtracting, setPdfExtracting] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState(null);
+  // Tags the current csv as coming from a PDF extraction so downstream edits
+  // can be captured as `corrections` for the learning loop.
+  const [pdfSource, setPdfSource] = useState(null); // { runId, migrationType } | null
+  // Tracks the admin-prompt run id for the CSV field-mapping call so mapping
+  // edits in step 2 can be captured as `mapping_change` corrections against
+  // that run (mirrors pdfSource, but for the field_mapping stage).
+  const [mappingRun, setMappingRun] = useState(null); // { runId, migrationType, initialMapping } | null
   const [preview, setPreview] = useState(null);
   const [transformModal, setTransformModal] = useState(null); // { field, savedRule } | null
   const [memoryMatches, setMemoryMatches] = useState({});
@@ -374,11 +385,59 @@ export default function App() {
     if (!csv) return;
     setAiLoading(true);
     const suggested = suggestMapping(csv.headers, allFields);
+    // Route the mapping call through the admin-editable prompt system so admins
+    // can tune it and we capture token usage + corrections alongside PDF runs.
+    const baseType = getBaseSchemaType(schemaType);
+    const fmxFieldNames = allFields.map(f => f.name);
+    const mappingStart = Date.now();
+    let mappingPromptRow = null;
+    let mappingExamples = [];
+    let mappingRunId = null;
+    try {
+      mappingPromptRow = await getActivePrompt(baseType, 'field_mapping');
+      if (mappingPromptRow?.id) {
+        mappingExamples = await getEnabledExamplesForPrompt(mappingPromptRow.id);
+        const runRow = await createExtractionRun({
+          projectId: selectedProject?.id,
+          userId: user?.id,
+          migrationType: baseType,
+          stage: 'field_mapping',
+          sourceFilename: fileInfo?.name || null,
+          pageCount: null,
+          promptId: mappingPromptRow.id,
+          promptVersion: mappingPromptRow.version,
+        });
+        mappingRunId = runRow?.id || null;
+      }
+    } catch { /* non-fatal — fall back to legacy inline prompt */ }
+
+    // Build the system prompt. If no admin prompt exists (fresh DB, migration
+    // 12 not yet run), fall back to the previous inline wording so mapping
+    // still works — same output contract either way.
+    const systemPrompt = mappingPromptRow?.body
+      ? buildSystemPrompt({
+          body: mappingPromptRow.body,
+          vars: {
+            MIGRATION_TYPE: baseType,
+            CSV_HEADERS: csv.headers,
+            FMX_FIELDS: fmxFieldNames,
+            SUGGESTED: suggested,
+          },
+          examples: mappingExamples,
+        })
+      : `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(csv.headers)}. FMX fields: ${JSON.stringify(fmxFieldNames)}. Already matched: ${JSON.stringify(suggested)}.`;
+
     try {
       const [aiRes, memMatches, rules] = await Promise.all([
         claudeFetch({
           max_tokens: 1000,
-          messages: [{ role: "user", content: `FMX data migration. Suggest best CSV→FMX column mapping. Return ONLY valid JSON object, keys=FMX field names, values=CSV column names or null. CSV headers: ${JSON.stringify(csv.headers)}. FMX fields: ${JSON.stringify(allFields.map(f => f.name))}. Already matched: ${JSON.stringify(suggested)}.` }]
+          system: mappingPromptRow?.body ? systemPrompt : undefined,
+          messages: [{
+            role: "user",
+            content: mappingPromptRow?.body
+              ? `CSV headers: ${JSON.stringify(csv.headers)}\nFMX fields: ${JSON.stringify(fmxFieldNames)}\nHeuristic pre-matches: ${JSON.stringify(suggested)}\n\nReturn ONLY the JSON mapping object.`
+              : systemPrompt
+          }]
         }).catch(() => null),
         getMappingSuggestions(schemaType, csv.headers),
         getSavedRulesForSchema(schemaType),
@@ -420,14 +479,169 @@ export default function App() {
       setMappingSources(sources);
       setSavedRules(rules);
       setMapping(finalMapping);
-    } catch { setMapping(suggested); }
+
+      // Snapshot the AI-suggested mapping so later user edits in step 2 can
+      // be diffed into `mapping_change` corrections.
+      setMappingRun(mappingRunId
+        ? { runId: mappingRunId, migrationType: baseType, initialMapping: { ...finalMapping } }
+        : null
+      );
+
+      // Close out the extraction_run audit row with token usage.
+      if (mappingRunId) {
+        const usage = extractUsage(aiRes);
+        completeExtractionRun(mappingRunId, {
+          status: 'complete',
+          resultJson: { mapping: finalMapping, fmxFieldCount: fmxFieldNames.length, csvHeaderCount: csv.headers.length },
+          durationMs: Date.now() - mappingStart,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          estimatedCostUsd: usage.costUsd,
+        });
+        if (mappingExamples?.length) incrementExampleUsage(mappingExamples.map(e => e.id));
+      }
+    } catch (err) {
+      setMapping(suggested);
+      if (mappingRunId) {
+        completeExtractionRun(mappingRunId, {
+          status: 'error',
+          error: err?.message || String(err),
+          durationMs: Date.now() - mappingStart,
+        });
+      }
+    }
     setAiLoading(false);
     setWStep(2);
+  };
+
+  // Diffs two mapped-row arrays into per-cell `validate_edit` correction entries.
+  // Keeps things reasonable by capping at 100 entries per change (bulk edits
+  // shouldn't flood the corrections table).
+  const diffRowsToCorrections = (prevRows, nextRows) => {
+    const out = [];
+    const len = Math.max(prevRows?.length || 0, nextRows?.length || 0);
+    for (let i = 0; i < len && out.length < 100; i++) {
+      const a = prevRows?.[i] || {};
+      const b = nextRows?.[i] || {};
+      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+      for (const k of keys) {
+        const av = a[k] ?? '';
+        const bv = b[k] ?? '';
+        if (String(av) !== String(bv)) {
+          out.push({
+            correctionType: 'validate_edit',
+            fieldPath: k,
+            rowIndex: i,
+            originalValue: String(av),
+            correctedValue: String(bv),
+          });
+          if (out.length >= 100) break;
+        }
+      }
+    }
+    return out;
+  };
+
+  // Wrapped setter for StepValidate. Fires a batch `recordCorrections` call
+  // whenever the user's edits actually change cell values. Attaches to either
+  // the PDF extraction run (preferred) or the CSV field_mapping run.
+  const handleValidateRowsChange = (updater) => {
+    setMappedRows(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      const runId = pdfSource?.runId || mappingRun?.runId;
+      const migrationType = pdfSource?.migrationType || mappingRun?.migrationType;
+      if (runId) {
+        try {
+          const entries = diffRowsToCorrections(prev, next);
+          if (entries.length) {
+            recordCorrections({
+              extractionRunId: runId,
+              migrationType,
+              userId: user?.id,
+              entries,
+            });
+          }
+        } catch { /* non-fatal */ }
+      }
+      return next;
+    });
+  };
+
+  // Wraps setMapping so that user-initiated mapping edits in Step 2 get
+  // captured as `mapping_change` corrections linked to the field_mapping run.
+  // StepMapFields' dropdown `onChange` calls setMapping(m => ({ ...m, [fmx]: val })),
+  // so we support both functional and object updates.
+  const handleMappingChange = (updater) => {
+    setMapping(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      // Only capture when we have a live mapping run to attach to.
+      if (mappingRun?.runId) {
+        try {
+          const entries = [];
+          const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+          for (const k of keys) {
+            const before = prev?.[k] ?? null;
+            const after = next?.[k] ?? null;
+            if (before !== after) {
+              entries.push({
+                correctionType: 'mapping_change',
+                fieldPath: k,
+                rowIndex: null,
+                originalValue: before,
+                correctedValue: after,
+              });
+            }
+          }
+          if (entries.length) {
+            recordCorrections({
+              extractionRunId: mappingRun.runId,
+              migrationType: mappingRun.migrationType,
+              userId: user?.id,
+              entries,
+            });
+          }
+        } catch { /* non-fatal */ }
+      }
+      return next;
+    });
   };
 
   const handleFileAndMap = file => {
     if (!file) return;
     const ext = file.name.split(".").pop().toLowerCase();
+
+    // Any non-PDF replacement invalidates the correction-capture context.
+    if (ext !== "pdf") setPdfSource(null);
+
+    if (ext === "pdf") {
+      // PDF → Claude vision → {headers, rows}. Uses the admin-editable prompt
+      // stored in the `prompts` table for this migration type. The resulting
+      // table plugs into the existing mapping/validation/transform flow.
+      setPdfExtracting(true);
+      setPdfProgress({ label: "Starting…" });
+      extractPdfToSheet(file, schemaType, {
+        projectId: selectedProject?.id,
+        userId: user?.id,
+        onProgress: (label, progress) => setPdfProgress({ label, ...progress }),
+      }).then(({ headers, rows, pageCount, runId }) => {
+        setCsv({ headers, rows });
+        setPdfSource({ runId, migrationType: schemaType });
+        setFileInfo({
+          type: "PDF (OCR)",
+          sheetName: null,
+          rowCount: rows.length,
+          pageCount,
+        });
+      }).catch(err => {
+        console.error("PDF extraction failed:", err);
+        alert(`PDF extraction failed: ${err.message || err}`);
+      }).finally(() => {
+        setPdfExtracting(false);
+        setPdfProgress(null);
+      });
+      return;
+    }
+
     const reader = new FileReader();
     if (ext === "csv") {
       reader.onload = e => parseAndPreview(e.target.result, { type: "CSV", sheetName: null });
@@ -580,6 +794,7 @@ export default function App() {
     setTransformRules({}); setCustomFields([]); setDynamicRates([]);
     setMappedRows([]); setCertified(false);
     setMemoryMatches({}); setMappingSources({}); setSavedRules({});
+    setMappingRun(null); setPdfSource(null);
 
     setFmxSyncData({ customFields: [], loading: false, fromCache: undefined });
     setMainTab('overview');
@@ -987,6 +1202,10 @@ export default function App() {
                 onSheetSelect={handleSheetSelect}
                 csv={csv}
                 setCsv={setCsv}
+                pdfExtracting={pdfExtracting}
+                pdfProgress={pdfProgress}
+                pdfSource={pdfSource}
+                currentUserId={user?.id}
               />
             )}
 
@@ -997,7 +1216,7 @@ export default function App() {
                 allFields={allFields}
                 groupedFields={groupedFields}
                 mapping={mapping}
-                setMapping={setMapping}
+                setMapping={handleMappingChange}
                 transformRules={transformRules}
                 setTransformRules={setTransformRules}
                 dynamicRates={dynamicRates}
@@ -1017,14 +1236,14 @@ export default function App() {
               <StepValidate
                 mappedHeaders={mappedHeaders}
                 mappedRows={mappedRows}
-                setMappedRows={setMappedRows}
+                setMappedRows={handleValidateRowsChange}
                 cellErrors={cellErrors}
                 allFields={allFields}
                 hasErrors={hasErrors}
                 certified={certified}
                 setCertified={setCertified}
                 applyNLEdit={applyNLEdit}
-                onRowsUpdated={(rows) => setMappedRows(rows)}
+                onRowsUpdated={(rows) => handleValidateRowsChange(rows)}
                 projectId={selectedProject?.id}
                 schemaType={schemaType}
                 depCacheMap={depCacheMap}

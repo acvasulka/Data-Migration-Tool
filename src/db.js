@@ -610,3 +610,330 @@ export async function markPushUndone(pushId, undoResult) {
       .eq('id', pushId)
   );
 }
+
+// --- PROMPTS (PDF extraction) ---
+
+export async function getActivePrompt(migrationType, stage = 'extraction') {
+  return dbQuery(
+    () => supabase.from('prompts')
+      .select('id, migration_type, stage, version, body, active, notes')
+      .eq('migration_type', migrationType)
+      .eq('stage', stage)
+      .eq('active', true)
+      .limit(1)
+      .maybeSingle(),
+    null
+  );
+}
+
+export async function getAllPrompts() {
+  return dbQuery(
+    () => supabase.from('prompts')
+      .select('id, migration_type, stage, version, body, active, notes, created_at, created_by')
+      .order('migration_type')
+      .order('stage')
+      .order('version', { ascending: false }),
+    []
+  );
+}
+
+// Adds a new version for (migration_type, stage); if makeActive, flips off any prior active row
+// in the same (migration_type, stage) so the single-active uniqueness constraint is preserved.
+export async function createPromptVersion({ migrationType, stage = 'extraction', body, notes, makeActive = true, createdBy = null }) {
+  try {
+    const { data: existing } = await supabase.from('prompts')
+      .select('version')
+      .eq('migration_type', migrationType)
+      .eq('stage', stage)
+      .order('version', { ascending: false })
+      .limit(1);
+    const nextVersion = (existing?.[0]?.version || 0) + 1;
+
+    if (makeActive) {
+      await supabase.from('prompts')
+        .update({ active: false })
+        .eq('migration_type', migrationType)
+        .eq('stage', stage)
+        .eq('active', true);
+    }
+
+    const { data, error } = await supabase.from('prompts')
+      .insert({
+        migration_type: migrationType,
+        stage,
+        version: nextVersion,
+        body,
+        notes: notes || null,
+        active: makeActive,
+        created_by: createdBy,
+      })
+      .select()
+      .single();
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function activatePromptVersion(promptId) {
+  try {
+    const { data: target } = await supabase.from('prompts')
+      .select('migration_type, stage')
+      .eq('id', promptId)
+      .single();
+    if (!target) return false;
+    await supabase.from('prompts')
+      .update({ active: false })
+      .eq('migration_type', target.migration_type)
+      .eq('stage', target.stage)
+      .eq('active', true);
+    const { error } = await supabase.from('prompts')
+      .update({ active: true })
+      .eq('id', promptId);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+// --- EXTRACTION RUNS ---
+
+export async function createExtractionRun({ projectId, userId, migrationType, stage = 'extraction', storageKey, sourceFilename, pageCount, promptId, promptVersion }) {
+  return dbQuery(
+    () => supabase.from('extraction_runs').insert({
+      project_id: projectId || null,
+      user_id: userId || null,
+      migration_type: migrationType,
+      stage,
+      storage_key: storageKey || null,
+      source_filename: sourceFilename || null,
+      page_count: pageCount || null,
+      prompt_id: promptId || null,
+      prompt_version: promptVersion || null,
+      status: 'running',
+    }).select().single(),
+    null
+  );
+}
+
+export async function completeExtractionRun(runId, { status, resultJson, error, durationMs, inputTokens, outputTokens, estimatedCostUsd }) {
+  return dbMutate(
+    () => supabase.from('extraction_runs').update({
+      status,
+      result_json: resultJson || null,
+      error: error || null,
+      duration_ms: durationMs || null,
+      input_tokens: inputTokens ?? null,
+      output_tokens: outputTokens ?? null,
+      estimated_cost_usd: estimatedCostUsd ?? null,
+    }).eq('id', runId)
+  );
+}
+
+export async function getExtractionRuns(projectId) {
+  return dbQuery(
+    () => supabase.from('extraction_runs')
+      .select('id, migration_type, source_filename, page_count, prompt_version, status, error, duration_ms, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(50),
+    []
+  );
+}
+
+export async function getExtractionRun(runId) {
+  return dbQuery(
+    () => supabase.from('extraction_runs')
+      .select('id, project_id, user_id, migration_type, stage, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
+      .eq('id', runId)
+      .single(),
+    null
+  );
+}
+
+export async function getPromptById(promptId) {
+  return dbQuery(
+    () => supabase.from('prompts')
+      .select('id, migration_type, stage, version, body, active, notes, created_at')
+      .eq('id', promptId)
+      .single(),
+    null
+  );
+}
+
+export async function getCorrectionsForRun(runId) {
+  return dbQuery(
+    () => supabase.from('corrections')
+      .select('id, correction_type, field_path, row_index, original_value, corrected_value, reviewed, promoted_example_id, created_at')
+      .eq('extraction_run_id', runId)
+      .order('created_at', { ascending: true }),
+    []
+  );
+}
+
+// Returns a short-lived signed URL for downloading the original PDF from
+// Storage, or null if the run has no storage_key / the fetch fails.
+export async function getPdfSignedUrl(storageKey, expiresInSeconds = 300) {
+  if (!storageKey) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from('pdf-uploads')
+      .createSignedUrl(storageKey, expiresInSeconds);
+    if (error) return null;
+    return data?.signedUrl || null;
+  } catch {
+    return null;
+  }
+}
+
+// Downloads a PDF from Storage as a File object — used by the re-run flow.
+export async function downloadPdfFromStorage(storageKey, filename = 'run.pdf') {
+  if (!storageKey) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from('pdf-uploads')
+      .download(storageKey);
+    if (error || !data) return null;
+    return new File([data], filename, { type: 'application/pdf' });
+  } catch {
+    return null;
+  }
+}
+
+export async function getAllExtractionRuns({ limit = 100 } = {}) {
+  return dbQuery(
+    () => supabase.from('extraction_runs')
+      .select('id, project_id, user_id, migration_type, stage, source_filename, page_count, prompt_id, prompt_version, status, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit),
+    []
+  );
+}
+
+// --- CORRECTIONS (PDF extraction learning loop) ---
+
+// Writes a batch of corrections in a single round-trip. Caller passes an array
+// of { correctionType, fieldPath, rowIndex, originalValue, correctedValue }.
+export async function recordCorrections({ extractionRunId, migrationType, userId, entries }) {
+  if (!entries?.length) return true;
+  const rows = entries.map(e => ({
+    extraction_run_id: extractionRunId || null,
+    migration_type: migrationType,
+    correction_type: e.correctionType,
+    field_path: e.fieldPath,
+    row_index: e.rowIndex ?? null,
+    original_value: e.originalValue ?? null,
+    corrected_value: e.correctedValue ?? null,
+    user_id: userId || null,
+  }));
+  return dbMutate(() => supabase.from('corrections').insert(rows));
+}
+
+export async function getCorrections({ migrationType, reviewed, limit = 500 } = {}) {
+  try {
+    let q = supabase.from('corrections')
+      .select('id, extraction_run_id, migration_type, correction_type, field_path, row_index, original_value, corrected_value, reviewed, promoted_example_id, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (migrationType) q = q.eq('migration_type', migrationType);
+    if (reviewed !== undefined) q = q.eq('reviewed', reviewed);
+    const { data, error } = await q;
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function markCorrectionsReviewed(ids) {
+  if (!ids?.length) return true;
+  return dbMutate(
+    () => supabase.from('corrections').update({ reviewed: true }).in('id', ids)
+  );
+}
+
+// --- PROMPT EXAMPLES (few-shot) ---
+
+export async function getExamplesForPrompt(promptId) {
+  return dbQuery(
+    () => supabase.from('prompt_examples')
+      .select('id, prompt_id, example_json, label, enabled, use_count, last_used_at, promoted_from_correction_id, created_at')
+      .eq('prompt_id', promptId)
+      .order('created_at', { ascending: false }),
+    []
+  );
+}
+
+export async function getEnabledExamplesForPrompt(promptId) {
+  return dbQuery(
+    () => supabase.from('prompt_examples')
+      .select('id, example_json, label')
+      .eq('prompt_id', promptId)
+      .eq('enabled', true)
+      .order('created_at', { ascending: true }),
+    []
+  );
+}
+
+// Promote a correction → prompt_example. Links both directions:
+//   corrections.promoted_example_id ↔ prompt_examples.promoted_from_correction_id
+export async function promoteCorrectionToExample({ correctionId, promptId, exampleJson, label, createdBy }) {
+  try {
+    const { data: example, error } = await supabase.from('prompt_examples')
+      .insert({
+        prompt_id: promptId,
+        example_json: exampleJson,
+        label: label || null,
+        enabled: true,
+        promoted_from_correction_id: correctionId || null,
+        created_by: createdBy || null,
+      })
+      .select()
+      .single();
+    if (error) return null;
+    if (correctionId) {
+      await supabase.from('corrections')
+        .update({ promoted_example_id: example.id, reviewed: true })
+        .eq('id', correctionId);
+    }
+    return example;
+  } catch {
+    return null;
+  }
+}
+
+export async function setExampleEnabled(exampleId, enabled) {
+  return dbMutate(
+    () => supabase.from('prompt_examples').update({ enabled }).eq('id', exampleId)
+  );
+}
+
+export async function deleteExample(exampleId) {
+  return dbMutate(
+    () => supabase.from('prompt_examples').delete().eq('id', exampleId)
+  );
+}
+
+// Fire-and-forget: bumps use counters after an extraction injects examples.
+// Called from the client because Supabase doesn't do RPC increments natively
+// via the JS SDK without a stored function; small race windows are fine.
+export async function incrementExampleUsage(exampleIds) {
+  if (!exampleIds?.length) return true;
+  try {
+    const { data } = await supabase.from('prompt_examples')
+      .select('id, use_count')
+      .in('id', exampleIds);
+    if (!data) return false;
+    const now = new Date().toISOString();
+    await Promise.all(
+      data.map(row => supabase.from('prompt_examples')
+        .update({ use_count: (row.use_count || 0) + 1, last_used_at: now })
+        .eq('id', row.id)
+      )
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
