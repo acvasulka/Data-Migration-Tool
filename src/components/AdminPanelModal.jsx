@@ -151,7 +151,7 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
           <CorrectionsAdminTab currentUserId={currentUser.id} />
         )}
         {activeTab === 'runs' && (
-          <RunsAdminTab allProfiles={allProfiles} />
+          <RunsAdminTab allProfiles={allProfiles} currentUserId={currentUser.id} />
         )}
 
         {activeTab === 'users' && (<>

@@ -7,6 +7,7 @@ import {
   setExampleEnabled,
   deleteExample,
 } from '../db';
+import PromptDiffModal from './PromptDiffModal';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -26,6 +27,7 @@ export default function PromptsAdminTab({ currentUserId }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [customType, setCustomType] = useState('');
   const [examples, setExamples] = useState([]);
+  const [diffVersion, setDiffVersion] = useState(null); // prompt row to compare against active
 
   const load = async () => {
     setLoading(true);
@@ -300,6 +302,13 @@ export default function PromptsAdminTab({ currentUserId }) {
                         onClick={() => { setEditingBody(v.body); setEditingNotes(''); }}
                         style={{ fontSize: 11, padding: '3px 8px', marginRight: 4, borderRadius: 4, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer' }}
                       >Load</button>
+                      {!v.active && activeVersion && (
+                        <button
+                          onClick={() => setDiffVersion(v)}
+                          style={{ fontSize: 11, padding: '3px 8px', marginRight: 4, borderRadius: 4, background: '#fff', border: '1px solid #D1D5DB', cursor: 'pointer' }}
+                          title={`Compare v${v.version} against active v${activeVersion.version}`}
+                        >Diff</button>
+                      )}
                       {!v.active && (
                         <button
                           onClick={() => handleActivate(v.id)}
@@ -315,6 +324,16 @@ export default function PromptsAdminTab({ currentUserId }) {
           </div>
         )}
       </div>
+
+      {diffVersion && activeVersion && (
+        <PromptDiffModal
+          leftLabel={`v${diffVersion.version} (historical)`}
+          leftBody={diffVersion.body}
+          rightLabel={`v${activeVersion.version} (active)`}
+          rightBody={activeVersion.body}
+          onClose={() => setDiffVersion(null)}
+        />
+      )}
     </div>
   );
 }

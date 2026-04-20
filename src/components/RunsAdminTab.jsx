@@ -1,16 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getAllExtractionRuns } from '../db';
+import RunDetailModal from './RunDetailModal';
 
 const NAVY = '#041662';
 const BORDER = '#E5E7EB';
 
 // Read-only audit log of PDF extraction runs. Shows which prompt version was
 // used, whether it succeeded, how long it took, and basic scale (pages).
-export default function RunsAdminTab({ allProfiles }) {
+export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [selectedRunId, setSelectedRunId] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -91,7 +93,14 @@ export default function RunsAdminTab({ allProfiles }) {
             </thead>
             <tbody>
               {filtered.map(r => (
-                <tr key={r.id} style={{ borderBottom: `1px solid #F3F4F6` }}>
+                <tr
+                  key={r.id}
+                  onClick={() => setSelectedRunId(r.id)}
+                  style={{ borderBottom: `1px solid #F3F4F6`, cursor: 'pointer' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#F9FAFB'}
+                  onMouseLeave={e => e.currentTarget.style.background = ''}
+                  title="Click to view run detail"
+                >
                   <td style={{ ...td, whiteSpace: 'nowrap', color: '#6B7280' }}>
                     {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}
                   </td>
@@ -124,6 +133,14 @@ export default function RunsAdminTab({ allProfiles }) {
           </table>
         )}
       </div>
+
+      {selectedRunId && (
+        <RunDetailModal
+          runId={selectedRunId}
+          currentUserId={currentUserId}
+          onClose={() => setSelectedRunId(null)}
+        />
+      )}
     </div>
   );
 }

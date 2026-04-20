@@ -738,6 +738,65 @@ export async function getExtractionRuns(projectId) {
   );
 }
 
+export async function getExtractionRun(runId) {
+  return dbQuery(
+    () => supabase.from('extraction_runs')
+      .select('id, project_id, user_id, migration_type, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, created_at')
+      .eq('id', runId)
+      .single(),
+    null
+  );
+}
+
+export async function getPromptById(promptId) {
+  return dbQuery(
+    () => supabase.from('prompts')
+      .select('id, migration_type, stage, version, body, active, notes, created_at')
+      .eq('id', promptId)
+      .single(),
+    null
+  );
+}
+
+export async function getCorrectionsForRun(runId) {
+  return dbQuery(
+    () => supabase.from('corrections')
+      .select('id, correction_type, field_path, row_index, original_value, corrected_value, reviewed, promoted_example_id, created_at')
+      .eq('extraction_run_id', runId)
+      .order('created_at', { ascending: true }),
+    []
+  );
+}
+
+// Returns a short-lived signed URL for downloading the original PDF from
+// Storage, or null if the run has no storage_key / the fetch fails.
+export async function getPdfSignedUrl(storageKey, expiresInSeconds = 300) {
+  if (!storageKey) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from('pdf-uploads')
+      .createSignedUrl(storageKey, expiresInSeconds);
+    if (error) return null;
+    return data?.signedUrl || null;
+  } catch {
+    return null;
+  }
+}
+
+// Downloads a PDF from Storage as a File object — used by the re-run flow.
+export async function downloadPdfFromStorage(storageKey, filename = 'run.pdf') {
+  if (!storageKey) return null;
+  try {
+    const { data, error } = await supabase.storage
+      .from('pdf-uploads')
+      .download(storageKey);
+    if (error || !data) return null;
+    return new File([data], filename, { type: 'application/pdf' });
+  } catch {
+    return null;
+  }
+}
+
 export async function getAllExtractionRuns({ limit = 100 } = {}) {
   return dbQuery(
     () => supabase.from('extraction_runs')
