@@ -5,8 +5,10 @@ import RunDetailModal from './RunDetailModal';
 const NAVY = '#041662';
 const BORDER = '#E5E7EB';
 
-// Read-only audit log of PDF extraction runs. Shows which prompt version was
-// used, whether it succeeded, how long it took, and basic scale (pages).
+// Read-only audit log of every admin-prompt invocation — both PDF extractions
+// (stage='extraction') and CSV field-mapping calls (stage='field_mapping').
+// Shows which prompt version was used, whether it succeeded, how long it took,
+// token spend, and basic scale (pages / headers).
 export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,8 +50,9 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   return (
     <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
-        Every PDF extraction records which prompt version was used, the page count,
-        timing, and outcome — full audit trail for debugging and accountability.
+        Every admin-prompt invocation (PDF extractions <em>and</em> CSV field-mapping calls) logs
+        the prompt version used, timing, token usage, estimated cost, and outcome — full audit trail
+        across both upload paths.
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

@@ -104,7 +104,12 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: NAVY, margin: 0 }}>Admin Settings</h2>
             <p style={{ fontSize: 12, color: '#9CA3AF', margin: '4px 0 0' }}>
-              {activeTab === 'users' ? `${allProfiles.length} users` : 'PDF extraction prompts'}
+              {activeTab === 'users'
+                ? `${allProfiles.length} users`
+                : activeTab === 'prompts' ? 'Admin-editable prompts (PDF extraction + CSV field mapping)'
+                : activeTab === 'corrections' ? 'User corrections across PDF + CSV flows'
+                : activeTab === 'runs' ? 'Every prompt invocation, logged'
+                : ''}
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -124,9 +129,9 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
         <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', background: '#F9FAFB' }}>
           {[
             { id: 'users', label: 'Users' },
-            { id: 'prompts', label: 'PDF Prompts' },
+            { id: 'prompts', label: 'Prompts' },
             { id: 'corrections', label: 'Corrections' },
-            { id: 'runs', label: 'Extraction Runs' },
+            { id: 'runs', label: 'Runs' },
           ].map(tab => (
             <button
               key={tab.id}

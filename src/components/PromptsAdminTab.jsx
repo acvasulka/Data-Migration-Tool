@@ -13,9 +13,17 @@ const NAVY = '#041662';
 const ORANGE = '#CF4A12';
 const BORDER = '#E5E7EB';
 
-// Migration types that are candidates for PDF extraction. Admins can still
-// create prompts for other types by typing a free-form type below.
-const SUGGESTED_TYPES = ['Building', 'Resource', 'Equipment', 'Inventory', 'User'];
+// Every import type supported by the app. Mirrors IMPORT_ORDER in src/schemas.js
+// so the dropdown lists all static + active data types, not just the top five.
+// Admins can still type a free-form custom type below if an FMX customer needs
+// a non-standard migration.
+const SUGGESTED_TYPES = [
+  'Building', 'Resource', 'User', 'Equipment Type', 'Equipment', 'Inventory',
+  'Work Request', 'Schedule Request', 'Work Task',
+  'Transportation Request', 'Accounting Account',
+  'Requisition', 'Utility Provider', 'Equipment Log',
+  'Inventory Adjustment', 'Inventory Transfer',
+];
 
 export default function PromptsAdminTab({ currentUserId }) {
   const [prompts, setPrompts] = useState([]);

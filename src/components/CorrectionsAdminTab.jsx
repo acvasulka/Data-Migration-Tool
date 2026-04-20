@@ -10,13 +10,21 @@ const NAVY = '#041662';
 const ORANGE = '#CF4A12';
 const BORDER = '#E5E7EB';
 
-// Shows unreviewed user corrections to PDF-extracted data, grouped by the
-// (migration_type, original → corrected) pattern so admins can spot recurring
-// Claude mistakes and promote one-click fixes into few-shot examples.
+// Shows unreviewed user corrections captured from both PDF extraction and CSV
+// field-mapping flows, grouped by the (migration_type, original → corrected)
+// pattern so admins can spot recurring Claude mistakes and promote one-click
+// fixes into few-shot examples.
+//
+// Correction types captured:
+//   • header_rename   — user renamed a PDF-extracted column header
+//   • cell_edit       — user edited a PDF-extracted cell value in Step 3
+//   • mapping_change  — user overrode the AI's CSV→FMX column mapping
+//   • validate_edit   — user edited a mapped cell in Step 3 (any source)
 export default function CorrectionsAdminTab({ currentUserId }) {
   const [corrections, setCorrections] = useState([]);
   const [prompts, setPrompts] = useState([]);
   const [filterType, setFilterType] = useState('');
+  const [filterKind, setFilterKind] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -38,6 +46,7 @@ export default function CorrectionsAdminTab({ currentUserId }) {
     const map = new Map();
     for (const c of corrections) {
       if (filterType && c.migration_type !== filterType) continue;
+      if (filterKind && c.correction_type !== filterKind) continue;
       const key = [
         c.migration_type, c.correction_type,
         (c.original_value || '').trim().toLowerCase(),
@@ -63,7 +72,7 @@ export default function CorrectionsAdminTab({ currentUserId }) {
       if (c.created_at > pat.latest) pat.latest = c.created_at;
     }
     return Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }, [corrections, filterType]);
+  }, [corrections, filterType, filterKind]);
 
   const allTypes = useMemo(() => {
     return Array.from(new Set(corrections.map(c => c.migration_type))).sort();
@@ -127,12 +136,12 @@ export default function CorrectionsAdminTab({ currentUserId }) {
   return (
     <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
-        Unreviewed user edits to PDF-extracted data, grouped by pattern. Promote repeated
-        patterns into few-shot examples so Claude applies the fix on future extractions.
+        Unreviewed user edits across <strong>PDF extraction</strong> (header renames, cell edits) and <strong>CSV imports</strong> (mapping overrides, validate-step edits), grouped by pattern. Promote repeated
+        patterns into few-shot examples so Claude applies the fix on future runs.
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <label style={{ fontSize: 12, color: '#374151' }}>Filter type:</label>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 12, color: '#374151' }}>Type:</label>
         <select
           value={filterType}
           onChange={e => setFilterType(e.target.value)}
@@ -140,6 +149,18 @@ export default function CorrectionsAdminTab({ currentUserId }) {
         >
           <option value="">All</option>
           {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <label style={{ fontSize: 12, color: '#374151' }}>Kind:</label>
+        <select
+          value={filterKind}
+          onChange={e => setFilterKind(e.target.value)}
+          style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB` }}
+        >
+          <option value="">All</option>
+          <option value="header_rename">Header rename (PDF)</option>
+          <option value="cell_edit">Cell edit (PDF)</option>
+          <option value="mapping_change">Mapping change (CSV)</option>
+          <option value="validate_edit">Validate edit</option>
         </select>
         <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
           {loading ? 'Loading…' : `${patterns.length} pattern${patterns.length === 1 ? '' : 's'}, ${corrections.length} total`}
@@ -155,7 +176,7 @@ export default function CorrectionsAdminTab({ currentUserId }) {
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: 1, minHeight: 0 }}>
         {patterns.length === 0 && !loading ? (
           <div style={{ padding: 24, fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', textAlign: 'center' }}>
-            No unreviewed corrections. Users haven't edited PDF-extracted data recently.
+            No unreviewed corrections match these filters.
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
