@@ -71,6 +71,7 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
         pageCount: result.pageCount,
         rowCount: result.rows.length,
         headers: result.headers,
+        rows: result.rows,
       });
     } catch (err) {
       setRerunResult({ ok: false, error: err?.message || String(err) });
@@ -106,9 +107,12 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
           <div style={{ padding: '16px 24px', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Meta grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', rowGap: 6, columnGap: 12, fontSize: 12 }}>
+              <Meta label="Stage" value={(run.stage || 'extraction') === 'field_mapping' ? 'CSV field mapping' : 'PDF extraction'} />
               <Meta label="Migration type" value={<strong>{run.migration_type}</strong>} />
               <Meta label="File" value={run.source_filename || '—'} />
-              <Meta label="Pages" value={run.page_count ?? '—'} />
+              {(run.stage || 'extraction') === 'extraction' && (
+                <Meta label="Pages" value={run.page_count ?? '—'} />
+              )}
               <Meta label="Prompt version" value={`v${run.prompt_version ?? '?'} ${prompt?.active ? '(still active)' : '(historical)'}`} />
               <Meta label="Status" value={
                 <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: statusBg(run.status), color: statusFg(run.status) }}>
@@ -116,11 +120,18 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
                 </span>
               } />
               <Meta label="Duration" value={run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'} />
+              <Meta label="Tokens" value={
+                run.input_tokens != null
+                  ? `${run.input_tokens.toLocaleString()} in / ${(run.output_tokens || 0).toLocaleString()} out`
+                  : '—'
+              } />
+              <Meta label="Est. cost" value={run.estimated_cost_usd != null ? `$${Number(run.estimated_cost_usd).toFixed(4)}` : '—'} />
               <Meta label="Created" value={run.created_at ? new Date(run.created_at).toLocaleString() : '—'} />
               {run.error && <Meta label="Error" value={<span style={{ color: '#B91C1C' }}>{run.error}</span>} />}
             </div>
 
-            {/* Actions */}
+            {/* Actions — PDF runs only; field_mapping runs have no PDF to download/re-run. */}
+            {(run.stage || 'extraction') === 'extraction' && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 onClick={handleDownloadPdf}
@@ -134,6 +145,7 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
                 style={btnPrimary(rerunBusy || !run.storage_key)}
               >{rerunBusy ? 'Re-running…' : '↻ Re-run with current active prompt'}</button>
             </div>
+            )}
 
             {rerunProgress && (
               <div style={{ padding: 10, border: `1px solid ${BORDER}`, borderRadius: 6, background: '#F9FAFB', fontSize: 12 }}>
@@ -144,26 +156,20 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
               </div>
             )}
 
-            {rerunResult && (
+            {rerunResult && !rerunResult.ok && (
               <div style={{
                 padding: 12, borderRadius: 6, fontSize: 12,
-                border: `1px solid ${rerunResult.ok ? '#BBF7D0' : '#FECACA'}`,
-                background: rerunResult.ok ? '#F0FDF4' : '#FEF2F2',
-                color: rerunResult.ok ? '#166534' : '#B91C1C',
+                border: `1px solid #FECACA`, background: '#FEF2F2', color: '#B91C1C',
               }}>
-                {rerunResult.ok ? (
-                  <>
-                    <strong>Re-run complete.</strong> {rerunResult.rowCount} rows from {rerunResult.pageCount} pages.
-                    {' '}New run id: <code style={{ fontSize: 11 }}>{rerunResult.runId}</code>.
-                    {' '}Compare headers below with the original run's headers.
-                    <div style={{ marginTop: 6, fontFamily: 'ui-monospace, Menlo, monospace', color: '#374151' }}>
-                      {rerunResult.headers.join(' · ')}
-                    </div>
-                  </>
-                ) : (
-                  <><strong>Re-run failed:</strong> {rerunResult.error}</>
-                )}
+                <strong>Re-run failed:</strong> {rerunResult.error}
               </div>
+            )}
+            {rerunResult?.ok && (
+              <RerunCompare
+                originalHeaders={resultRows?.headers || []}
+                originalRowCount={resultRows?.rowCount ?? 0}
+                rerun={rerunResult}
+              />
             )}
 
             {/* Corrections on this run */}
@@ -186,7 +192,12 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
                     <tbody>
                       {corrections.map(c => (
                         <tr key={c.id} style={{ borderBottom: `1px solid #F3F4F6` }}>
-                          <td style={td}>{c.correction_type === 'header_rename' ? 'HEADER' : 'CELL'}</td>
+                          <td style={td}>{
+                            c.correction_type === 'header_rename' ? 'HEADER'
+                            : c.correction_type === 'mapping_change' ? 'MAPPING'
+                            : c.correction_type === 'validate_edit' ? 'VALIDATE'
+                            : 'CELL'
+                          }</td>
                           <td style={td}>{c.field_path}</td>
                           <td style={td}>{c.row_index ?? '—'}</td>
                           <td style={{ ...td, color: '#B91C1C', fontFamily: 'ui-monospace, Menlo, monospace' }}>{c.original_value ?? '∅'}</td>
@@ -235,6 +246,68 @@ export default function RunDetailModal({ runId, currentUserId, onClose }) {
             style={{ fontSize: 13, padding: '7px 18px', borderRadius: 6, background: ORANGE, color: '#fff', border: 'none', cursor: 'pointer' }}
           >Close</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Side-by-side comparison of the original run vs a just-finished re-run.
+// Since we only store result headers + row counts on the original run (not full
+// rows), the reconciliation is header-set diff + row-count delta. Still enough
+// for admins to see if a promoted example actually changed the output shape.
+function RerunCompare({ originalHeaders, originalRowCount, rerun }) {
+  const rerunHeaders = rerun.headers || [];
+  const origSet = new Set(originalHeaders);
+  const rerunSet = new Set(rerunHeaders);
+  const added = rerunHeaders.filter(h => !origSet.has(h));
+  const removed = originalHeaders.filter(h => !rerunSet.has(h));
+  const shared = rerunHeaders.filter(h => origSet.has(h));
+  const rowDelta = (rerun.rowCount ?? 0) - (originalRowCount ?? 0);
+  const unchanged = added.length === 0 && removed.length === 0 && rowDelta === 0;
+
+  return (
+    <div style={{
+      padding: 12, borderRadius: 6, fontSize: 12,
+      border: `1px solid #BBF7D0`, background: '#F0FDF4', color: '#166534',
+    }}>
+      <strong>Re-run complete.</strong> {rerun.rowCount} rows from {rerun.pageCount} pages.
+      {' '}New run id: <code style={{ fontSize: 11 }}>{rerun.runId}</code>.
+      <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, color: '#374151' }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+            Original ({originalRowCount} rows)
+          </div>
+          <div style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11, lineHeight: 1.5 }}>
+            {originalHeaders.length
+              ? originalHeaders.map(h => (
+                  <div key={h} style={{ color: rerunSet.has(h) ? '#374151' : '#B91C1C', textDecoration: rerunSet.has(h) ? 'none' : 'line-through' }}>
+                    {h}
+                  </div>
+                ))
+              : <span style={{ color: '#9CA3AF' }}>(no headers)</span>}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+            Re-run ({rerun.rowCount} rows)
+          </div>
+          <div style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11, lineHeight: 1.5 }}>
+            {rerunHeaders.map(h => (
+              <div key={h} style={{ color: origSet.has(h) ? '#374151' : '#166534', fontWeight: origSet.has(h) ? 400 : 600 }}>
+                {origSet.has(h) ? h : `+ ${h}`}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: '#374151', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+        <span>Shared: <strong>{shared.length}</strong></span>
+        <span style={{ color: '#166534' }}>Added: <strong>{added.length}</strong></span>
+        <span style={{ color: '#B91C1C' }}>Removed: <strong>{removed.length}</strong></span>
+        <span style={{ color: rowDelta === 0 ? '#6B7280' : rowDelta > 0 ? '#166534' : '#B91C1C' }}>
+          Row delta: <strong>{rowDelta > 0 ? `+${rowDelta}` : rowDelta}</strong>
+        </span>
+        {unchanged && <span style={{ color: '#6B7280', fontStyle: 'italic' }}>(output shape unchanged — prompt produced the same headers & row count)</span>}
       </div>
     </div>
   );

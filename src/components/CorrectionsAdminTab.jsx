@@ -70,23 +70,31 @@ export default function CorrectionsAdminTab({ currentUserId }) {
   }, [corrections]);
 
   const handlePromote = async (pattern) => {
-    // Find the active prompt for this migration_type / stage=extraction.
+    // Promote to the prompt stage that matches the correction origin:
+    //   header_rename / cell_edit / validate_edit → extraction prompt (PDF)
+    //   mapping_change                            → field_mapping prompt (CSV)
+    const targetStage = pattern.correction_type === 'mapping_change' ? 'field_mapping' : 'extraction';
     const activePrompt = prompts.find(
-      p => p.migration_type === pattern.migration_type && p.stage === 'extraction' && p.active
+      p => p.migration_type === pattern.migration_type && p.stage === targetStage && p.active
     );
     if (!activePrompt) {
       alert(
-        `No active prompt for "${pattern.migration_type}". Create one on the PDF Prompts tab first.`
+        `No active ${targetStage} prompt for "${pattern.migration_type}". Create one on the Prompts tab first.`
       );
       return;
     }
     setBusy(true);
-    const hint = pattern.correction_type === 'header_rename'
-      ? `When you see the label "${pattern.original_value}", it should map to "${pattern.corrected_value}".`
-      : `For the "${pattern.field_path}" column, values like "${pattern.original_value}" should be normalized to "${pattern.corrected_value}".`;
+    let hint;
+    if (pattern.correction_type === 'header_rename') {
+      hint = `When you see the label "${pattern.original_value}", it should map to "${pattern.corrected_value}".`;
+    } else if (pattern.correction_type === 'mapping_change') {
+      hint = `For FMX field "${pattern.field_path}", prefer the CSV column "${pattern.corrected_value}" over "${pattern.original_value || 'nothing'}".`;
+    } else {
+      hint = `For the "${pattern.field_path}" column, values like "${pattern.original_value}" should be normalized to "${pattern.corrected_value}".`;
+    }
     const label = pattern.correction_type === 'header_rename'
       ? `${pattern.original_value} → ${pattern.corrected_value}`
-      : `${pattern.field_path}: ${pattern.original_value} → ${pattern.corrected_value}`;
+      : `${pattern.field_path}: ${pattern.original_value || '∅'} → ${pattern.corrected_value || '∅'}`;
     // Promote the first correction in the pattern (the rest get auto-reviewed below).
     const result = await promoteCorrectionToExample({
       correctionId: pattern.ids[0],
@@ -136,6 +144,12 @@ export default function CorrectionsAdminTab({ currentUserId }) {
         <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
           {loading ? 'Loading…' : `${patterns.length} pattern${patterns.length === 1 ? '' : 's'}, ${corrections.length} total`}
         </span>
+        <button
+          onClick={() => exportCorrectionsCsv(corrections)}
+          disabled={loading || corrections.length === 0}
+          style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, background: '#fff', border: '1px solid #D1D5DB', cursor: corrections.length ? 'pointer' : 'not-allowed' }}
+          title="Download all visible corrections as CSV"
+        >Export CSV</button>
       </div>
 
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: 1, minHeight: 0 }}>
@@ -161,11 +175,28 @@ export default function CorrectionsAdminTab({ currentUserId }) {
                 <tr key={pat.key} style={{ borderBottom: `1px solid #F3F4F6` }}>
                   <td style={td}><strong>{pat.migration_type}</strong></td>
                   <td style={td}>
-                    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: pat.correction_type === 'header_rename' ? '#EEF0F8' : '#FEF3C7', color: pat.correction_type === 'header_rename' ? NAVY : '#92400E' }}>
-                      {pat.correction_type === 'header_rename' ? 'HEADER' : 'CELL'}
-                    </span>
+                    {(() => {
+                      const k = pat.correction_type;
+                      const label = k === 'header_rename' ? 'HEADER'
+                        : k === 'mapping_change' ? 'MAPPING'
+                        : k === 'validate_edit' ? 'VALIDATE'
+                        : 'CELL';
+                      const bg = k === 'header_rename' ? '#EEF0F8'
+                        : k === 'mapping_change' ? '#E0F2FE'
+                        : k === 'validate_edit' ? '#F0FDF4'
+                        : '#FEF3C7';
+                      const fg = k === 'header_rename' ? NAVY
+                        : k === 'mapping_change' ? '#0369A1'
+                        : k === 'validate_edit' ? '#166534'
+                        : '#92400E';
+                      return (
+                        <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: bg, color: fg }}>
+                          {label}
+                        </span>
+                      );
+                    })()}
                   </td>
-                  <td style={{ ...td, color: '#6B7280' }}>{pat.correction_type === 'cell_edit' ? pat.field_path : '—'}</td>
+                  <td style={{ ...td, color: '#6B7280' }}>{pat.correction_type === 'header_rename' ? '—' : (pat.field_path || '—')}</td>
                   <td style={{ ...td, fontFamily: 'ui-monospace, Menlo, monospace', color: '#B91C1C', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pat.original_value}>
                     {pat.original_value || '∅'}
                   </td>
@@ -193,6 +224,27 @@ export default function CorrectionsAdminTab({ currentUserId }) {
       </div>
     </div>
   );
+}
+
+// Exports corrections as CSV so admins can review patterns offline or in Sheets.
+function exportCorrectionsCsv(rows) {
+  const cols = ['id', 'migration_type', 'correction_type', 'field_path', 'row_index', 'original_value', 'corrected_value', 'reviewed', 'promoted_example_id', 'created_at'];
+  const esc = v => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.join(',')];
+  for (const r of rows) lines.push(cols.map(c => esc(r[c])).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `corrections-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 const th = {

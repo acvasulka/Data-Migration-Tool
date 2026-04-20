@@ -12,6 +12,7 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterStage, setFilterStage] = useState('');
   const [selectedRunId, setSelectedRunId] = useState(null);
 
   useEffect(() => {
@@ -32,9 +33,15 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const filtered = useMemo(() => {
     return runs.filter(r =>
       (!filterType || r.migration_type === filterType) &&
-      (!filterStatus || r.status === filterStatus)
+      (!filterStatus || r.status === filterStatus) &&
+      (!filterStage || (r.stage || 'extraction') === filterStage)
     );
-  }, [runs, filterType, filterStatus]);
+  }, [runs, filterType, filterStatus, filterStage]);
+
+  const totalCost = useMemo(
+    () => filtered.reduce((sum, r) => sum + (Number(r.estimated_cost_usd) || 0), 0),
+    [filtered]
+  );
 
   const allTypes = useMemo(() => Array.from(new Set(runs.map(r => r.migration_type))).sort(), [runs]);
 
@@ -55,6 +62,16 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
           <option value="">All</option>
           {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
+        <label style={{ fontSize: 12, color: '#374151' }}>Stage:</label>
+        <select
+          value={filterStage}
+          onChange={e => setFilterStage(e.target.value)}
+          style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB` }}
+        >
+          <option value="">All</option>
+          <option value="extraction">PDF extraction</option>
+          <option value="field_mapping">CSV field mapping</option>
+        </select>
         <label style={{ fontSize: 12, color: '#374151' }}>Status:</label>
         <select
           value={filterStatus}
@@ -68,7 +85,9 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
           <option value="pending">Pending</option>
         </select>
         <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
-          {loading ? 'Loading…' : `${filtered.length} of ${runs.length} runs`}
+          {loading
+            ? 'Loading…'
+            : `${filtered.length} of ${runs.length} runs · est. $${totalCost.toFixed(4)}`}
         </span>
       </div>
 
@@ -82,12 +101,15 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
             <thead>
               <tr style={{ background: '#F9FAFB', position: 'sticky', top: 0 }}>
                 <th style={th}>When</th>
+                <th style={th}>Stage</th>
                 <th style={th}>Type</th>
                 <th style={th}>File</th>
                 <th style={{ ...th, textAlign: 'right' }}>Pages</th>
                 <th style={{ ...th, textAlign: 'right' }}>Prompt v</th>
                 <th style={th}>Status</th>
                 <th style={{ ...th, textAlign: 'right' }}>Time</th>
+                <th style={{ ...th, textAlign: 'right' }}>Tokens</th>
+                <th style={{ ...th, textAlign: 'right' }}>Cost</th>
                 <th style={th}>User</th>
               </tr>
             </thead>
@@ -103,6 +125,15 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
                 >
                   <td style={{ ...td, whiteSpace: 'nowrap', color: '#6B7280' }}>
                     {r.created_at ? new Date(r.created_at).toLocaleString() : '—'}
+                  </td>
+                  <td style={td}>
+                    <span style={{
+                      fontSize: 10, padding: '1px 6px', borderRadius: 8,
+                      background: (r.stage || 'extraction') === 'field_mapping' ? '#E0F2FE' : '#EEF0F8',
+                      color: (r.stage || 'extraction') === 'field_mapping' ? '#0369A1' : NAVY,
+                    }}>
+                      {(r.stage || 'extraction') === 'field_mapping' ? 'MAPPING' : 'PDF'}
+                    </span>
                   </td>
                   <td style={td}><strong>{r.migration_type}</strong></td>
                   <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.source_filename}>
@@ -125,6 +156,15 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: '#6B7280' }}>
                     {r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : '—'}
+                  </td>
+                  <td style={{ ...td, textAlign: 'right', color: '#6B7280', whiteSpace: 'nowrap' }}
+                      title={r.input_tokens != null ? `in ${r.input_tokens} / out ${r.output_tokens}` : ''}>
+                    {r.input_tokens != null
+                      ? `${(r.input_tokens + (r.output_tokens || 0)).toLocaleString()}`
+                      : '—'}
+                  </td>
+                  <td style={{ ...td, textAlign: 'right', color: '#6B7280' }}>
+                    {r.estimated_cost_usd != null ? `$${Number(r.estimated_cost_usd).toFixed(4)}` : '—'}
                   </td>
                   <td style={{ ...td, color: '#6B7280' }}>{userMap[r.user_id] || '—'}</td>
                 </tr>

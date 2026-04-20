@@ -21,6 +21,9 @@ export default function PromptsAdminTab({ currentUserId }) {
   const [prompts, setPrompts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState('Building');
+  // Prompts are keyed by (migration_type, stage). 'extraction' drives PDF
+  // vision; 'field_mapping' drives the CSV column-mapping AI call.
+  const [selectedStage, setSelectedStage] = useState('extraction');
   const [editingBody, setEditingBody] = useState('');
   const [editingNotes, setEditingNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,9 +44,9 @@ export default function PromptsAdminTab({ currentUserId }) {
   // All prompts for the selected migration type, newest-version first.
   const versionsForType = useMemo(
     () => prompts
-      .filter(p => p.migration_type === selectedType && p.stage === 'extraction')
+      .filter(p => p.migration_type === selectedType && p.stage === selectedStage)
       .sort((a, b) => b.version - a.version),
-    [prompts, selectedType],
+    [prompts, selectedType, selectedStage],
   );
 
   const activeVersion = versionsForType.find(v => v.active) || versionsForType[0] || null;
@@ -57,7 +60,7 @@ export default function PromptsAdminTab({ currentUserId }) {
       setEditingBody('');
       setEditingNotes('');
     }
-  }, [selectedType, activeVersion?.id]);
+  }, [selectedType, selectedStage, activeVersion?.id]);
 
   // Load examples attached to the active prompt for the selected type.
   useEffect(() => {
@@ -94,7 +97,7 @@ export default function PromptsAdminTab({ currentUserId }) {
     setBusy(true);
     const result = await createPromptVersion({
       migrationType: selectedType,
-      stage: 'extraction',
+      stage: selectedStage,
       body: editingBody,
       notes: editingNotes || null,
       makeActive: true,
@@ -126,8 +129,29 @@ export default function PromptsAdminTab({ currentUserId }) {
   return (
     <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0, flex: 1 }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
-        These prompts drive PDF-to-spreadsheet extraction. Claude reads each page image with the <strong>active</strong> prompt
-        for the migration type. Every edit creates a new version; older versions are kept for audit and rollback.
+        {selectedStage === 'extraction' ? (
+          <>These prompts drive <strong>PDF-to-spreadsheet extraction</strong>. Claude reads each page image with the active prompt for the migration type.</>
+        ) : (
+          <>These prompts drive the <strong>CSV column-mapping</strong> AI call on the Map Fields step. Template placeholders <code>{'{{MIGRATION_TYPE}}'}</code>, <code>{'{{CSV_HEADERS}}'}</code>, <code>{'{{FMX_FIELDS}}'}</code>, <code>{'{{SUGGESTED}}'}</code> are filled in automatically.</>
+        )}
+        {' '}Every edit creates a new version; older versions are kept for audit and rollback.
+      </div>
+
+      {/* Stage selector */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <label style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Stage:</label>
+        {['extraction', 'field_mapping'].map(s => (
+          <button
+            key={s}
+            onClick={() => setSelectedStage(s)}
+            style={{
+              fontSize: 12, padding: '5px 12px', borderRadius: 5, cursor: 'pointer',
+              background: selectedStage === s ? NAVY : '#fff',
+              color: selectedStage === s ? '#fff' : '#374151',
+              border: `1px solid ${selectedStage === s ? NAVY : '#D1D5DB'}`,
+            }}
+          >{s === 'extraction' ? 'PDF extraction' : 'CSV field mapping'}</button>
+        ))}
       </div>
 
       {/* Type selector */}

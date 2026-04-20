@@ -699,12 +699,13 @@ export async function activatePromptVersion(promptId) {
 
 // --- EXTRACTION RUNS ---
 
-export async function createExtractionRun({ projectId, userId, migrationType, storageKey, sourceFilename, pageCount, promptId, promptVersion }) {
+export async function createExtractionRun({ projectId, userId, migrationType, stage = 'extraction', storageKey, sourceFilename, pageCount, promptId, promptVersion }) {
   return dbQuery(
     () => supabase.from('extraction_runs').insert({
       project_id: projectId || null,
       user_id: userId || null,
       migration_type: migrationType,
+      stage,
       storage_key: storageKey || null,
       source_filename: sourceFilename || null,
       page_count: pageCount || null,
@@ -716,13 +717,16 @@ export async function createExtractionRun({ projectId, userId, migrationType, st
   );
 }
 
-export async function completeExtractionRun(runId, { status, resultJson, error, durationMs }) {
+export async function completeExtractionRun(runId, { status, resultJson, error, durationMs, inputTokens, outputTokens, estimatedCostUsd }) {
   return dbMutate(
     () => supabase.from('extraction_runs').update({
       status,
       result_json: resultJson || null,
       error: error || null,
       duration_ms: durationMs || null,
+      input_tokens: inputTokens ?? null,
+      output_tokens: outputTokens ?? null,
+      estimated_cost_usd: estimatedCostUsd ?? null,
     }).eq('id', runId)
   );
 }
@@ -741,7 +745,7 @@ export async function getExtractionRuns(projectId) {
 export async function getExtractionRun(runId) {
   return dbQuery(
     () => supabase.from('extraction_runs')
-      .select('id, project_id, user_id, migration_type, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, created_at')
+      .select('id, project_id, user_id, migration_type, stage, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
       .eq('id', runId)
       .single(),
     null
@@ -800,7 +804,7 @@ export async function downloadPdfFromStorage(storageKey, filename = 'run.pdf') {
 export async function getAllExtractionRuns({ limit = 100 } = {}) {
   return dbQuery(
     () => supabase.from('extraction_runs')
-      .select('id, project_id, user_id, migration_type, source_filename, page_count, prompt_id, prompt_version, status, error, duration_ms, created_at')
+      .select('id, project_id, user_id, migration_type, stage, source_filename, page_count, prompt_id, prompt_version, status, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
       .order('created_at', { ascending: false })
       .limit(limit),
     []

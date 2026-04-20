@@ -23,6 +23,7 @@ import {
   getEnabledExamplesForPrompt,
   incrementExampleUsage,
 } from './db';
+import { buildSystemPrompt, sumUsage } from './promptTemplates';
 
 const PAGE_BATCH_SIZE = 3;       // pages per Claude call — balances cost vs. latency
 const RENDER_SCALE = 2.0;        // 2x DPI — readable for OCR without exploding payload size
@@ -99,30 +100,9 @@ function dataUrlToBase64(dataUrl) {
   return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
 }
 
-// Renders the enabled few-shot examples into a text block appended to the
-// system prompt. Admins curate these via the Corrections tab → "Promote to
-// example" button, so every injection is traceable back to a human decision.
-function formatExamplesForPrompt(examples) {
-  if (!examples?.length) return '';
-  const lines = ['', '---', 'Guidance from prior corrections (examples curated by an admin):'];
-  for (const ex of examples) {
-    const j = ex.example_json || {};
-    if (j.hint) {
-      lines.push(`- ${ex.label ? `[${ex.label}] ` : ''}${j.hint}`);
-    } else if (j.input || j.output) {
-      lines.push(`- ${ex.label || 'Example'}:`);
-      if (j.input) lines.push(`    Input: ${j.input}`);
-      if (j.output) lines.push(`    Output: ${JSON.stringify(j.output)}`);
-    } else {
-      lines.push(`- ${ex.label || 'Example'}: ${JSON.stringify(j)}`);
-    }
-  }
-  lines.push('Apply these when they clearly match the page. Otherwise, extract as instructed above.');
-  return lines.join('\n');
-}
-
 // Extract structured data from one batch of page images via Claude vision.
-// Returns { fields: string[], rows: object[], notes?: string } — or null on failure.
+// Returns { parsed, response } — parsed is { fields, rows, notes } or null,
+// response is the raw Claude response (used to aggregate token usage).
 async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
   const content = [
     {
@@ -145,7 +125,7 @@ async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
   });
 
   const text = parseClaudeText(res);
-  if (!text) return null;
+  if (!text) return { parsed: null, response: res };
   try {
     // Claude sometimes wraps JSON in stray prose despite instructions.
     const first = text.indexOf('{');
@@ -153,13 +133,16 @@ async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
     const jsonStr = first !== -1 && last > first ? text.slice(first, last + 1) : text;
     const parsed = JSON.parse(jsonStr);
     return {
-      fields: Array.isArray(parsed.fields) ? parsed.fields : [],
-      rows: Array.isArray(parsed.rows) ? parsed.rows : [],
-      notes: parsed.notes || null,
+      parsed: {
+        fields: Array.isArray(parsed.fields) ? parsed.fields : [],
+        rows: Array.isArray(parsed.rows) ? parsed.rows : [],
+        notes: parsed.notes || null,
+      },
+      response: res,
     };
   } catch (e) {
     console.warn('Failed to parse Claude batch JSON:', e, text.slice(0, 500));
-    return null;
+    return { parsed: null, response: res };
   }
 }
 
@@ -224,7 +207,11 @@ export async function extractPdfToSheet(file, migrationType, opts = {}) {
   // Load admin-curated few-shot examples for this prompt and splice them into
   // the system prompt. Only enabled examples are returned.
   const examples = await getEnabledExamplesForPrompt(prompt.id);
-  const systemPrompt = prompt.body + formatExamplesForPrompt(examples);
+  const systemPrompt = buildSystemPrompt({
+    body: prompt.body,
+    vars: { MIGRATION_TYPE: baseType },
+    examples,
+  });
 
   onProgress?.('Uploading PDF…');
   const storageKey = await uploadPdfToStorage(file, userId);
@@ -254,24 +241,30 @@ export async function extractPdfToSheet(file, migrationType, opts = {}) {
     }
 
     const results = [];
+    const responses = [];
     for (let bi = 0; bi < batches.length; bi++) {
       onProgress?.(`Extracting batch ${bi + 1} of ${batches.length}…`, {
         current: bi + 1, total: batches.length,
       });
-      const result = await extractBatch(systemPrompt, batches[bi], bi, batches.length);
-      results.push(result);
+      const { parsed, response } = await extractBatch(systemPrompt, batches[bi], bi, batches.length);
+      results.push(parsed);
+      responses.push(response);
     }
 
     // Bump usage counters for the injected examples (fire-and-forget).
     if (examples?.length) incrementExampleUsage(examples.map(e => e.id));
 
     const { headers, rows } = mergeBatchResults(results);
+    const usage = sumUsage(responses);
 
     if (run?.id) {
       await completeExtractionRun(run.id, {
         status: 'complete',
         resultJson: { headers, rowCount: rows.length, model: CLAUDE_MODEL },
         durationMs: Date.now() - startTs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        estimatedCostUsd: usage.costUsd,
       });
     }
 
