@@ -1,9 +1,31 @@
 import { C } from "../theme";
 import RawSpreadsheet from "./RawSpreadsheet";
+import { recordCorrections } from "../db";
 
-export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, setDragOver, fileRef, handleFileAndMap, fmxSyncLoading, fmxSyncFromCache, xlsxSheetNames, onSheetSelect, csv, setCsv }) {
+export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, setDragOver, fileRef, handleFileAndMap, fmxSyncLoading, fmxSyncFromCache, xlsxSheetNames, onSheetSelect, csv, setCsv, pdfExtracting, pdfProgress, pdfSource, currentUserId }) {
+
+  // When the csv came from a PDF extraction, every edit in this preview is
+  // strong signal that Claude got something wrong. Fire-and-forget record it
+  // so admins can later review patterns and promote fixes into few-shot examples.
+  const logCorrection = (entry) => {
+    if (!pdfSource?.runId) return;
+    recordCorrections({
+      extractionRunId: pdfSource.runId,
+      migrationType: pdfSource.migrationType,
+      userId: currentUserId,
+      entries: [entry],
+    });
+  };
 
   const handleHeaderRename = (oldName, newName) => {
+    if (pdfSource?.runId && oldName !== newName) {
+      logCorrection({
+        correctionType: 'header_rename',
+        fieldPath: oldName,
+        originalValue: oldName,
+        correctedValue: newName,
+      });
+    }
     setCsv(prev => ({
       headers: prev.headers.map(h => h === oldName ? newName : h),
       rows: prev.rows.map(row => {
@@ -16,6 +38,18 @@ export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, 
   };
 
   const handleCellEdit = (rowIdx, header, value) => {
+    if (pdfSource?.runId) {
+      const prevVal = csv?.rows?.[rowIdx]?.[header] ?? '';
+      if (String(prevVal) !== String(value)) {
+        logCorrection({
+          correctionType: 'cell_edit',
+          fieldPath: header,
+          rowIndex: rowIdx,
+          originalValue: String(prevVal),
+          correctedValue: String(value),
+        });
+      }
+    }
     setCsv(prev => ({
       ...prev,
       rows: prev.rows.map((row, i) => i === rowIdx ? { ...row, [header]: value } : row),
@@ -44,13 +78,13 @@ export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, 
               transition: "all 0.15s ease",
             }}
           >
-            <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: C.navy }}>Drag & drop a spreadsheet here</p>
-            <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>Supports CSV, Excel (.xlsx, .xls), and ODS · or click to browse</p>
+            <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: C.navy }}>Drag & drop a spreadsheet or PDF here</p>
+            <p style={{ fontSize: 13, color: C.textMid, margin: 0 }}>CSV, Excel (.xlsx, .xls), ODS, or PDF (OCR) · or click to browse</p>
           </div>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,.xlsx,.xls,.ods"
+            accept=".csv,.xlsx,.xls,.ods,.pdf"
             style={{ display: "none" }}
             onChange={e => handleFileAndMap(e.target.files[0])}
           />
@@ -100,7 +134,7 @@ export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, 
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,.xlsx,.xls,.ods"
+            accept=".csv,.xlsx,.xls,.ods,.pdf"
             style={{ display: "none" }}
             onChange={e => handleFileAndMap(e.target.files[0])}
           />
@@ -118,6 +152,19 @@ export default function StepUpload({ schemaType, aiLoading, fileInfo, dragOver, 
         </>
       )}
 
+      {pdfExtracting && (
+        <div style={{ marginTop: 12, padding: 12, border: `1px solid ${C.border}`, borderRadius: 8, background: C.navyTint }}>
+          <p style={{ fontSize: 13, color: C.navy, margin: "0 0 4px", fontWeight: 600 }}>
+            Extracting fields from PDF…
+          </p>
+          <p style={{ fontSize: 12, color: C.textMid, margin: 0 }}>
+            {pdfProgress?.label || "Working…"}
+            {pdfProgress?.current != null && pdfProgress?.total != null && (
+              <> — {pdfProgress.current}/{pdfProgress.total}</>
+            )}
+          </p>
+        </div>
+      )}
       {aiLoading && (
         <div style={{ marginTop: 12 }}>
           {fileInfo && (

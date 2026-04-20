@@ -12,6 +12,7 @@ import WorkspaceSidebar from "./components/WorkspaceSidebar";
 import { syncFmxDataForProject, fetchAllDependencies, getDepKeysForSchema } from "./fmxSync";
 import { getFieldTypeCategory } from "./fmxFieldTypes";
 import { claudeFetch, parseClaudeText } from "./apiClient";
+import { extractPdfToSheet } from "./pdfExtract";
 import DataPreviewModal from "./components/DataPreviewModal";
 import TransformModal from "./components/TransformModal";
 import ProjectScreen from "./components/ProjectScreen";
@@ -144,6 +145,11 @@ export default function App() {
   const [certified, setCertified] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [pdfExtracting, setPdfExtracting] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState(null);
+  // Tags the current csv as coming from a PDF extraction so downstream edits
+  // can be captured as `corrections` for the learning loop.
+  const [pdfSource, setPdfSource] = useState(null); // { runId, migrationType } | null
   const [preview, setPreview] = useState(null);
   const [transformModal, setTransformModal] = useState(null); // { field, savedRule } | null
   const [memoryMatches, setMemoryMatches] = useState({});
@@ -428,6 +434,39 @@ export default function App() {
   const handleFileAndMap = file => {
     if (!file) return;
     const ext = file.name.split(".").pop().toLowerCase();
+
+    // Any non-PDF replacement invalidates the correction-capture context.
+    if (ext !== "pdf") setPdfSource(null);
+
+    if (ext === "pdf") {
+      // PDF → Claude vision → {headers, rows}. Uses the admin-editable prompt
+      // stored in the `prompts` table for this migration type. The resulting
+      // table plugs into the existing mapping/validation/transform flow.
+      setPdfExtracting(true);
+      setPdfProgress({ label: "Starting…" });
+      extractPdfToSheet(file, schemaType, {
+        projectId: selectedProject?.id,
+        userId: user?.id,
+        onProgress: (label, progress) => setPdfProgress({ label, ...progress }),
+      }).then(({ headers, rows, pageCount, runId }) => {
+        setCsv({ headers, rows });
+        setPdfSource({ runId, migrationType: schemaType });
+        setFileInfo({
+          type: "PDF (OCR)",
+          sheetName: null,
+          rowCount: rows.length,
+          pageCount,
+        });
+      }).catch(err => {
+        console.error("PDF extraction failed:", err);
+        alert(`PDF extraction failed: ${err.message || err}`);
+      }).finally(() => {
+        setPdfExtracting(false);
+        setPdfProgress(null);
+      });
+      return;
+    }
+
     const reader = new FileReader();
     if (ext === "csv") {
       reader.onload = e => parseAndPreview(e.target.result, { type: "CSV", sheetName: null });
@@ -987,6 +1026,10 @@ export default function App() {
                 onSheetSelect={handleSheetSelect}
                 csv={csv}
                 setCsv={setCsv}
+                pdfExtracting={pdfExtracting}
+                pdfProgress={pdfProgress}
+                pdfSource={pdfSource}
+                currentUserId={user?.id}
               />
             )}
 
