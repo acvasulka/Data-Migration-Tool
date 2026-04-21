@@ -492,7 +492,15 @@ export default function App() {
         const usage = extractUsage(aiRes);
         completeExtractionRun(mappingRunId, {
           status: 'complete',
-          resultJson: { mapping: finalMapping, fmxFieldCount: fmxFieldNames.length, csvHeaderCount: csv.headers.length },
+          resultJson: {
+            mapping: finalMapping,
+            fmxFieldCount: fmxFieldNames.length,
+            csvHeaderCount: csv.headers.length,
+            // Snapshot inputs so admin dry-runs can replay this mapping call.
+            csvHeaders: csv.headers,
+            fmxFieldNames,
+            suggested,
+          },
           durationMs: Date.now() - mappingStart,
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
