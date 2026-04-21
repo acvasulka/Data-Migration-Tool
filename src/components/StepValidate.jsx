@@ -4,6 +4,7 @@ import { claudeFetch, parseClaudeText } from "../apiClient";
 import NLEditPanel from "./NLEditPanel";
 import ValidationSpreadsheet from "./ValidationSpreadsheet";
 import DepResolveModal from "./DepResolveModal";
+import Modal from "./Modal";
 
 const SPIN = `@keyframes _sv_spin { to { transform: rotate(360deg); } }`;
 const PAGE_SIZE = 100;
@@ -78,21 +79,14 @@ export default function StepValidate({
   const [suggestions, setSuggestions] = useState(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
-  // Remove duplicates
-  const [dedupMenuOpen, setDedupMenuOpen] = useState(false);
+  // Remove duplicates — two-stage modal flow: pick a column, then confirm.
+  const [dedupStage, setDedupStage] = useState('closed'); // 'closed' | 'pick' | 'confirm'
+  const [dedupChoice, setDedupChoice] = useState(null);
   const [dedupResult, setDedupResult] = useState(null);
 
   // Dep modal
   const [depResolveHeader, setDepResolveHeader] = useState(null);
   const [showDepModal, setShowDepModal] = useState(false);
-
-  // Close dedup menu on outside click
-  useEffect(() => {
-    if (!dedupMenuOpen) return;
-    const handler = () => setDedupMenuOpen(false);
-    const id = setTimeout(() => document.addEventListener('mousedown', handler), 0);
-    return () => { clearTimeout(id); document.removeEventListener('mousedown', handler); };
-  }, [dedupMenuOpen]);
 
   // Column visibility — persisted to localStorage per schema type
   const [hiddenCols, setHiddenCols] = useState(() => {
@@ -288,7 +282,9 @@ export default function StepValidate({
     setUndoSnapshot([...mappedRows]);
     const seen = new Set();
     const filtered = mappedRows.filter(row => {
-      const v = row[columnName] ?? '';
+      const raw = row[columnName];
+      const v = raw == null ? '' : String(raw).trim();
+      if (v === '') return true;
       if (seen.has(v)) return false;
       seen.add(v);
       return true;
@@ -297,7 +293,8 @@ export default function StepValidate({
     setMappedRows(filtered);
     if (onRowsUpdated) onRowsUpdated(filtered);
     setDedupResult({ count: removedCount });
-    setDedupMenuOpen(false);
+    setDedupStage('closed');
+    setDedupChoice(null);
     setPage(0);
     setTimeout(() => setDedupResult(null), 4000);
   };
@@ -504,33 +501,8 @@ export default function StepValidate({
           )}
         </div>
 
-        {/* Remove duplicates dropdown */}
-        <div style={{ position: 'relative' }}>
-          <button className="fmx-btn-xs" onClick={() => setDedupMenuOpen(v => !v)}>Remove duplicates ▾</button>
-          {dedupMenuOpen && (
-            <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 0', zIndex: 100, minWidth: 220, maxHeight: 320, overflowY: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.11)' }}>
-              <div style={{ padding: '4px 14px 8px', borderBottom: `1px solid ${C.border}`, marginBottom: 2, fontSize: 11, fontWeight: 600, color: C.navy }}>
-                Keep first row, remove duplicates by:
-              </div>
-              {mappedHeaders.filter(h => !hiddenCols.has(h)).map(h => (
-                <button
-                  key={h}
-                  onClick={() => removeDuplicates(h)}
-                  style={{
-                    display: 'block', width: '100%', textAlign: 'left',
-                    padding: '6px 14px', fontSize: 12, color: C.textDark,
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.background = C.bgPage}
-                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                >
-                  {h}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Remove duplicates — opens a two-stage modal (pick column, then confirm) */}
+        <button className="fmx-btn-xs" onClick={() => setDedupStage('pick')}>Remove duplicates</button>
 
         {/* Dedup result toast */}
         {dedupResult && (
@@ -656,6 +628,54 @@ export default function StepValidate({
           onApply={handleApplyDepReplacements}
           onClose={() => setShowDepModal(false)}
         />
+      )}
+
+      {/* ── Remove Duplicates Modal (pick column) ── */}
+      {dedupStage === 'pick' && (
+        <Modal width={420} onClose={() => { setDedupStage('closed'); setDedupChoice(null); }}>
+          <h3 style={{ margin: 0, marginBottom: 6, fontSize: 16, color: C.navy }}>Remove duplicates</h3>
+          <p style={{ margin: 0, marginBottom: 14, fontSize: 13, color: C.textMid }}>
+            Which column header should be considered the source of truth that duplicates are based on?
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: '50vh', overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+            {mappedHeaders.filter(h => !hiddenCols.has(h)).map(h => (
+              <button
+                key={h}
+                onClick={() => { setDedupChoice(h); setDedupStage('confirm'); }}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  padding: '8px 12px', fontSize: 13, color: C.textDark,
+                  background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`,
+                  cursor: 'pointer', fontFamily: 'system-ui, -apple-system, sans-serif',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = C.bgPage}
+                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+              >
+                {h}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+            <button className="fmx-btn-nav-back" onClick={() => { setDedupStage('closed'); setDedupChoice(null); }}>Cancel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Remove Duplicates Modal (confirm) ── */}
+      {dedupStage === 'confirm' && dedupChoice && (
+        <Modal width={420} onClose={() => { setDedupStage('pick'); }}>
+          <h3 style={{ margin: 0, marginBottom: 10, fontSize: 16, color: C.navy }}>Confirm remove duplicates</h3>
+          <p style={{ margin: 0, marginBottom: 16, fontSize: 13, color: C.textDark }}>
+            Remove duplicate values based on column: <strong>{dedupChoice}</strong>?
+          </p>
+          <p style={{ margin: 0, marginBottom: 16, fontSize: 12, color: C.textMid }}>
+            The first row with each value is kept; later rows with the same value are removed. Blank values are never considered duplicates.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button className="fmx-btn-nav-back" onClick={() => setDedupStage('pick')}>Back</button>
+            <button className="fmx-btn-primary" onClick={() => removeDuplicates(dedupChoice)}>Yes, remove</button>
+          </div>
+        </Modal>
       )}
     </div>
   );
