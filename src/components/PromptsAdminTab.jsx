@@ -236,7 +236,7 @@ export default function PromptsAdminTab({ currentUserId }) {
   };
 
   return (
-    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0, flex: 1 }}>
+    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0, flex: 1, overflow: 'auto' }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         {selectedStage === 'extraction' ? (
           <>These prompts drive <strong>PDF-to-spreadsheet extraction</strong>. Claude reads each page image with the active prompt for the migration type.</>

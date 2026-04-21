@@ -54,7 +54,7 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const allTypes = useMemo(() => Array.from(new Set(runs.map(r => r.migration_type))).sort(), [runs]);
 
   return (
-    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 }}>
+    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         Every admin-prompt invocation (PDF extractions <em>and</em> CSV field-mapping calls) logs
         the prompt version used, timing, token usage, estimated cost, and outcome — full audit trail
@@ -110,7 +110,7 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
         </span>
       </div>
 
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: 1, minHeight: 0 }}>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: '1 1 auto', minHeight: 300 }}>
         {filtered.length === 0 && !loading ? (
           <div style={{ padding: 24, fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', textAlign: 'center' }}>
             No extraction runs yet.
