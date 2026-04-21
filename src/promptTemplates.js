@@ -66,6 +66,28 @@ export function extractUsage(claudeResponse) {
   return { inputTokens, outputTokens, costUsd };
 }
 
+// Estimates the USD cost of re-running a past extraction_run with a draft
+// prompt. We don't know the draft's real token count ahead of time, so we use
+// the source run's token usage as the best available predictor and fall back
+// to a coarse bound derived from page_count when tokens weren't captured.
+export function estimateDryRunCost(sourceRun) {
+  if (!sourceRun) return { inputTokens: null, outputTokens: null, costUsd: null, basis: 'unknown' };
+  const inputTokens = sourceRun.input_tokens ?? null;
+  const outputTokens = sourceRun.output_tokens ?? null;
+  if (inputTokens != null && outputTokens != null) {
+    const costUsd =
+      (inputTokens * PRICE_PER_MTOK.input + outputTokens * PRICE_PER_MTOK.output) / 1_000_000;
+    return { inputTokens, outputTokens, costUsd, basis: 'source-tokens' };
+  }
+  // Fallback rough estimate: ~2k input + ~1k output per PDF page, or ~3k input + ~500 output for mapping.
+  const pages = sourceRun.page_count ?? 0;
+  const isMapping = (sourceRun.stage || 'extraction') === 'field_mapping';
+  const inEst = isMapping ? 3000 : Math.max(2000 * pages, 2000);
+  const outEst = isMapping ? 500 : Math.max(1000 * pages, 1000);
+  const costUsd = (inEst * PRICE_PER_MTOK.input + outEst * PRICE_PER_MTOK.output) / 1_000_000;
+  return { inputTokens: inEst, outputTokens: outEst, costUsd, basis: 'heuristic' };
+}
+
 // Sums usage across multiple Claude responses (PDF extraction calls Claude
 // once per page-batch, so we aggregate).
 export function sumUsage(responses) {

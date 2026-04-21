@@ -134,7 +134,7 @@ export default function CorrectionsAdminTab({ currentUserId }) {
   };
 
   return (
-    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 }}>
+    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         Unreviewed user edits across <strong>PDF extraction</strong> (header renames, cell edits) and <strong>CSV imports</strong> (mapping overrides, validate-step edits), grouped by pattern. Promote repeated
         patterns into few-shot examples so Claude applies the fix on future runs.
@@ -173,7 +173,7 @@ export default function CorrectionsAdminTab({ currentUserId }) {
         >Export CSV</button>
       </div>
 
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: 1, minHeight: 0 }}>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: '1 1 auto', minHeight: 300 }}>
         {patterns.length === 0 && !loading ? (
           <div style={{ padding: 24, fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', textAlign: 'center' }}>
             No unreviewed corrections match these filters.

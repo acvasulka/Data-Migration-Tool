@@ -699,7 +699,7 @@ export async function activatePromptVersion(promptId) {
 
 // --- EXTRACTION RUNS ---
 
-export async function createExtractionRun({ projectId, userId, migrationType, stage = 'extraction', storageKey, sourceFilename, pageCount, promptId, promptVersion }) {
+export async function createExtractionRun({ projectId, userId, migrationType, stage = 'extraction', storageKey, sourceFilename, pageCount, promptId, promptVersion, dryRun = false, dryRunSourceRunId = null }) {
   return dbQuery(
     () => supabase.from('extraction_runs').insert({
       project_id: projectId || null,
@@ -712,6 +712,8 @@ export async function createExtractionRun({ projectId, userId, migrationType, st
       prompt_id: promptId || null,
       prompt_version: promptVersion || null,
       status: 'running',
+      dry_run: !!dryRun,
+      dry_run_source_run_id: dryRunSourceRunId || null,
     }).select().single(),
     null
   );
@@ -745,7 +747,7 @@ export async function getExtractionRuns(projectId) {
 export async function getExtractionRun(runId) {
   return dbQuery(
     () => supabase.from('extraction_runs')
-      .select('id, project_id, user_id, migration_type, stage, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
+      .select('id, project_id, user_id, migration_type, stage, storage_key, source_filename, page_count, prompt_id, prompt_version, status, result_json, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, dry_run, dry_run_source_run_id, created_at')
       .eq('id', runId)
       .single(),
     null
@@ -804,11 +806,33 @@ export async function downloadPdfFromStorage(storageKey, filename = 'run.pdf') {
 export async function getAllExtractionRuns({ limit = 100 } = {}) {
   return dbQuery(
     () => supabase.from('extraction_runs')
-      .select('id, project_id, user_id, migration_type, stage, source_filename, page_count, prompt_id, prompt_version, status, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, created_at')
+      .select('id, project_id, user_id, migration_type, stage, source_filename, page_count, prompt_id, prompt_version, status, error, duration_ms, input_tokens, output_tokens, estimated_cost_usd, dry_run, dry_run_source_run_id, created_at')
       .order('created_at', { ascending: false })
       .limit(limit),
     []
   );
+}
+
+// Lists recent *successful*, *non-dry-run* runs of a given (migration_type, stage)
+// that can be used as a dry-run sample. Ordered most-recent-first. Extraction
+// runs must have a storage_key so we can actually re-render the PDF.
+export async function listRecentRunsForReplay(migrationType, stage = 'extraction', limit = 25) {
+  try {
+    let q = supabase.from('extraction_runs')
+      .select('id, migration_type, stage, storage_key, source_filename, page_count, result_json, input_tokens, output_tokens, estimated_cost_usd, duration_ms, created_at')
+      .eq('migration_type', migrationType)
+      .eq('stage', stage)
+      .eq('status', 'complete')
+      .eq('dry_run', false)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (stage === 'extraction') q = q.not('storage_key', 'is', null);
+    const { data, error } = await q;
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
 }
 
 // --- CORRECTIONS (PDF extraction learning loop) ---

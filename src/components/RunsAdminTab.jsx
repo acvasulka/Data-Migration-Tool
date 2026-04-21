@@ -15,6 +15,7 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterStage, setFilterStage] = useState('');
+  const [filterDryRun, setFilterDryRun] = useState('exclude'); // 'all' | 'exclude' | 'only'
   const [selectedRunId, setSelectedRunId] = useState(null);
 
   useEffect(() => {
@@ -33,12 +34,17 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   }, [allProfiles]);
 
   const filtered = useMemo(() => {
-    return runs.filter(r =>
-      (!filterType || r.migration_type === filterType) &&
-      (!filterStatus || r.status === filterStatus) &&
-      (!filterStage || (r.stage || 'extraction') === filterStage)
-    );
-  }, [runs, filterType, filterStatus, filterStage]);
+    return runs.filter(r => {
+      const isDry = !!r.dry_run;
+      if (filterDryRun === 'exclude' && isDry) return false;
+      if (filterDryRun === 'only' && !isDry) return false;
+      return (
+        (!filterType || r.migration_type === filterType) &&
+        (!filterStatus || r.status === filterStatus) &&
+        (!filterStage || (r.stage || 'extraction') === filterStage)
+      );
+    });
+  }, [runs, filterType, filterStatus, filterStage, filterDryRun]);
 
   const totalCost = useMemo(
     () => filtered.reduce((sum, r) => sum + (Number(r.estimated_cost_usd) || 0), 0),
@@ -48,7 +54,7 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
   const allTypes = useMemo(() => Array.from(new Set(runs.map(r => r.migration_type))).sort(), [runs]);
 
   return (
-    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 }}>
+    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         Every admin-prompt invocation (PDF extractions <em>and</em> CSV field-mapping calls) logs
         the prompt version used, timing, token usage, estimated cost, and outcome — full audit trail
@@ -75,6 +81,16 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
           <option value="extraction">PDF extraction</option>
           <option value="field_mapping">CSV field mapping</option>
         </select>
+        <label style={{ fontSize: 12, color: '#374151' }}>Dry-run:</label>
+        <select
+          value={filterDryRun}
+          onChange={e => setFilterDryRun(e.target.value)}
+          style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB` }}
+        >
+          <option value="exclude">Exclude dry-runs</option>
+          <option value="all">Include dry-runs</option>
+          <option value="only">Dry-runs only</option>
+        </select>
         <label style={{ fontSize: 12, color: '#374151' }}>Status:</label>
         <select
           value={filterStatus}
@@ -90,11 +106,11 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
         <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
           {loading
             ? 'Loading…'
-            : `${filtered.length} of ${runs.length} runs · est. $${totalCost.toFixed(4)}`}
+            : `${filtered.length} of ${runs.length} runs · ${filterDryRun === 'only' ? 'dry-run spend' : 'est.'} $${totalCost.toFixed(4)}`}
         </span>
       </div>
 
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: 1, minHeight: 0 }}>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, overflow: 'auto', flex: '1 1 auto', minHeight: 300 }}>
         {filtered.length === 0 && !loading ? (
           <div style={{ padding: 24, fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', textAlign: 'center' }}>
             No extraction runs yet.
@@ -137,6 +153,21 @@ export default function RunsAdminTab({ allProfiles, currentUserId }) {
                     }}>
                       {(r.stage || 'extraction') === 'field_mapping' ? 'MAPPING' : 'PDF'}
                     </span>
+                    {r.dry_run && (
+                      <span
+                        title={r.dry_run_source_run_id ? `Dry-run of ${r.dry_run_source_run_id.slice(0, 8)}…` : 'Dry-run'}
+                        onClick={(e) => {
+                          if (!r.dry_run_source_run_id) return;
+                          e.stopPropagation();
+                          setSelectedRunId(r.dry_run_source_run_id);
+                        }}
+                        style={{
+                          marginLeft: 4, fontSize: 10, padding: '1px 6px', borderRadius: 8,
+                          background: '#FEF3C7', color: '#92400E',
+                          cursor: r.dry_run_source_run_id ? 'pointer' : 'default',
+                        }}
+                      >DRY RUN</span>
+                    )}
                   </td>
                   <td style={td}><strong>{r.migration_type}</strong></td>
                   <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.source_filename}>

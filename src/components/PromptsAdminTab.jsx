@@ -6,8 +6,12 @@ import {
   getExamplesForPrompt,
   setExampleEnabled,
   deleteExample,
+  listRecentRunsForReplay,
 } from '../db';
+import { buildSystemPrompt, estimateDryRunCost } from '../promptTemplates';
+import { runExtractionDryRun, runMappingDryRun } from '../promptDryRun';
 import PromptDiffModal from './PromptDiffModal';
+import DryRunDiffPanel from './DryRunDiffPanel';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
@@ -39,6 +43,17 @@ export default function PromptsAdminTab({ currentUserId }) {
   const [customType, setCustomType] = useState('');
   const [examples, setExamples] = useState([]);
   const [diffVersion, setDiffVersion] = useState(null); // prompt row to compare against active
+
+  // Preview & Dry-Run state
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [draftExampleEnabled, setDraftExampleEnabled] = useState({}); // { [exampleId]: boolean } — local override, does not touch DB
+  const [replayRuns, setReplayRuns] = useState([]);
+  const [replayRunId, setReplayRunId] = useState('');
+  const [dryRunBusy, setDryRunBusy] = useState(false);
+  const [dryRunProgress, setDryRunProgress] = useState('');
+  const [dryRunResult, setDryRunResult] = useState(null);
+  const [dryRunError, setDryRunError] = useState('');
+  const [dryRunSourceRun, setDryRunSourceRun] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -72,14 +87,36 @@ export default function PromptsAdminTab({ currentUserId }) {
 
   // Load examples attached to the active prompt for the selected type.
   useEffect(() => {
-    if (!activeVersion?.id) { setExamples([]); return; }
+    if (!activeVersion?.id) { setExamples([]); setDraftExampleEnabled({}); return; }
     let cancelled = false;
     (async () => {
       const rows = await getExamplesForPrompt(activeVersion.id);
-      if (!cancelled) setExamples(rows);
+      if (cancelled) return;
+      setExamples(rows);
+      // Initialize draft toggle state from the stored `enabled` flag.
+      const initial = {};
+      for (const ex of rows) initial[ex.id] = !!ex.enabled;
+      setDraftExampleEnabled(initial);
     })();
     return () => { cancelled = true; };
   }, [activeVersion?.id]);
+
+  // Load replayable runs whenever the (type, stage) changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const rows = await listRecentRunsForReplay(selectedType, selectedStage, 25);
+      if (!cancelled) {
+        setReplayRuns(rows);
+        setReplayRunId(rows[0]?.id || '');
+      }
+    })();
+    // Reset any previous dry-run output when switching context.
+    setDryRunResult(null);
+    setDryRunSourceRun(null);
+    setDryRunError('');
+    return () => { cancelled = true; };
+  }, [selectedType, selectedStage]);
 
   const handleToggleExample = async (id, enabled) => {
     await setExampleEnabled(id, enabled);
@@ -123,6 +160,70 @@ export default function PromptsAdminTab({ currentUserId }) {
     setBusy(false);
   };
 
+  // Build the draft system prompt exactly as it would be sent to Claude.
+  // Uses the currently-selected replay run (if any) for realistic vars; falls
+  // back to representative samples so admins can preview even before picking
+  // a source run.
+  const draftExamplesList = useMemo(
+    () => examples.filter(ex => draftExampleEnabled[ex.id]),
+    [examples, draftExampleEnabled]
+  );
+
+  const selectedReplayRun = useMemo(
+    () => replayRuns.find(r => r.id === replayRunId) || null,
+    [replayRuns, replayRunId]
+  );
+
+  const interpolatedPreview = useMemo(() => {
+    if (!editingBody) return '';
+    const vars = { MIGRATION_TYPE: selectedType };
+    if (selectedStage === 'field_mapping') {
+      const snap = selectedReplayRun?.result_json || {};
+      vars.CSV_HEADERS = snap.csvHeaders || ['Building Name', 'Address', 'Square Feet'];
+      vars.FMX_FIELDS = snap.fmxFieldNames || ['name', 'location', 'area_sqft'];
+      vars.SUGGESTED = snap.suggested || { name: 'Building Name' };
+    }
+    return buildSystemPrompt({ body: editingBody, vars, examples: draftExamplesList });
+  }, [editingBody, selectedType, selectedStage, selectedReplayRun, draftExamplesList]);
+
+  const costEstimate = useMemo(
+    () => estimateDryRunCost(selectedReplayRun),
+    [selectedReplayRun]
+  );
+
+  const handleRunDryRun = async () => {
+    if (!selectedReplayRun || !editingBody.trim()) return;
+    const msg = `Estimated cost: ~$${(costEstimate.costUsd || 0).toFixed(4)} ` +
+      `(${costEstimate.basis === 'source-tokens' ? 'based on the source run\'s token usage' : 'coarse estimate'}). ` +
+      `Run dry-run?`;
+    if (!window.confirm(msg)) return;
+
+    setDryRunBusy(true);
+    setDryRunError('');
+    setDryRunResult(null);
+    setDryRunSourceRun(selectedReplayRun);
+    setDryRunProgress('Starting…');
+
+    try {
+      const runner = selectedStage === 'field_mapping' ? runMappingDryRun : runExtractionDryRun;
+      const result = await runner({
+        sourceRun: selectedReplayRun,
+        draftBody: editingBody,
+        draftExamples: draftExamplesList,
+        migrationType: selectedType,
+        projectId: null,
+        userId: currentUserId,
+        onProgress: (label) => setDryRunProgress(label || ''),
+      });
+      setDryRunResult(result);
+    } catch (err) {
+      setDryRunError(err?.message || String(err));
+    } finally {
+      setDryRunBusy(false);
+      setDryRunProgress('');
+    }
+  };
+
   const handleAddCustomType = () => {
     const t = customType.trim();
     if (!t) return;
@@ -135,7 +236,7 @@ export default function PromptsAdminTab({ currentUserId }) {
   };
 
   return (
-    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0, flex: 1 }}>
+    <div style={{ padding: '16px 28px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0, flex: 1, overflow: 'auto' }}>
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         {selectedStage === 'extraction' ? (
           <>These prompts drive <strong>PDF-to-spreadsheet extraction</strong>. Claude reads each page image with the active prompt for the migration type.</>
@@ -237,6 +338,131 @@ export default function PromptsAdminTab({ currentUserId }) {
             style={{ fontSize: 12, padding: '6px 14px', borderRadius: 5, background: ORANGE, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.7 : 1 }}
           >{busy ? 'Saving…' : 'Save as new version & activate'}</button>
         </div>
+      </div>
+
+      {/* Preview & Dry-Run */}
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, background: '#fff' }}>
+        <button
+          type="button"
+          onClick={() => setPreviewExpanded(x => !x)}
+          style={{
+            width: '100%', textAlign: 'left', padding: '8px 12px', cursor: 'pointer',
+            background: '#F9FAFB', border: 'none', borderBottom: previewExpanded ? `1px solid ${BORDER}` : 'none',
+            borderRadius: previewExpanded ? '6px 6px 0 0' : 6, fontSize: 12, fontWeight: 600, color: NAVY,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}
+        >
+          <span style={{ transform: previewExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', display: 'inline-block' }}>▸</span>
+          Preview & Dry-Run
+          <span style={{ fontSize: 10, color: '#6B7280', fontWeight: 400, marginLeft: 6 }}>
+            See the exact system prompt and test it against a past run before saving.
+          </span>
+        </button>
+        {previewExpanded && (
+          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Draft example toggles */}
+            {examples.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+                  Examples to include in this preview / dry-run (draft-only — does not change stored settings):
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {examples.map(ex => (
+                    <label
+                      key={ex.id}
+                      style={{
+                        fontSize: 11, padding: '3px 8px', borderRadius: 4,
+                        border: `1px solid ${draftExampleEnabled[ex.id] ? NAVY : '#D1D5DB'}`,
+                        background: draftExampleEnabled[ex.id] ? '#EEF0F8' : '#fff',
+                        cursor: 'pointer', userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!draftExampleEnabled[ex.id]}
+                        onChange={e => setDraftExampleEnabled(d => ({ ...d, [ex.id]: e.target.checked }))}
+                        style={{ marginRight: 4 }}
+                      />
+                      {ex.label || '(untitled)'}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Interpolated preview */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+                Final system prompt (as Claude will see it):
+              </div>
+              <pre style={{
+                margin: 0, padding: 10, background: '#0F172A', color: '#E2E8F0',
+                borderRadius: 5, fontSize: 11, fontFamily: 'ui-monospace, Menlo, monospace',
+                maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5,
+              }}>{interpolatedPreview || '(empty prompt)'}</pre>
+            </div>
+
+            {/* Replay picker + run button */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 11, color: '#374151' }}>Replay source run:</label>
+              <select
+                value={replayRunId}
+                onChange={e => setReplayRunId(e.target.value)}
+                disabled={replayRuns.length === 0 || dryRunBusy}
+                style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB`, minWidth: 280 }}
+              >
+                {replayRuns.length === 0 && <option value="">No replayable runs yet</option>}
+                {replayRuns.map(r => {
+                  const when = r.created_at ? new Date(r.created_at).toLocaleDateString() : '';
+                  const headerCount = (r.result_json?.headers?.length) ?? (r.result_json?.csvHeaderCount) ?? '?';
+                  const label = selectedStage === 'field_mapping'
+                    ? `${r.source_filename || '(unnamed)'} · ${headerCount} headers · ${when}`
+                    : `${r.source_filename || '(unnamed)'} · ${r.page_count ?? '?'} pp · ${when}`;
+                  return <option key={r.id} value={r.id}>{label}</option>;
+                })}
+              </select>
+              {selectedReplayRun && (
+                <span style={{ fontSize: 11, color: '#6B7280' }}>
+                  Est. cost: ~${(costEstimate.costUsd || 0).toFixed(4)}
+                  <span style={{ color: '#9CA3AF', marginLeft: 4 }}>
+                    ({costEstimate.basis === 'source-tokens' ? 'from source tokens' : 'rough estimate'})
+                  </span>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handleRunDryRun}
+                disabled={dryRunBusy || !selectedReplayRun || !editingBody.trim()}
+                style={{
+                  fontSize: 12, padding: '6px 14px', borderRadius: 5, border: 'none',
+                  background: dryRunBusy ? '#9CA3AF' : NAVY, color: '#fff',
+                  cursor: dryRunBusy || !selectedReplayRun ? 'not-allowed' : 'pointer',
+                }}
+              >{dryRunBusy ? 'Running…' : 'Run dry-run'}</button>
+              {dryRunProgress && <span style={{ fontSize: 11, color: '#6B7280' }}>{dryRunProgress}</span>}
+            </div>
+
+            {selectedStage === 'field_mapping' && selectedReplayRun && !selectedReplayRun.result_json?.csvHeaders && (
+              <div style={{ fontSize: 11, color: '#B45309', background: '#FEF3C7', padding: '6px 10px', borderRadius: 5 }}>
+                This run was logged before migration 14 and doesn't include the CSV header / FMX field snapshot. New CSV mapping runs will be replayable.
+              </div>
+            )}
+
+            {dryRunError && (
+              <div style={{ padding: '8px 12px', background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', fontSize: 12, borderRadius: 5 }}>
+                {dryRunError}
+              </div>
+            )}
+
+            {dryRunResult && dryRunSourceRun && (
+              <DryRunDiffPanel
+                stage={selectedStage}
+                sourceRun={dryRunSourceRun}
+                dryRunResult={dryRunResult}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Few-shot examples attached to the active prompt */}

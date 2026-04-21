@@ -25,7 +25,7 @@ import {
 } from './db';
 import { buildSystemPrompt, sumUsage } from './promptTemplates';
 
-const PAGE_BATCH_SIZE = 3;       // pages per Claude call — balances cost vs. latency
+export const PAGE_BATCH_SIZE = 3;       // pages per Claude call — balances cost vs. latency
 const RENDER_SCALE = 2.0;        // 2x DPI — readable for OCR without exploding payload size
 const MAX_IMAGE_BYTES = 3_500_000; // ~3.5 MB base64 per image — Claude's per-image limit is 5 MB
 
@@ -66,7 +66,7 @@ async function uploadPdfToStorage(file, userId) {
 }
 
 // Render all pages of a PDF to PNG data URLs. onProgress receives (pageIdx, total).
-async function renderPdfPagesToImages(file, onProgress) {
+export async function renderPdfPagesToImages(file, onProgress) {
   const pdfjs = await loadPdfjs();
   const buf = await file.arrayBuffer();
   const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
@@ -103,7 +103,7 @@ function dataUrlToBase64(dataUrl) {
 // Extract structured data from one batch of page images via Claude vision.
 // Returns { parsed, response } — parsed is { fields, rows, notes } or null,
 // response is the raw Claude response (used to aggregate token usage).
-async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
+export async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
   const content = [
     {
       type: 'text',
@@ -150,7 +150,7 @@ async function extractBatch(promptBody, imageDataUrls, batchIdx, totalBatches) {
 // Header order is stable: first-seen order across batches; each row is a
 // plain object keyed by label, matching what parseCSV() produces so the
 // existing mapping pipeline works unchanged.
-function mergeBatchResults(batchResults) {
+export function mergeBatchResults(batchResults) {
   const headerOrder = [];
   const seen = new Set();
   const allRows = [];
