@@ -114,16 +114,34 @@ async function handleBinary(req, res, { projectId, attachmentDownloadUrl }) {
   if (parsed.protocol !== 'https:') {
     return res.status(400).json({ error: 'Only https downloads are allowed' });
   }
-  if (parsed.hostname.toLowerCase() !== String(siteUrl || '').toLowerCase()) {
-    return res.status(400).json({ error: 'Download host does not match project fmx_site_url' });
+  // Allow-list of hosts that may receive the project's Basic-auth header.
+  // FMX's /v1/attachments/{id} returns a downloadUrl that usually lives on
+  // an attachment subdomain (e.g. *.gofmx.com) or on the S3 bucket backing
+  // FMX uploads, not the tenant's main site URL. Keep the list narrow:
+  //   1. the project's own fmx_site_url,
+  //   2. any *.gofmx.com host,
+  //   3. any *.amazonaws.com host (S3-backed attachment URLs).
+  const host = parsed.hostname.toLowerCase();
+  const siteHost = String(siteUrl || '').toLowerCase();
+  const allowed =
+    host === siteHost ||
+    host.endsWith('.gofmx.com') ||
+    host.endsWith('.amazonaws.com');
+  if (!allowed) {
+    return res.status(400).json({ error: `Download host not permitted: ${host}` });
   }
 
   try {
-    const basic = Buffer.from(`${email}:${password}`).toString('base64');
-    const response = await fetch(parsed.toString(), {
-      method: 'GET',
-      headers: { 'Authorization': `Basic ${basic}` },
-    });
+    // Only send Basic auth when we're hitting the tenant's FMX host. S3
+    // pre-signed URLs embed auth in the query string and can reject an
+    // extra Authorization header; sending our Basic creds to Amazon would
+    // also leak them outside FMX's boundary. Safer to omit.
+    const headers = {};
+    if (host === siteHost || host.endsWith('.gofmx.com')) {
+      const basic = Buffer.from(`${email}:${password}`).toString('base64');
+      headers['Authorization'] = `Basic ${basic}`;
+    }
+    const response = await fetch(parsed.toString(), { method: 'GET', headers });
     if (!response.ok) {
       return res.status(response.status).json({ error: `Attachment download failed: ${response.status}` });
     }
