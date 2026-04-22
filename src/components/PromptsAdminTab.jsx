@@ -240,8 +240,10 @@ export default function PromptsAdminTab({ currentUserId }) {
       <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
         {selectedStage === 'extraction' ? (
           <>These prompts drive <strong>PDF-to-spreadsheet extraction</strong>. Claude reads each page image with the active prompt for the migration type.</>
-        ) : (
+        ) : selectedStage === 'field_mapping' ? (
           <>These prompts drive the <strong>CSV column-mapping</strong> AI call on the Map Fields step. Template placeholders <code>{'{{MIGRATION_TYPE}}'}</code>, <code>{'{{CSV_HEADERS}}'}</code>, <code>{'{{FMX_FIELDS}}'}</code>, <code>{'{{SUGGESTED}}'}</code> are filled in automatically.</>
+        ) : (
+          <>These prompts drive the <strong>Equipment Label Property Upload</strong> tool. Claude reads the attachments on an Equipment record (nameplate photos, spec PDFs) and proposes values for the fields the user chose to extract.</>
         )}
         {' '}Every edit creates a new version; older versions are kept for audit and rollback.
       </div>
@@ -249,17 +251,21 @@ export default function PromptsAdminTab({ currentUserId }) {
       {/* Stage selector */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <label style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Stage:</label>
-        {['extraction', 'field_mapping'].map(s => (
+        {[
+          { key: 'extraction', label: 'PDF extraction' },
+          { key: 'field_mapping', label: 'CSV field mapping' },
+          { key: 'ocr', label: 'Equipment Label Property Upload' },
+        ].map(s => (
           <button
-            key={s}
-            onClick={() => setSelectedStage(s)}
+            key={s.key}
+            onClick={() => setSelectedStage(s.key)}
             style={{
               fontSize: 12, padding: '5px 12px', borderRadius: 5, cursor: 'pointer',
-              background: selectedStage === s ? NAVY : '#fff',
-              color: selectedStage === s ? '#fff' : '#374151',
-              border: `1px solid ${selectedStage === s ? NAVY : '#D1D5DB'}`,
+              background: selectedStage === s.key ? NAVY : '#fff',
+              color: selectedStage === s.key ? '#fff' : '#374151',
+              border: `1px solid ${selectedStage === s.key ? NAVY : '#D1D5DB'}`,
             }}
-          >{s === 'extraction' ? 'PDF extraction' : 'CSV field mapping'}</button>
+          >{s.label}</button>
         ))}
       </div>
 

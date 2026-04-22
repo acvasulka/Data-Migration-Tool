@@ -11,7 +11,7 @@ const ORANGE = '#CF4A12';
 // Optional tools that admins grant per-user via profiles.feature_permissions.
 // Keep keys stable — they are the contract with hasFeature() callers.
 const FEATURE_FLAGS = [
-  { key: 'equipment_ocr', label: 'Equipment OCR' },
+  { key: 'equipment_ocr', label: 'Equipment Label Property Upload' },
 ];
 
 export default function AdminPanelModal({ currentUser, currentProfile, allProfiles, projects, onClose, onProfilesChanged, fieldOverrides, onFieldOverridesChanged }) {

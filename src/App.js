@@ -1041,7 +1041,7 @@ export default function App() {
               const label = tab === 'wizard'
                 ? `Wizard · ${schemaType} (${WIZARD_LABELS[wStep - 1] || ''})`
                 : tab === 'equipment-ocr'
-                ? 'Equipment OCR'
+                ? 'Equipment Label Property Upload'
                 : tab.charAt(0).toUpperCase() + tab.slice(1);
               return (
                 <button

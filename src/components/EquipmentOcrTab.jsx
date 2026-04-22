@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { C } from '../theme';
-import { fetchPostOptions } from '../fmxSync';
+import { syncFmxDataForProject } from '../fmxSync';
 import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
 
 // Equipment Attachment OCR tool.
@@ -36,10 +36,14 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    fetchPostOptions({ projectId: project.id }, 'Equipment', project.fmx_modules)
+    // Use the full sync path so the catalog includes custom fields merged
+    // from both /post-options (metadata) and /get-options (name map). Plain
+    // fetchPostOptions misses custom fields whose metadata only appears in
+    // get-options.
+    syncFmxDataForProject(project, 'Equipment')
       .then(res => {
         if (cancelled) return;
-        setFieldCatalog(res);
+        setFieldCatalog({ systemFields: res.systemFields || [], customFields: res.customFields || [] });
         setSelected(new Set(defaultSuggestions(res)));
       })
       .catch(e => { if (!cancelled) setLoadError(e?.message || 'Failed to load equipment fields'); })
@@ -98,7 +102,7 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '20px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
         <div>
-          <h2 style={{ fontSize: 16, fontWeight: 700, color: C.navy, margin: 0 }}>Equipment OCR</h2>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: C.navy, margin: 0 }}>Equipment Label Property Upload</h2>
           <p style={{ fontSize: 13, color: C.textMid, margin: '4px 0 0' }}>
             Fill blank Equipment fields by OCR-ing attached nameplate photos and spec sheets.
           </p>

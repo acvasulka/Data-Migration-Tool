@@ -74,16 +74,30 @@ export async function getProjectByFmxUrl(fmxSiteUrl) {
 
 // --- PROFILES ---
 
+// Profile SELECTs try the feature_permissions column first but gracefully
+// fall back to the legacy column set if migration 018 has not been applied
+// yet — otherwise a missing column fails the query at PostgREST and
+// `currentProfile` ends up null across the app.
 export async function getAllProfiles() {
-  return dbQuery(
+  const withFlags = await dbQuery(
     () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions'),
+    null
+  );
+  if (withFlags !== null) return withFlags;
+  return dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role'),
     []
   );
 }
 
 export async function getCurrentProfile(userId) {
-  return dbQuery(
+  const withFlags = await dbQuery(
     () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions').eq('id', userId).single(),
+    null
+  );
+  if (withFlags) return withFlags;
+  return dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role').eq('id', userId).single(),
     null
   );
 }
