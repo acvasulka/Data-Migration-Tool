@@ -439,6 +439,17 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
 
 // --- Dependency update system ---
 
+// DEPENDENCY_TYPES drives the top-level "Update Dependencies" sync and the
+// DependenciesView UI. Some deps are module-scoped — see moduleScope:
+//   • 'bucket-by-module' (request-types): one global fetch with ?fields=…,module;
+//     results are split into per-module caches keyed `{key}:{slug}` plus a
+//     consolidated `{key}` cache for UI / backward compat.
+//   • 'path-per-module:workTask' (instruction-sets): fetched once per Work Task
+//     module slug via `/v1/{slug}/instruction-sets`, stored as `{key}:{slug}`
+//     plus a consolidated `{key}` cache tagged with `module` per item.
+// Consumers (fmxTransform.resolveDepKey) pick the module-specific bucket based
+// on the current import's schema slug; they fall back to the consolidated
+// cache when no per-module bucket exists.
 export const DEPENDENCY_TYPES = [
   { key: 'buildings',       endpoint: '/v1/buildings',        label: 'Buildings',             nameField: 'name' },
   { key: 'resources',       endpoint: '/v1/resources',        label: 'Resources & Locations', nameField: 'name' },
@@ -447,9 +458,14 @@ export const DEPENDENCY_TYPES = [
   { key: 'equipment',       endpoint: '/v1/equipment',        label: 'Equipment Names',       nameField: 'tag' },
   { key: 'inventory-types', endpoint: '/v1/inventory-types',  label: 'Inventory Types',       nameField: 'name' },
   { key: 'inventory',       endpoint: '/v1/inventory',        label: 'Inventory Names',       nameField: 'name' },
-  { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name' },
+  { key: 'request-types',   endpoint: '/v1/request-types',    label: 'Request Types',         nameField: 'name', moduleScope: 'bucket-by-module', extraFields: ['module'] },
   { key: 'user-types',      endpoint: '/v1/user-types',       label: 'User Types',            nameField: 'name' },
   { key: 'resource-types', endpoint: '/v1/resource-types',   label: 'Resource Types',        nameField: 'name' },
+  { key: 'work-task-instruction-sets',
+    endpoint: (slug) => `/v1/${slug}/instruction-sets`,
+    label: 'Work Task Instruction Sets',
+    nameField: 'name',
+    moduleScope: 'path-per-module:workTask' },
 ];
 
 // Generic paginated fetcher — collects all pages from an FMX list endpoint.
@@ -492,7 +508,7 @@ const SCHEMA_DEP_KEYS = {
   'Inventory':              ['buildings', 'inventory-types'],
   'Work Request':           ['buildings', 'users', 'resources', 'request-types'],
   'Schedule Request':       ['buildings', 'resources'],
-  'Work Task':              ['buildings', 'users', 'equipment'],
+  'Work Task':              ['buildings', 'users', 'equipment', 'resources', 'request-types', 'work-task-instruction-sets'],
   'Transportation Request': ['buildings', 'resources'],
   'Accounting Account':     [],
 };
@@ -523,17 +539,88 @@ export async function fetchAllDependencies(project, onTypeProgress, depKeys = nu
 
   if (depsToFetch.length === 0) return {};
 
+  const modules = normalizeModules(project.fmx_modules) || {};
+
+  // Collect the active module slugs a given moduleScope should expand across.
+  // Disabled modules (mergeModules flags historical ones) are skipped — their
+  // data isn't needed for new imports but may still live in older caches.
+  const slugsFor = (scope) => {
+    const kind = scope.startsWith('path-per-module:') ? scope.split(':')[1] : null;
+    let list = [];
+    if (kind === 'workTask')          list = modules.workTaskModules || [];
+    else if (kind === 'workRequest')  list = modules.workRequestModules || [];
+    else if (kind === 'scheduleRequest') list = modules.scheduleRequestModules || [];
+    return list.filter(m => !m.disabled).map(m => m.slug);
+  };
+
   const settled = await Promise.allSettled(
     depsToFetch.map(async dep => {
       try {
+        // Module-scoped: one fetch per module slug at a templated path.
+        // Stores per-slug caches + a tagged aggregate (`{key}`) so the UI can
+        // render a unified view while resolvers pick a specific bucket.
+        if (typeof dep.moduleScope === 'string' && dep.moduleScope.startsWith('path-per-module:')) {
+          const slugs = slugsFor(dep.moduleScope);
+          if (slugs.length === 0) {
+            if (onTypeProgress) onTypeProgress(dep.key, 'done', 0);
+            return { key: dep.key, count: 0, status: 'done' };
+          }
+          const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
+          const endpointFn = typeof dep.endpoint === 'function' ? dep.endpoint : (s) => dep.endpoint;
+          let aggregate = [];
+          let totalCount = 0;
+          for (const slug of slugs) {
+            const path = endpointFn(slug);
+            let items = [];
+            let count = 0;
+            try {
+              const res = await fetchAllPages(creds, path, fields);
+              items = res.items;
+              count = res.totalCount;
+            } catch (inner) {
+              // Per-module failure: skip this slug but keep others. Surface as
+              // zero-count rather than aborting the whole dep.
+              console.warn(`[${dep.key}] slug "${slug}" fetch failed:`, inner);
+              continue;
+            }
+            const cleaned = items.map(item => {
+              const entry = { id: item.id, name: item[dep.nameField], module: slug };
+              for (const ef of (dep.extraFields || [])) entry[ef] = item[ef];
+              return entry;
+            });
+            await saveDependencyCache(projectId, `${dep.key}:${slug}`, cleaned, count);
+            aggregate = aggregate.concat(cleaned);
+            totalCount += count;
+          }
+          await saveDependencyCache(projectId, dep.key, aggregate, totalCount);
+          if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);
+          return { key: dep.key, count: totalCount, status: 'done' };
+        }
+
+        // Bucket-by-module: single global fetch, split client-side by each
+        // item's `module` field into per-slug caches + a consolidated cache.
+        // Items whose module is empty/null land ONLY in the aggregate — they
+        // aren't assignable to a specific module bucket.
         const fields = ['id', dep.nameField, ...(dep.extraFields || [])].join(',');
-        const { items, totalCount } = await fetchAllPages(creds, dep.endpoint, fields);
+        const { items, totalCount } = await fetchAllPages(creds, typeof dep.endpoint === 'function' ? dep.endpoint() : dep.endpoint, fields);
 
         const cleaned = items.map(item => {
           const entry = { id: item.id, name: item[dep.nameField] };
           for (const ef of (dep.extraFields || [])) entry[ef] = item[ef];
           return entry;
         });
+
+        if (dep.moduleScope === 'bucket-by-module') {
+          const buckets = {};
+          for (const entry of cleaned) {
+            const slug = entry.module;
+            if (!slug) continue;
+            (buckets[slug] ||= []).push(entry);
+          }
+          for (const [slug, bucketItems] of Object.entries(buckets)) {
+            await saveDependencyCache(projectId, `${dep.key}:${slug}`, bucketItems, bucketItems.length);
+          }
+        }
 
         await saveDependencyCache(projectId, dep.key, cleaned, totalCount);
         if (onTypeProgress) onTypeProgress(dep.key, 'done', totalCount);

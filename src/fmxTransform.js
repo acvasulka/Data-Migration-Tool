@@ -250,7 +250,9 @@ function resolveLookupEndpoint(endpoint, schemaType) {
   return endpoint.replace('{module}', slug);
 }
 
-// Maps FMX API endpoints to dependency cache keys
+// Maps FMX API endpoints to dependency cache keys. Covers the static 1:1 deps;
+// module-scoped deps (request-types, instruction-sets) are handled in
+// resolveDepKey() below because they need the current schemaType's module slug.
 const ENDPOINT_TO_DEP_KEY = {
   '/v1/buildings':        'buildings',
   '/v1/resources':        'resources',
@@ -263,6 +265,36 @@ const ENDPOINT_TO_DEP_KEY = {
   '/v1/resource-types':   'resource-types',
   '/v1/user-types':       'user-types',
 };
+
+// Picks the dep cache key to use when resolving a lookup.
+// Returns an ordered list of candidate keys (preferred first). Callers should
+// try each in turn and fall back to the next if the preferred cache is empty
+// or missing — this keeps static behavior when dependencies haven't been
+// re-synced against the new module-scoped schema yet.
+//
+// `resolvedEndpoint` is already post-{module}-substitution (see
+// resolveLookupEndpoint). `schemaType` may be module-qualified
+// (e.g. "Work Task:fit-inspections") or not.
+function resolveDepKey(resolvedEndpoint, schemaType) {
+  const slug = schemaType && schemaType.indexOf(':') !== -1
+    ? schemaType.slice(schemaType.indexOf(':') + 1)
+    : null;
+
+  // Instruction-sets: path of the form /v1/{slug}/instruction-sets
+  const instrMatch = resolvedEndpoint.match(/^\/v1\/([^/]+)\/instruction-sets$/);
+  if (instrMatch) {
+    const s = instrMatch[1];
+    return [`work-task-instruction-sets:${s}`, 'work-task-instruction-sets'];
+  }
+
+  // Request types: module-scoped cache preferred, full list as fallback
+  if (resolvedEndpoint === '/v1/request-types') {
+    return slug ? [`request-types:${slug}`, 'request-types'] : ['request-types'];
+  }
+
+  const staticKey = ENDPOINT_TO_DEP_KEY[resolvedEndpoint];
+  return staticKey ? [staticKey] : [];
+}
 
 // Build a name→ID lookup from dependency cache items.
 function buildDepLookup(items, nameField = 'name') {
@@ -323,10 +355,22 @@ export async function buildIdCache(rows, schemaType, creds, dependencyCaches = [
 
     const endpoint = resolveLookupEndpoint(lookup.endpoint, schemaType);
 
-    // Try to resolve from dependency cache first
-    const depKey = ENDPOINT_TO_DEP_KEY[endpoint];
-    const depItems = depKey ? depByKey[depKey] : null;
-    const nameField = depKey === 'equipment' ? 'tag' : 'name';
+    // Try each candidate dep key in order; prefer a non-empty module-scoped
+    // bucket, fall back to the consolidated cache if the bucket is missing
+    // (e.g. deps haven't been re-synced since module-scoping landed).
+    const depKeyCandidates = resolveDepKey(endpoint, schemaType);
+    let depKey = null;
+    let depItems = null;
+    for (const cand of depKeyCandidates) {
+      const items = depByKey[cand];
+      if (items && items.length > 0) {
+        depKey = cand;
+        depItems = items;
+        break;
+      }
+    }
+    const baseKey = depKey ? depKey.split(':')[0] : null;
+    const nameField = baseKey === 'equipment' ? 'tag' : 'name';
     const depLookup = depItems ? buildDepLookup(depItems, nameField) : {};
 
     for (const value of uniqueValues) {

@@ -173,6 +173,26 @@ export default function DependenciesView({ projectId, project, refreshKey }) {
                     </span>
                   )}
                 </div>
+                {dep.moduleScope && (() => {
+                  // Collect per-module sub-caches stored as `{dep.key}:{slug}`.
+                  const prefix = `${dep.key}:`;
+                  const breakdown = Object.entries(depCaches)
+                    .filter(([k]) => k.startsWith(prefix))
+                    .map(([k, c]) => ({ slug: k.slice(prefix.length), count: c.totalCount ?? c.items?.length ?? 0 }));
+                  if (breakdown.length === 0) return null;
+                  return (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                      {breakdown.map(b => (
+                        <span key={b.slug} style={{
+                          fontSize: 10, color: NAVY, background: '#EEF2FF',
+                          padding: '2px 7px', borderRadius: 9999, fontWeight: 600,
+                        }}>
+                          {b.slug}: {b.count}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Search bar */}

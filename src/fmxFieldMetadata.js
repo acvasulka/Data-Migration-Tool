@@ -172,6 +172,7 @@ const FMX_FIELD_ENRICHMENTS = {
   'Work Task': {
     name:              { label: 'Name' },
     requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    instructionSetID:  { label: 'Instruction Set', lookup: { endpoint: '/v1/{module}/instruction-sets', searchParam: 'search' } },
     mode:              { label: 'Mode' },
     nextDueDate:       { label: 'Next Due Date', type: 'date' },
     buildingIDs:       { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
