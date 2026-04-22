@@ -106,11 +106,14 @@ async function handleBinary(req, res, { projectId, attachmentDownloadUrl }) {
     return res.status(500).json({ error: `Credential lookup failed: ${e.message}` });
   }
 
-  // Only proxy downloads that point at this project's FMX site. Prevents the
-  // client from using our saved creds to fetch arbitrary external URLs.
+  // FMX often returns a site-relative downloadUrl like "/api/v1/attachments/123/download".
+  // Resolve it against the project's site URL so we can host-check and fetch it.
   let parsed;
-  try { parsed = new URL(attachmentDownloadUrl); }
-  catch { return res.status(400).json({ error: 'Invalid attachmentDownloadUrl' }); }
+  try {
+    parsed = attachmentDownloadUrl.startsWith('http')
+      ? new URL(attachmentDownloadUrl)
+      : new URL(attachmentDownloadUrl, `https://${siteUrl}`);
+  } catch { return res.status(400).json({ error: 'Invalid attachmentDownloadUrl' }); }
   if (parsed.protocol !== 'https:') {
     return res.status(400).json({ error: 'Only https downloads are allowed' });
   }
