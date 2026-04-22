@@ -147,7 +147,7 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     const usage = extractUsage(response);
 
     await completeExtractionRun(run?.id, {
-      status: parsed ? 'done' : 'error',
+      status: parsed ? 'complete' : 'error',
       resultJson: parsed,
       error: parsed ? null : 'Failed to parse Claude JSON response',
       durationMs: Date.now() - runStart,
