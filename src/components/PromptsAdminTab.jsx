@@ -10,6 +10,7 @@ import {
 } from '../db';
 import { buildSystemPrompt, estimateDryRunCost } from '../promptTemplates';
 import { runExtractionDryRun, runMappingDryRun } from '../promptDryRun';
+import { OCR_FIELD_PROMPTS } from '../equipmentOcrFields';
 import PromptDiffModal from './PromptDiffModal';
 import DryRunDiffPanel from './DryRunDiffPanel';
 
@@ -33,9 +34,13 @@ export default function PromptsAdminTab({ currentUserId }) {
   const [prompts, setPrompts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState('Building');
-  // Prompts are keyed by (migration_type, stage). 'extraction' drives PDF
-  // vision; 'field_mapping' drives the CSV column-mapping AI call.
+  // Prompts are keyed by (migration_type, stage, field_key). 'extraction' drives
+  // PDF vision; 'field_mapping' drives the CSV column-mapping AI call; 'ocr' is
+  // the Equipment Label Property Upload tool and adds a field_key dimension so
+  // each target field can have its own instructions.
   const [selectedStage, setSelectedStage] = useState('extraction');
+  // null = stage-level overall prompt (field_key IS NULL in DB).
+  const [selectedFieldKey, setSelectedFieldKey] = useState(null);
   const [editingBody, setEditingBody] = useState('');
   const [editingNotes, setEditingNotes] = useState('');
   const [busy, setBusy] = useState(false);
@@ -64,12 +69,16 @@ export default function PromptsAdminTab({ currentUserId }) {
 
   useEffect(() => { load(); }, []);
 
-  // All prompts for the selected migration type, newest-version first.
+  // All prompts for the selected (type, stage, field_key) triple, newest first.
+  // The ocr stage narrows by field_key; other stages use field_key=null.
   const versionsForType = useMemo(
     () => prompts
       .filter(p => p.migration_type === selectedType && p.stage === selectedStage)
+      .filter(p => selectedStage === 'ocr'
+        ? (p.field_key || null) === selectedFieldKey
+        : !p.field_key)
       .sort((a, b) => b.version - a.version),
-    [prompts, selectedType, selectedStage],
+    [prompts, selectedType, selectedStage, selectedFieldKey],
   );
 
   const activeVersion = versionsForType.find(v => v.active) || versionsForType[0] || null;
@@ -83,7 +92,7 @@ export default function PromptsAdminTab({ currentUserId }) {
       setEditingBody('');
       setEditingNotes('');
     }
-  }, [selectedType, selectedStage, activeVersion?.id]);
+  }, [selectedType, selectedStage, selectedFieldKey, activeVersion?.id]);
 
   // Load examples attached to the active prompt for the selected type.
   useEffect(() => {
@@ -143,6 +152,7 @@ export default function PromptsAdminTab({ currentUserId }) {
     const result = await createPromptVersion({
       migrationType: selectedType,
       stage: selectedStage,
+      fieldKey: selectedStage === 'ocr' ? selectedFieldKey : null,
       body: editingBody,
       notes: editingNotes || null,
       makeActive: true,
@@ -258,7 +268,15 @@ export default function PromptsAdminTab({ currentUserId }) {
         ].map(s => (
           <button
             key={s.key}
-            onClick={() => setSelectedStage(s.key)}
+            onClick={() => {
+              setSelectedStage(s.key);
+              // The ocr stage is Equipment-only; pin the type when entering
+              // it and reset the field selector to the stage-level prompt.
+              if (s.key === 'ocr') {
+                setSelectedType('Equipment');
+                setSelectedFieldKey(null);
+              }
+            }}
             style={{
               fontSize: 12, padding: '5px 12px', borderRadius: 5, cursor: 'pointer',
               background: selectedStage === s.key ? NAVY : '#fff',
@@ -269,37 +287,65 @@ export default function PromptsAdminTab({ currentUserId }) {
         ))}
       </div>
 
-      {/* Type selector */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Migration type:</label>
-        <select
-          value={selectedType}
-          onChange={e => setSelectedType(e.target.value)}
-          style={{ fontSize: 13, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB` }}
-        >
-          {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 4 }}>
-          Active: <strong style={{ color: NAVY }}>
-            {activeVersion ? `v${activeVersion.version}` : 'none'}
-          </strong>
-          {versionsForType.length > 0 && ` · ${versionsForType.length} version${versionsForType.length === 1 ? '' : 's'}`}
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input
-            type="text"
-            value={customType}
-            onChange={e => setCustomType(e.target.value)}
-            placeholder="Add custom type…"
-            style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB`, width: 160 }}
-          />
-          <button
-            onClick={handleAddCustomType}
-            disabled={!customType.trim()}
-            style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, background: '#fff', border: '1px solid #D1D5DB', cursor: customType.trim() ? 'pointer' : 'not-allowed' }}
-          >+ Add</button>
+      {/* Type selector — hidden for the ocr stage (Equipment-only). */}
+      {selectedStage !== 'ocr' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Migration type:</label>
+          <select
+            value={selectedType}
+            onChange={e => setSelectedType(e.target.value)}
+            style={{ fontSize: 13, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB` }}
+          >
+            {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 4 }}>
+            Active: <strong style={{ color: NAVY }}>
+              {activeVersion ? `v${activeVersion.version}` : 'none'}
+            </strong>
+            {versionsForType.length > 0 && ` · ${versionsForType.length} version${versionsForType.length === 1 ? '' : 's'}`}
+          </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={customType}
+              onChange={e => setCustomType(e.target.value)}
+              placeholder="Add custom type…"
+              style={{ fontSize: 12, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB`, width: 160 }}
+            />
+            <button
+              onClick={handleAddCustomType}
+              disabled={!customType.trim()}
+              style={{ fontSize: 11, padding: '5px 10px', borderRadius: 5, background: '#fff', border: '1px solid #D1D5DB', cursor: customType.trim() ? 'pointer' : 'not-allowed' }}
+            >+ Add</button>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Field selector — only for the ocr stage. */}
+      {selectedStage === 'ocr' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Field:</label>
+          <select
+            value={selectedFieldKey || ''}
+            onChange={e => setSelectedFieldKey(e.target.value || null)}
+            style={{ fontSize: 13, padding: '5px 8px', borderRadius: 5, border: `1px solid #D1D5DB`, minWidth: 260 }}
+          >
+            <option value="">— Overall (applies to every field) —</option>
+            {OCR_FIELD_PROMPTS.map(f => (
+              <option key={f.key} value={f.key}>{f.label}</option>
+            ))}
+          </select>
+          <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 4 }}>
+            Active: <strong style={{ color: NAVY }}>
+              {activeVersion ? `v${activeVersion.version}` : 'none'}
+            </strong>
+            {versionsForType.length > 0 && ` · ${versionsForType.length} version${versionsForType.length === 1 ? '' : 's'}`}
+          </span>
+          <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 'auto' }}>
+            Equipment-only. Field prompts are appended to the overall prompt at run time.
+          </span>
+        </div>
+      )}
 
       {errorMsg && (
         <div style={{ padding: '8px 12px', background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', fontSize: 12, borderRadius: 5 }}>

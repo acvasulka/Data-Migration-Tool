@@ -7,6 +7,7 @@ import { fmxFetch, fmxAttachmentDownload, claudeFetch, parseClaudeText } from '.
 import { fetchAllPages } from './fmxSync';
 import { getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun } from './db';
 import { buildSystemPrompt, extractUsage } from './promptTemplates';
+import { resolvePromptKeyForField, getOcrFieldPromptMeta } from './equipmentOcrFields';
 
 // Claude vision-supported MIME types (bitmap images) and document types (PDF).
 // Anything else is skipped per-attachment so a stray .docx/.dwg doesn't sink
@@ -81,9 +82,24 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     throw new Error('No fields selected for extraction');
   }
 
-  const prompt = await getActivePrompt('Equipment', 'ocr');
+  const prompt = await getActivePrompt('Equipment', 'ocr', null);
   if (!prompt) throw new Error('No active Equipment OCR prompt. Admin must seed one.');
   const examples = await getEnabledExamplesForPrompt(prompt.id);
+
+  // Per-field prompts: for each selected field, resolve it to a registered
+  // prompt key (by label) and pull its active body if one exists. Fields with
+  // no dedicated prompt fall back to the overall stage prompt silently.
+  const fieldPromptEntries = await Promise.all(
+    fieldSelection.map(async (f) => {
+      const key = resolvePromptKeyForField(f);
+      if (!key) return null;
+      const row = await getActivePrompt('Equipment', 'ocr', key);
+      if (!row) return null;
+      const meta = getOcrFieldPromptMeta(key);
+      return { key, label: meta?.label || f.label, fieldLabel: f.label, body: row.body };
+    })
+  );
+  const fieldPrompts = fieldPromptEntries.filter(Boolean);
 
   // Fetch attachment bytes in parallel, but skip unsupported MIME types.
   const rawAttachments = await Promise.all(
@@ -123,8 +139,18 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
       return { parsed: { fields: {}, notes: 'No supported attachments.' }, runId: run?.id, usage: null, attachments: skipped.map(s => ({ ...s, skipped: true })) };
     }
 
+    // Compose the system prompt: overall body first, then any field-specific
+    // guidance blocks so Claude sees the general rules before the per-field
+    // specifics. Buildup is plain-text concatenation — no placeholders.
+    let composedBody = prompt.body;
+    if (fieldPrompts.length) {
+      composedBody += '\n\nFIELD-SPECIFIC GUIDANCE\n';
+      for (const fp of fieldPrompts) {
+        composedBody += `\n— "${fp.fieldLabel}" —\n${fp.body.trim()}\n`;
+      }
+    }
     const system = buildSystemPrompt({
-      body: prompt.body,
+      body: composedBody,
       vars: { MIGRATION_TYPE: 'Equipment' },
       examples,
     });
