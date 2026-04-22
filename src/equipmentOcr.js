@@ -186,8 +186,16 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
       parsed: parsed || { fields: {}, notes: 'parse failure' },
       runId: run?.id,
       usage,
+      // base64 + contentType are kept so the review UI can render the same
+      // bytes Claude saw, without a second round-trip through /api/fmx.
       attachments: [
-        ...usable.map(a => ({ id: a.meta?.id, filename: a.meta?.filename, classification: a.classification })),
+        ...usable.map(a => ({
+          id: a.meta?.id,
+          filename: a.meta?.filename,
+          classification: a.classification,
+          contentType: a.contentType,
+          base64: a.base64,
+        })),
         ...skipped.map(s => ({ ...s, skipped: true })),
       ],
     };

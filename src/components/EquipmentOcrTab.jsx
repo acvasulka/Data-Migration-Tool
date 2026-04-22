@@ -337,6 +337,8 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
     }
   };
 
+  const previewable = (attachments || []).filter(a => !a.skipped && a.base64 && a.contentType);
+
   return (
     <div style={{ marginTop: 16, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '8px 12px', background: '#F9FAFB', fontSize: 12, color: C.textMid, display: 'flex', justifyContent: 'space-between' }}>
@@ -345,6 +347,8 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
           <span>~${usage.costUsd.toFixed(4)} · {usage.inputTokens}in / {usage.outputTokens}out</span>
         )}
       </div>
+      <div style={{ display: 'flex', gap: 0, alignItems: 'stretch' }}>
+      <div style={{ flex: previewable.length ? '1 1 55%' : '1 1 100%', minWidth: 0 }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ background: '#FAFAFA', color: C.navy }}>
@@ -397,6 +401,13 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
           })}
         </tbody>
       </table>
+      </div>
+      {previewable.length > 0 && (
+        <div style={{ flex: '1 1 45%', minWidth: 0, borderLeft: `1px solid ${C.border}`, background: '#F9FAFB' }}>
+          <AttachmentsPreview attachments={previewable} />
+        </div>
+      )}
+      </div>
       {skipped.length > 0 && (
         <div style={{ padding: '8px 12px', background: C.warnBg, borderTop: `1px solid ${C.warnBorder}`, fontSize: 11, color: C.warnText }}>
           Skipped {skipped.length} attachment{skipped.length === 1 ? '' : 's'}: {skipped.map(s => `#${s.id} (${s.reason})`).join(', ')}
@@ -421,6 +432,76 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
           </>
         )}
         {applyError && <span style={{ fontSize: 11, color: C.errText }}>{applyError}</span>}
+      </div>
+    </div>
+  );
+}
+
+// Side-by-side viewer for the attachments Claude just read. Thumbnails along
+// the top switch the main viewer below. Images render inline; PDFs go into an
+// iframe so the user can page through without leaving the app.
+function AttachmentsPreview({ attachments }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [zoomed, setZoomed] = useState(false);
+
+  const active = attachments[activeIdx] || attachments[0];
+  const dataUrl = active ? `data:${active.contentType};base64,${active.base64}` : null;
+
+  if (!active) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 280 }}>
+      <div style={{ display: 'flex', gap: 6, padding: 8, overflowX: 'auto', borderBottom: `1px solid ${C.border}`, background: '#fff' }}>
+        {attachments.map((a, i) => {
+          const isActive = i === activeIdx;
+          const thumbSrc = `data:${a.contentType};base64,${a.base64}`;
+          const isImg = a.classification === 'image';
+          return (
+            <button
+              key={a.id || i}
+              onClick={() => setActiveIdx(i)}
+              title={a.filename || `#${a.id}`}
+              style={{
+                flex: '0 0 auto', width: 56, height: 56, padding: 0,
+                border: `2px solid ${isActive ? C.orange : C.border}`,
+                borderRadius: 4, cursor: 'pointer', background: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+            >
+              {isImg
+                ? <img src={thumbSrc} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }} />
+                : <span style={{ fontSize: 10, color: C.textMid, fontWeight: 600 }}>PDF</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ flex: 1, padding: 10, display: 'flex', flexDirection: 'column', gap: 6, minHeight: 240 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <span style={{ fontSize: 11, color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {active.filename || `attachment #${active.id}`} <span style={{ color: C.textLight }}>· {active.classification}</span>
+          </span>
+          {active.classification === 'image' && (
+            <MiniButton onClick={() => setZoomed(z => !z)}>{zoomed ? 'Fit' : 'Zoom'}</MiniButton>
+          )}
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'auto' }}>
+          {active.classification === 'image' ? (
+            <img
+              src={dataUrl}
+              alt={active.filename || ''}
+              style={zoomed
+                ? { maxWidth: 'none', display: 'block' }
+                : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+            />
+          ) : (
+            <iframe
+              title={active.filename || 'attachment'}
+              src={dataUrl}
+              style={{ width: '100%', height: '100%', minHeight: 260, border: 'none' }}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
