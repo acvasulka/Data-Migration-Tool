@@ -29,8 +29,13 @@ export async function fmxAttachmentDownload({ projectId, downloadUrl }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectId, mode: 'binary', attachmentDownloadUrl: downloadUrl }),
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => null);
   if (!res.ok) {
+    // Surface the exact server branch in the console so downstream callers
+    // (which often swallow the message in per-attachment try/catch) don't
+    // hide it. The downloadUrl is logged too so hostname issues are easy to
+    // spot in the network tab.
+    console.error('[fmxAttachmentDownload]', res.status, data?.error || '(no error body)', { downloadUrl });
     throw new Error(data?.error || `Attachment download failed: ${res.status}`);
   }
   return data; // { base64, contentType, filename, byteCount }
