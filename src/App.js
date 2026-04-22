@@ -285,17 +285,22 @@ export default function App() {
     setFmxSyncData({ customFields: result.customFields || [], systemFields: result.systemFields || [], loading: false, fromCache: result.fromCache });
   };
 
-  // Maps dependency cache keys to crossSheet field labels used in allFields
+  // Maps dependency cache keys to crossSheet field labels used in allFields.
+  // Module-scoped caches (e.g. `request-types:maintenance`,
+  // `work-task-instruction-sets:fit-inspections`) are also surfaced in
+  // depCacheMap under suffixed keys like `Request Type:maintenance` so the
+  // validate-step combobox can pick the right list for the current module.
   const DEP_KEY_TO_CROSS_SHEET = {
-    'buildings':       'Building',
-    'equipment-types': 'Equipment Type',
-    'resources':       'Resource',
-    'equipment':       'Equipment',
-    'users':           'User',
-    'request-types':   'Request Type',
-    'inventory-types': 'Inventory Type',
-    'inventory':       'Inventory',
-    'user-types':      'User Type',
+    'buildings':                  'Building',
+    'equipment-types':            'Equipment Type',
+    'resources':                  'Resource',
+    'equipment':                  'Equipment',
+    'users':                      'User',
+    'request-types':              'Request Type',
+    'inventory-types':            'Inventory Type',
+    'inventory':                  'Inventory',
+    'user-types':                 'User Type',
+    'work-task-instruction-sets': 'Instruction Set',
   };
 
   const handleCustomFieldTypeChange = useCallback(async (fieldId, newType) => {
@@ -313,9 +318,17 @@ export default function App() {
     const rows = await getAllDependencyCaches(selectedProject.id);
     const map = {};
     for (const row of rows) {
-      const crossSheet = DEP_KEY_TO_CROSS_SHEET[row.schema_type];
-      if (crossSheet && row.extra?.items?.length) {
-        map[crossSheet] = row.extra.items.map(i => i.name).filter(Boolean);
+      // Split off any `:slug` suffix so module-scoped caches still match
+      // the base dep key (e.g. `request-types:maintenance` → `request-types`).
+      const [baseKey, moduleSlug] = row.schema_type.split(':');
+      const crossSheet = DEP_KEY_TO_CROSS_SHEET[baseKey];
+      if (!crossSheet || !row.extra?.items?.length) continue;
+      const names = row.extra.items.map(i => i.name).filter(Boolean);
+      if (moduleSlug) {
+        // Module-scoped entry: e.g. `Request Type:maintenance`
+        map[`${crossSheet}:${moduleSlug}`] = names;
+      } else {
+        map[crossSheet] = names;
       }
     }
     setDepCacheMap(map);

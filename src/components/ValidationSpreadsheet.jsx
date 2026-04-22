@@ -16,8 +16,13 @@ export default function ValidationSpreadsheet({
   columnFilters,         // { [col]: string[] } — active filters
   onColumnFilterChange,  // (col, values: string[]) => void
   colUniqueValues,       // { [col]: string[] } — unique values from full dataset
+  columnSuggestions,     // { [col]: string[] } — cached dep names for combobox datalist
   onCustomFieldTypeChange, // (customFieldId, newType) => void
 }) {
+  // Stable datalist id per header — used to associate the <input list=…>
+  // with a rendered <datalist> below the table. We cap the list size to
+  // keep the DOM manageable for large caches (e.g. 5000 users).
+  const DATALIST_CAP = 500;
   const [editCell, setEditCell] = useState(null);
   const [editVal, setEditVal] = useState("");
   const [widths, setWidths] = useState(() => Object.fromEntries(headers.map(h => [h, 130])));
@@ -316,10 +321,13 @@ export default function ValidationSpreadsheet({
                   const key = `${gri}-${h}`, isEditing = editCell === `${ri}-${h}`;
                   const bg = getCellBg(ri, h), fg = getCellColor(ri, h);
                   const w = widths[h] || 130;
+                  const hasSuggestions = !!(columnSuggestions && columnSuggestions[h]?.length);
+                  const listId = hasSuggestions ? `vs-dl-${h.replace(/[^a-zA-Z0-9_-]/g, '_')}` : undefined;
                   return (
                     <td key={h} style={{ padding: 0, borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, width: w, maxWidth: w, background: bg }}>
                       {isEditing
                         ? <input ref={inputRef} value={editVal} onChange={e => setEditVal(e.target.value)} onBlur={() => commit(ri, h)} onKeyDown={e => handleKey(e, ri, h)}
+                            list={listId}
                             style={{ width: "100%", boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "none", outline: `2px solid ${C.blue}`, background: C.white, color: C.textDark, borderRadius: 0, fontFamily: "inherit" }} />
                         : <div onClick={() => startEdit(ri, h, row[h] ?? "")}
                             style={{ padding: "5px 8px", minHeight: 28, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: row[h] ? fg : C.textLight, fontWeight: cellErrors[key] ? 500 : 400 }}>
@@ -342,6 +350,19 @@ export default function ValidationSpreadsheet({
         </table>
       </div>
       <button className="fmx-btn-xs" style={{ marginTop: 8 }} onClick={addRow}>+ Add row</button>
+
+      {/* Shared datalists for dep-backed column combo-box inputs.
+          Free-text typing is still allowed; the list just suggests cached
+          FMX names so users can pick the canonical spelling. Capped at
+          DATALIST_CAP entries per column to keep the DOM light. */}
+      {columnSuggestions && Object.entries(columnSuggestions).map(([col, vals]) => {
+        const listId = `vs-dl-${col.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+        return (
+          <datalist key={listId} id={listId}>
+            {vals.slice(0, DATALIST_CAP).map(v => <option key={v} value={v} />)}
+          </datalist>
+        );
+      })}
 
       {/* Column filter dropdown — rendered outside table scroll container */}
       {renderFilterDropdown()}

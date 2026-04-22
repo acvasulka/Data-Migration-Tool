@@ -377,13 +377,15 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
     const enrichments = FMX_FIELD_ENRICHMENTS[baseType] || {};
     const existingSystemFieldKeys = new Set(postOpts.systemFields.map(sf => sf.key));
 
-    // 1) SortKey-driven synthetic fields: keys in sortKeys that have a matching enrichment
+    // 1) SortKey-driven synthetic fields: keys in sortKeys that have a matching enrichment.
+    //    `isRequired` falls back to the enrichment because these fields have no
+    //    post-options record to carry an API-reported value.
     const syntheticFields = Object.keys(sortKeys)
       .filter(k => enrichments[k] && !existingSystemFieldKeys.has(k))
       .map(k => ({
         key: k,
         label: enrichments[k].label || sortKeys[k],
-        isRequired: false,
+        isRequired: enrichments[k].isRequired === true,
         isPermitted: true,
       }));
 
@@ -399,7 +401,7 @@ export async function syncFmxDataForProject(project, schemaType, forceRefresh = 
       .map(([key, enrich]) => ({
         key,
         label: enrich.label,
-        isRequired: false,
+        isRequired: enrich.isRequired === true,
         isPermitted: true,
       }));
 
