@@ -23,7 +23,12 @@
 
 const FMX_FIELD_ENRICHMENTS = {
   'Building': {
-    name:                                  { label: 'Name' },
+    // isRequired entries on enrichments are a FALLBACK: when the API's
+    // post-options response reports `isRequired`, that wins (see
+    // buildFieldDefinitions). Enrichment covers entities whose post-options
+    // endpoint is missing or doesn't use the systemFields shape — notably
+    // Resource, which only exposes get-options without isRequired flags.
+    name:                                  { label: 'Name', isRequired: true },
     address:                               { label: 'Address' },
     latitude:                              { label: 'Latitude', type: 'number' },
     longitude:                             { label: 'Longitude', type: 'number' },
@@ -46,16 +51,16 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Equipment Type': {
-    name:              { label: 'Name' },
+    name:              { label: 'Name', isRequired: true },
     trackMeters:       { label: 'Track meters' },
     trackDowntime:     { label: 'Track downtime' },
     trackAssetLifespan:{ label: 'Track asset lifespan' },
   },
 
   'Equipment': {
-    tag:                          { label: 'Tag' },
-    equipmentTypeID:              { label: 'Type', crossSheet: 'Equipment Type', lookup: { endpoint: '/v1/equipment-types', searchParam: 'search' } },
-    buildingID:                   { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    tag:                          { label: 'Tag', isRequired: true },
+    equipmentTypeID:              { label: 'Type', crossSheet: 'Equipment Type', lookup: { endpoint: '/v1/equipment-types', searchParam: 'search' }, isRequired: true },
+    buildingID:                   { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' }, isRequired: true },
     locationResourceID:           { label: 'Location', lookup: { endpoint: '/v1/resources', searchParam: 'search' } },
     parentEquipmentID:            { label: 'Parent Equipment', lookup: { endpoint: '/v1/equipment', searchParam: 'search' } },
     inventoryItemIDs:             { label: 'Inventory items', lookup: { endpoint: '/v1/inventory', searchParam: 'search', isArray: true } },
@@ -65,9 +70,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Inventory': {
-    name:              { label: 'Name' },
-    inventoryTypeID:   { label: 'Type', lookup: { endpoint: '/v1/inventory-types', searchParam: 'search' } },
-    buildingID:        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    name:              { label: 'Name', isRequired: true },
+    inventoryTypeID:   { label: 'Type', lookup: { endpoint: '/v1/inventory-types', searchParam: 'search' }, isRequired: true },
+    buildingID:        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' }, isRequired: true },
     locationResourceID:{ label: 'Location', lookup: { endpoint: '/v1/resources', searchParam: 'search' } },
     currentQuantity:   { label: 'Current quantity', type: 'number' },
     sku:               { label: 'SKU' },
@@ -77,8 +82,8 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Resource': {
-    name:                              { label: 'Name' },
-    buildingID:                        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    name:                              { label: 'Name', isRequired: true },
+    buildingID:                        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' }, isRequired: true },
     address:                           { label: 'Address' },
     latitude:                          { label: 'Latitude', type: 'number' },
     longitude:                         { label: 'Longitude', type: 'number' },
@@ -103,9 +108,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'User': {
-    name:                      { label: 'Name' },
-    email:                     { label: 'Email', type: 'email' },
-    userTypeID:                { label: 'User type', lookup: { endpoint: '/v1/user-types', searchParam: 'search' } },
+    name:                      { label: 'Name', isRequired: true },
+    email:                     { label: 'Email', type: 'email', isRequired: true },
+    userTypeID:                { label: 'User type', lookup: { endpoint: '/v1/user-types', searchParam: 'search' }, isRequired: true },
     accessibleBuildingIDs:     { label: 'Building access', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
     phone:                     { label: 'Phone' },
     laborRate:                 { label: 'Labor rate', type: 'number' },
@@ -118,9 +123,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Work Request': {
-    name:              { label: 'Name' },
-    buildingID:        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
-    requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    name:              { label: 'Name', isRequired: true },
+    buildingID:        { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' }, isRequired: true },
+    requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' }, isRequired: true },
     locationResourceID:{ label: 'Location', lookup: { endpoint: '/v1/resources', searchParam: 'search' } },
     otherLocation:     { label: 'Other Location' },
     latitude:          { label: 'Latitude', type: 'number' },
@@ -144,9 +149,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Schedule Request': {
-    name:               { label: 'Name' },
-    requestTypeID:      { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
-    buildingIDs:        { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
+    name:               { label: 'Name', isRequired: true },
+    requestTypeID:      { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' }, isRequired: true },
+    buildingIDs:        { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true }, isRequired: true },
     resourceQuantities: { label: 'Resources', lookup: { endpoint: '/v1/resources', searchParam: 'search', isArray: true } },
     otherResource:      { label: 'Other Resource' },
     isPrivate:          { label: 'Is Private' },
@@ -170,8 +175,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Work Task': {
-    name:              { label: 'Name' },
-    requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    name:              { label: 'Name', isRequired: true },
+    requestTypeID:     { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' }, isRequired: true },
+    instructionSetID:  { label: 'Instruction Set', lookup: { endpoint: '/v1/{module}/instruction-sets', searchParam: 'search' } },
     mode:              { label: 'Mode' },
     nextDueDate:       { label: 'Next Due Date', type: 'date' },
     buildingIDs:       { label: 'Buildings', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search', isArray: true } },
@@ -182,9 +188,9 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Transportation Request': {
-    name:                        { label: 'Name' },
-    requestTypeID:               { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
-    buildingID:                  { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' } },
+    name:                        { label: 'Name', isRequired: true },
+    requestTypeID:               { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' }, isRequired: true },
+    buildingID:                  { label: 'Building', crossSheet: 'Building', lookup: { endpoint: '/v1/buildings', searchParam: 'search' }, isRequired: true },
     pickupLocationResourceID:    { label: 'Pickup Location', lookup: { endpoint: '/v1/resources', searchParam: 'search' } },
     pickupLocation:              { label: 'Pickup Location Text' },
     onBehalfOfUserID:            { label: 'On Behalf Of' },
@@ -194,12 +200,12 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Accounting Account': {
-    name: { label: 'Name' },
+    name: { label: 'Name', isRequired: true },
   },
 
   'Requisition': {
-    title:            { label: 'Title' },
-    requestTypeID:    { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' } },
+    title:            { label: 'Title', isRequired: true },
+    requestTypeID:    { label: 'Request Type', lookup: { endpoint: '/v1/request-types', searchParam: 'search' }, isRequired: true },
     dueDate:          { label: 'Due Date', type: 'date' },
     memo:             { label: 'Memo' },
     supplierUserID:   { label: 'Supplier', lookup: { endpoint: '/v1/users', searchParam: 'search' } },
@@ -218,19 +224,19 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Inventory Adjustment': {
-    inventoryID:          { label: 'Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
+    inventoryID:          { label: 'Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' }, isRequired: true },
     name:                 { label: 'Name' },
-    adjustment:           { label: 'Adjustment', type: 'number' },
+    adjustment:           { label: 'Adjustment', type: 'number', isRequired: true },
     transactionUnitPrice: { label: 'Unit Price', type: 'number' },
     updateUnitPrice:      { label: 'Update Unit Price' },
     description:          { label: 'Description' },
   },
 
   'Inventory Transfer': {
-    inventoryID:          { label: 'From Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
-    otherInventoryItemID: { label: 'To Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' } },
+    inventoryID:          { label: 'From Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' }, isRequired: true },
+    otherInventoryItemID: { label: 'To Inventory Item', crossSheet: 'Inventory', lookup: { endpoint: '/v1/inventory', searchParam: 'search' }, isRequired: true },
     name:                 { label: 'Name' },
-    transferredQuantity:  { label: 'Quantity', type: 'number' },
+    transferredQuantity:  { label: 'Quantity', type: 'number', isRequired: true },
     transferToOtherItem:  { label: 'Transfer To Other Item' },
     transactionUnitPrice: { label: 'Unit Price', type: 'number' },
     updateUnitPrice:      { label: 'Update Unit Price' },
@@ -238,14 +244,14 @@ const FMX_FIELD_ENRICHMENTS = {
   },
 
   'Equipment Log': {
-    equipmentID:   { label: 'Equipment', crossSheet: 'Equipment', lookup: { endpoint: '/v1/equipment', searchParam: 'search' } },
-    name:          { label: 'Name' },
+    equipmentID:   { label: 'Equipment', crossSheet: 'Equipment', lookup: { endpoint: '/v1/equipment', searchParam: 'search' }, isRequired: true },
+    name:          { label: 'Name', isRequired: true },
     cost:          { label: 'Cost', type: 'number' },
     description:   { label: 'Description' },
   },
 
   'Utility Provider': {
-    name:                         { label: 'Name' },
+    name:                         { label: 'Name', isRequired: true },
     utilityTypeID:                { label: 'Utility Type', type: 'number' },
     repeatInterval:               { label: 'Repeat Interval' },
     isConsumptionTracked:         { label: 'Track Consumption' },
@@ -316,9 +322,16 @@ export function getDepKeysForSchema(schemaType) {
  * @param {Array}  systemFields  From /post-options: [{ key, label, isRequired, isPermitted, maximumLength }]
  * @returns {Array} Field definitions
  */
-export function buildFieldDefinitions(schemaType, systemFields) {
+export function buildFieldDefinitions(schemaType, systemFields, overrides = null, moduleQualifiedSchemaType = null) {
   const enrichments = FMX_FIELD_ENRICHMENTS[schemaType];
   if (!enrichments || !Array.isArray(systemFields) || systemFields.length === 0) return null;
+
+  // Admin overrides resolved per-field below. Prefer a module-qualified row
+  // (e.g. "Work Task:fit-inspections") over the base-schema row so admins
+  // can tighten rules for a specific module without affecting siblings.
+  const qualifiedOverrides = overrides && moduleQualifiedSchemaType
+    ? overrides[moduleQualifiedSchemaType] : null;
+  const baseOverrides = overrides ? overrides[schemaType] : null;
 
   const defs = [];
 
@@ -328,10 +341,20 @@ export function buildFieldDefinitions(schemaType, systemFields) {
     const enrich = enrichments[sf.key] || {};
     const isLookup = !!enrich.lookup;
 
+    // Precedence: admin override > API /post-options > enrichment default.
+    // `is_required === null` on an override row means "no opinion, defer".
+    const ov = qualifiedOverrides?.[sf.key] ?? baseOverrides?.[sf.key];
+    let required;
+    if (ov && ov.is_required !== null && ov.is_required !== undefined) {
+      required = !!ov.is_required;
+    } else {
+      required = sf.isRequired || enrich.isRequired || false;
+    }
+
     const def = {
       name: enrich.label || sf.label,
       apiKey: isLookup ? null : sf.key,
-      required: sf.isRequired || false,
+      required,
       type: enrich.type || 'string',
     };
 

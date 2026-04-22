@@ -3,11 +3,12 @@ import { updateProfileRole, deleteUserViaEdgeFunction, createUserViaEdgeFunction
 import PromptsAdminTab from './PromptsAdminTab';
 import CorrectionsAdminTab from './CorrectionsAdminTab';
 import RunsAdminTab from './RunsAdminTab';
+import FieldRulesAdminTab from './FieldRulesAdminTab';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
 
-export default function AdminPanelModal({ currentUser, currentProfile, allProfiles, projects, onClose, onProfilesChanged }) {
+export default function AdminPanelModal({ currentUser, currentProfile, allProfiles, projects, onClose, onProfilesChanged, fieldOverrides, onFieldOverridesChanged }) {
   const [busy, setBusy] = useState(null); // userId currently being operated on
   const [errorMsg, setErrorMsg] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -109,6 +110,7 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
                 : activeTab === 'prompts' ? 'Admin-editable prompts (PDF extraction + CSV field mapping)'
                 : activeTab === 'corrections' ? 'User corrections across PDF + CSV flows'
                 : activeTab === 'runs' ? 'Every prompt invocation, logged'
+                : activeTab === 'fields' ? 'Override required-flag defaults per entity/field'
                 : ''}
             </p>
           </div>
@@ -132,6 +134,7 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
             { id: 'prompts', label: 'Prompts' },
             { id: 'corrections', label: 'Corrections' },
             { id: 'runs', label: 'Runs' },
+            { id: 'fields', label: 'Field Rules' },
           ].map(tab => (
             <button
               key={tab.id}
@@ -157,6 +160,13 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
         )}
         {activeTab === 'runs' && (
           <RunsAdminTab allProfiles={allProfiles} currentUserId={currentUser.id} />
+        )}
+        {activeTab === 'fields' && (
+          <FieldRulesAdminTab
+            fieldOverrides={fieldOverrides || {}}
+            onFieldOverridesChanged={onFieldOverridesChanged}
+            currentUserId={currentUser.id}
+          />
         )}
 
         {activeTab === 'users' && (<>

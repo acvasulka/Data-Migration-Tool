@@ -336,6 +336,24 @@ export default function StepValidate({
     setPage(0);
   };
 
+  // Build per-column autocomplete suggestions. Each header mapped to a
+  // dependency-backed field ({crossSheet: "Building" | "Request Type" | …})
+  // gets the cached names from depCacheMap. For module-scoped deps
+  // (Request Type, Instruction Set) we prefer the `{label}:{slug}` bucket
+  // derived from the current schemaType (e.g. "Work Task:fit-inspections").
+  const columnSuggestions = useMemo(() => {
+    const map = {};
+    if (!depCacheMap || !allFields) return map;
+    const moduleSlug = schemaType && schemaType.includes(':') ? schemaType.split(':')[1] : null;
+    for (const f of allFields) {
+      if (!f?.crossSheet) continue;
+      const scopedKey = moduleSlug ? `${f.crossSheet}:${moduleSlug}` : null;
+      const list = (scopedKey && depCacheMap[scopedKey]) || depCacheMap[f.crossSheet];
+      if (list && list.length) map[f.name] = list;
+    }
+    return map;
+  }, [allFields, depCacheMap, schemaType]);
+
   const pageStart = clampedPage * PAGE_SIZE + 1;
   const pageEnd = Math.min((clampedPage + 1) * PAGE_SIZE, activeRows.length);
   const hiddenRowCount = mappedRows.length - activeRows.length;
@@ -572,6 +590,7 @@ export default function StepValidate({
         columnFilters={columnFilters}
         onColumnFilterChange={handleColumnFilterChange}
         colUniqueValues={colUniqueValues}
+        columnSuggestions={columnSuggestions}
         onCustomFieldTypeChange={onCustomFieldTypeChange}
       />
 

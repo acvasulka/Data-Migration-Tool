@@ -961,3 +961,76 @@ export async function incrementExampleUsage(exampleIds) {
     return false;
   }
 }
+
+// ─── Field overrides (admin-editable required-flag rules) ──────────────
+// Migration 017. The override table lets admins correct a field's required
+// status without a redeploy. Lookup precedence at validation time is:
+//   admin override  >  API /post-options  >  FMX_FIELD_ENRICHMENTS default.
+
+/**
+ * Fetch all field overrides. Returned as a nested map
+ *   { [schemaType]: { [fieldName]: { is_required, notes, updated_at } } }
+ * so callers can do `overrides[schemaType]?.[fieldName]?.is_required`.
+ * Includes both base schemas ("Work Task") and module-qualified variants.
+ */
+export async function getFieldOverrides() {
+  try {
+    const { data, error } = await supabase
+      .from('field_overrides')
+      .select('schema_type, field_name, is_required, notes, updated_at');
+    if (error) return {};
+    const map = {};
+    for (const row of data || []) {
+      if (!map[row.schema_type]) map[row.schema_type] = {};
+      map[row.schema_type][row.field_name] = {
+        is_required: row.is_required,
+        notes: row.notes,
+        updated_at: row.updated_at,
+      };
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Upsert a single override row. Pass `isRequired=null` to explicitly record
+ * "no opinion" (falls back to API/enrichment). Pass the whole field in
+ * `values` if you want to clear both is_required and notes.
+ * Admin-only by RLS.
+ */
+export async function upsertFieldOverride(schemaType, fieldName, values, userId) {
+  try {
+    const payload = {
+      schema_type: schemaType,
+      field_name: fieldName,
+      is_required: values.is_required ?? null,
+      notes: values.notes ?? null,
+      updated_by: userId || null,
+    };
+    const { error } = await supabase
+      .from('field_overrides')
+      .upsert(payload, { onConflict: 'schema_type,field_name' });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete an override row (admin-only). Useful when an admin wants to
+ * revert to API/enrichment defaults without leaving a null-valued row.
+ */
+export async function deleteFieldOverride(schemaType, fieldName) {
+  try {
+    const { error } = await supabase
+      .from('field_overrides')
+      .delete()
+      .eq('schema_type', schemaType)
+      .eq('field_name', fieldName);
+    return !error;
+  } catch {
+    return false;
+  }
+}
