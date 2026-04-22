@@ -322,9 +322,16 @@ export function getDepKeysForSchema(schemaType) {
  * @param {Array}  systemFields  From /post-options: [{ key, label, isRequired, isPermitted, maximumLength }]
  * @returns {Array} Field definitions
  */
-export function buildFieldDefinitions(schemaType, systemFields) {
+export function buildFieldDefinitions(schemaType, systemFields, overrides = null, moduleQualifiedSchemaType = null) {
   const enrichments = FMX_FIELD_ENRICHMENTS[schemaType];
   if (!enrichments || !Array.isArray(systemFields) || systemFields.length === 0) return null;
+
+  // Admin overrides resolved per-field below. Prefer a module-qualified row
+  // (e.g. "Work Task:fit-inspections") over the base-schema row so admins
+  // can tighten rules for a specific module without affecting siblings.
+  const qualifiedOverrides = overrides && moduleQualifiedSchemaType
+    ? overrides[moduleQualifiedSchemaType] : null;
+  const baseOverrides = overrides ? overrides[schemaType] : null;
 
   const defs = [];
 
@@ -334,13 +341,20 @@ export function buildFieldDefinitions(schemaType, systemFields) {
     const enrich = enrichments[sf.key] || {};
     const isLookup = !!enrich.lookup;
 
+    // Precedence: admin override > API /post-options > enrichment default.
+    // `is_required === null` on an override row means "no opinion, defer".
+    const ov = qualifiedOverrides?.[sf.key] ?? baseOverrides?.[sf.key];
+    let required;
+    if (ov && ov.is_required !== null && ov.is_required !== undefined) {
+      required = !!ov.is_required;
+    } else {
+      required = sf.isRequired || enrich.isRequired || false;
+    }
+
     const def = {
       name: enrich.label || sf.label,
       apiKey: isLookup ? null : sf.key,
-      // API-reported requiredness wins; enrichment fills in gaps for entities
-      // whose post-options endpoint doesn't exist or doesn't carry the flag
-      // (e.g. Resource — only /v1/resources/get-options is exposed).
-      required: sf.isRequired || enrich.isRequired || false,
+      required,
       type: enrich.type || 'string',
     };
 

@@ -4,7 +4,7 @@ import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects, getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, recordCorrections, incrementExampleUsage } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects, getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, recordCorrections, incrementExampleUsage, getFieldOverrides } from "./db";
 import { buildSystemPrompt, extractUsage } from "./promptTemplates";
 import UserMenu from "./components/UserMenu";
 import ProfileEditModal from "./components/ProfileEditModal";
@@ -161,6 +161,10 @@ export default function App() {
   const [mappingSources, setMappingSources] = useState({});
   const [savedRules, setSavedRules] = useState({});
   const [depCacheMap, setDepCacheMap] = useState({}); // { [crossSheetType]: string[] } from FMX live dep cache
+  // Admin-editable required-flag overrides keyed by schema_type → field_name.
+  // Loaded once at app boot; admin edits in FieldRulesAdminTab call
+  // setFieldOverrides so all open projects see the new precedence immediately.
+  const [fieldOverrides, setFieldOverrides] = useState({});
   const [depAutoSyncing, setDepAutoSyncing] = useState(false);
   const [fmxSyncData, setFmxSyncData] = useState({ customFields: [], systemFields: [], loading: false, fromCache: undefined });
   const [checklistRefreshKey, setChecklistRefreshKey] = useState(0);
@@ -243,10 +247,10 @@ export default function App() {
     if (!schemaType) return [];
     // Dynamic: merge live systemFields from /post-options with enrichment metadata
     if (hasApiFields && fmxSyncData.systemFields?.length && hasEnrichments(baseType)) {
-      return buildFieldDefinitions(baseType, fmxSyncData.systemFields) || [];
+      return buildFieldDefinitions(baseType, fmxSyncData.systemFields, fieldOverrides, schemaType) || [];
     }
     return []; // No fallback — API fields required
-  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields]);
+  }, [schemaType, hasApiFields, baseType, fmxSyncData.systemFields, fieldOverrides]);
 
   const allFields = schemaType ? [
     ...baseFields,
@@ -336,6 +340,14 @@ export default function App() {
 
   // Load dep cache whenever selected project changes
   useEffect(() => { loadDepCacheMap(); }, [loadDepCacheMap]);
+
+  // Load admin-editable field overrides once per session. Reloaded when the
+  // admin panel saves changes via the exposed setter.
+  const loadFieldOverrides = useCallback(async () => {
+    const map = await getFieldOverrides();
+    setFieldOverrides(map);
+  }, []);
+  useEffect(() => { loadFieldOverrides(); }, [loadFieldOverrides]);
 
   // Keyboard shortcuts for wizard navigation: ← prev step, → next step, Escape to Overview
   useEffect(() => {
@@ -931,6 +943,8 @@ export default function App() {
           projects={allProjects}
           onClose={() => setShowAdminPanel(false)}
           onProfilesChanged={reloadProfiles}
+          onFieldOverridesChanged={loadFieldOverrides}
+          fieldOverrides={fieldOverrides}
         />
       )}
 
