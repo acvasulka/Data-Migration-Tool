@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { updateProfileRole, deleteUserViaEdgeFunction, createUserViaEdgeFunction } from '../db';
+import { updateProfileRole, deleteUserViaEdgeFunction, createUserViaEdgeFunction, setUserFeature } from '../db';
 import PromptsAdminTab from './PromptsAdminTab';
 import CorrectionsAdminTab from './CorrectionsAdminTab';
 import RunsAdminTab from './RunsAdminTab';
@@ -7,6 +7,12 @@ import FieldRulesAdminTab from './FieldRulesAdminTab';
 
 const NAVY = '#041662';
 const ORANGE = '#CF4A12';
+
+// Optional tools that admins grant per-user via profiles.feature_permissions.
+// Keep keys stable — they are the contract with hasFeature() callers.
+const FEATURE_FLAGS = [
+  { key: 'equipment_ocr', label: 'Equipment OCR' },
+];
 
 export default function AdminPanelModal({ currentUser, currentProfile, allProfiles, projects, onClose, onProfilesChanged, fieldOverrides, onFieldOverridesChanged }) {
   const [busy, setBusy] = useState(null); // userId currently being operated on
@@ -63,6 +69,15 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
     }
     return map;
   }, [projects]);
+
+  const handleFeatureToggle = async (userId, key, enabled) => {
+    setErrorMsg('');
+    setBusy(userId);
+    const result = await setUserFeature(userId, key, enabled);
+    if (!result) setErrorMsg('Could not update feature permission.');
+    await onProfilesChanged?.();
+    setBusy(null);
+  };
 
   const handleRoleChange = async (userId, newRole) => {
     setErrorMsg('');
@@ -247,6 +262,7 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
               <tr style={{ background: '#F9FAFB', position: 'sticky', top: 0 }}>
                 <th style={th}>User</th>
                 <th style={th}>Role</th>
+                <th style={th} title="Per-user access to optional tools. Admins implicitly have all features.">Features</th>
                 <th style={{ ...th, textAlign: 'center' }}>Projects</th>
                 <th style={{ ...th, textAlign: 'right' }}>Actions</th>
               </tr>
@@ -286,6 +302,25 @@ export default function AdminPanelModal({ currentUser, currentProfile, allProfil
                         <option value="user">User</option>
                         <option value="admin">Admin</option>
                       </select>
+                    </td>
+
+                    {/* Features */}
+                    <td style={td}>
+                      {FEATURE_FLAGS.map(f => {
+                        const isAdmin = p.role === 'admin';
+                        const enabled = isAdmin || !!(p.feature_permissions || {})[f.key];
+                        return (
+                          <label key={f.key} title={isAdmin ? 'Admins have all features' : f.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#374151', marginRight: 10, cursor: isAdmin ? 'not-allowed' : 'pointer', opacity: isAdmin ? 0.55 : 1 }}>
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              disabled={busyThis || isAdmin}
+                              onChange={e => handleFeatureToggle(p.id, f.key, e.target.checked)}
+                            />
+                            {f.label}
+                          </label>
+                        );
+                      })}
                     </td>
 
                     {/* Project count */}

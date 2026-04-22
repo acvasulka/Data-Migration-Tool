@@ -76,14 +76,39 @@ export async function getProjectByFmxUrl(fmxSiteUrl) {
 
 export async function getAllProfiles() {
   return dbQuery(
-    () => supabase.from('profiles').select('id, full_name, email, role'),
+    () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions'),
     []
   );
 }
 
 export async function getCurrentProfile(userId) {
   return dbQuery(
-    () => supabase.from('profiles').select('id, full_name, email, role').eq('id', userId).single(),
+    () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions').eq('id', userId).single(),
+    null
+  );
+}
+
+// Feature-flag helpers. Admins implicitly have every feature.
+// Shape on profiles.feature_permissions: { "<key>": true }.
+export function hasFeature(profile, key) {
+  if (!profile) return false;
+  if (profile.role === 'admin') return true;
+  const flags = profile.feature_permissions || {};
+  return flags[key] === true;
+}
+
+export async function setUserFeature(userId, key, enabled) {
+  // Read-modify-write the JSONB column. Admin RLS policy guards this call.
+  const { data: current } = await supabase
+    .from('profiles')
+    .select('feature_permissions')
+    .eq('id', userId)
+    .single();
+  const next = { ...(current?.feature_permissions || {}) };
+  if (enabled) next[key] = true;
+  else delete next[key];
+  return dbQuery(
+    () => supabase.from('profiles').update({ feature_permissions: next }).eq('id', userId).select('id, feature_permissions').single(),
     null
   );
 }
