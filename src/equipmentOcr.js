@@ -155,27 +155,89 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
       examples,
     });
 
-    const content = [
-      {
-        type: 'text',
-        text: buildUserPromptText(equipment, fieldSelection),
-      },
-      ...usable.map(a => attachmentToClaudeBlock(a)),
-    ];
+    // Shrink oversized images client-side so each POST to /api/claude stays
+    // under Vercel's ~4.5 MB serverless body limit. PDFs are left untouched
+    // (can't easily resize in-browser); oversized PDFs are skipped below.
+    const prepared = [];
+    for (const a of usable) {
+      if (a.classification === 'image') {
+        const shrunk = await shrinkImageIfNeeded(a);
+        prepared.push(shrunk);
+      } else {
+        prepared.push(a);
+      }
+    }
 
-    const response = await claudeFetch({
-      max_tokens: 2000,
-      system,
-      messages: [{ role: 'user', content }],
-    });
+    // Batch: one Claude call per attachment. Multi-attachment equipment with
+    // several phone photos will otherwise pile up past the 4.5 MB request cap
+    // even after shrinking. Per-attachment calls also give us real source
+    // attribution (the attachment ID that produced a field) without relying
+    // on Claude to self-report it.
+    const PER_CALL_BUDGET = 4_000_000; // per-request base64 budget (safety margin under 4.5 MB)
+    const mergedFields = {};
+    const perAttachmentUsage = [];
+    const overflowed = [];
+    const includedForPreview = [];
 
-    const parsed = parseJsonResponse(response);
-    const usage = extractUsage(response);
+    for (const a of prepared) {
+      const size = a.base64 ? a.base64.length : 0;
+      if (!a.base64 || size > PER_CALL_BUDGET) {
+        overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: 'skipped: attachment exceeds per-request size budget' });
+        continue;
+      }
+      const content = [
+        { type: 'text', text: buildUserPromptText(equipment, fieldSelection) },
+        attachmentToClaudeBlock(a),
+      ];
+      try {
+        const resp = await claudeFetch({
+          max_tokens: 2000,
+          system,
+          messages: [{ role: 'user', content }],
+        });
+        const parsed = parseJsonResponse(resp);
+        const u = extractUsage(resp);
+        perAttachmentUsage.push(u);
+        includedForPreview.push(a);
+
+        const fields = parsed?.fields || {};
+        for (const [label, entry] of Object.entries(fields)) {
+          if (!entry || entry.value == null || entry.value === '') continue;
+          const existing = mergedFields[label];
+          const incoming = {
+            ...entry,
+            source_attachment_id: entry.source_attachment_id || a.meta?.id || null,
+          };
+          if (!existing) {
+            mergedFields[label] = incoming;
+            continue;
+          }
+          // Prefer the higher-confidence answer; fall back to first non-empty.
+          const ec = Number(existing.confidence ?? 0);
+          const ic = Number(incoming.confidence ?? 0);
+          if (ic > ec) mergedFields[label] = incoming;
+        }
+      } catch (e) {
+        overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: `OCR call failed: ${e?.message || 'unknown'}` });
+      }
+    }
+
+    const parsed = Object.keys(mergedFields).length
+      ? { fields: mergedFields, notes: `merged from ${perAttachmentUsage.length} attachment call(s)` }
+      : null;
+    const usage = perAttachmentUsage.reduce(
+      (acc, u) => ({
+        inputTokens: (acc.inputTokens || 0) + (u?.inputTokens || 0),
+        outputTokens: (acc.outputTokens || 0) + (u?.outputTokens || 0),
+        costUsd: (acc.costUsd || 0) + (u?.costUsd || 0),
+      }),
+      { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+    );
 
     await completeExtractionRun(run?.id, {
       status: parsed ? 'complete' : 'error',
       resultJson: parsed,
-      error: parsed ? null : 'Failed to parse Claude JSON response',
+      error: parsed ? null : 'No OCR results (all attachment calls failed or returned empty)',
       durationMs: Date.now() - runStart,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
@@ -183,19 +245,20 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     });
 
     return {
-      parsed: parsed || { fields: {}, notes: 'parse failure' },
+      parsed: parsed || { fields: {}, notes: 'no results' },
       runId: run?.id,
       usage,
       // base64 + contentType are kept so the review UI can render the same
       // bytes Claude saw, without a second round-trip through /api/fmx.
       attachments: [
-        ...usable.map(a => ({
+        ...includedForPreview.map(a => ({
           id: a.meta?.id,
           filename: a.meta?.filename,
           classification: a.classification,
           contentType: a.contentType,
           base64: a.base64,
         })),
+        ...overflowed.map(s => ({ ...s, skipped: true })),
         ...skipped.map(s => ({ ...s, skipped: true })),
       ],
     };
@@ -243,6 +306,46 @@ function attachmentToClaudeBlock(a) {
     type: 'image',
     source: { type: 'base64', media_type: a.contentType || 'image/jpeg', data: a.base64 },
   };
+}
+
+// Downscale an image attachment if its base64 payload is beyond a threshold.
+// Uses the browser Canvas — no extra deps. Targets ~1600px longest edge and
+// re-encodes JPEG at quality 0.82, which is plenty for nameplate OCR and
+// reliably lands well under Vercel's 4.5 MB body cap.
+async function shrinkImageIfNeeded(a) {
+  const THRESHOLD = 1_200_000; // ~1.2 MB of base64 ≈ ~900 KB binary
+  if (!a?.base64 || a.base64.length <= THRESHOLD) return a;
+  if (typeof document === 'undefined' || typeof Image === 'undefined') return a;
+
+  try {
+    const dataUrl = `data:${a.contentType || 'image/jpeg'};base64,${a.base64}`;
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('image decode failed'));
+      el.src = dataUrl;
+    });
+
+    const maxEdge = 1600;
+    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const outUrl = canvas.toDataURL('image/jpeg', 0.82);
+    const comma = outUrl.indexOf(',');
+    const outBase64 = comma >= 0 ? outUrl.slice(comma + 1) : '';
+    if (!outBase64 || outBase64.length >= a.base64.length) return a;
+
+    return { ...a, base64: outBase64, contentType: 'image/jpeg' };
+  } catch {
+    return a;
+  }
 }
 
 function parseJsonResponse(response) {
