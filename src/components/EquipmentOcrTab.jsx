@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { C } from '../theme';
 import { syncFmxDataForProject } from '../fmxSync';
 import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
+import { getAllDependencyCaches, listOcrdEquipmentIds } from '../db';
 
 // Equipment Attachment OCR tool.
 //
@@ -524,19 +525,97 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
 
+  // Filter + selection state
+  const [filters, setFilters] = useState({ buildingId: '', equipmentTypeId: '', tagQuery: '' });
+  const [hideOcrd, setHideOcrd] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [ocrdIds, setOcrdIds] = useState(() => new Set());
+  const [ocrdLoading, setOcrdLoading] = useState(false);
+
+  // Dependency caches for building / equipment-type name maps.
+  const [deps, setDeps] = useState({ buildings: [], equipmentTypes: [] });
+
+  // Load dep caches + previously-OCR'd id set once per project.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    (async () => {
+      const caches = await getAllDependencyCaches(projectId);
+      if (cancelled) return;
+      const byKey = Object.fromEntries((caches || []).map(r => [r.schema_type, r.extra?.items || []]));
+      setDeps({
+        buildings: byKey['buildings'] || [],
+        equipmentTypes: byKey['equipment-types'] || [],
+      });
+    })();
+    refreshOcrd();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function refreshOcrd() {
+    if (!projectId) return;
+    setOcrdLoading(true);
+    const ids = await listOcrdEquipmentIds(projectId);
+    setOcrdIds(ids);
+    setOcrdLoading(false);
+  }
+
+  const buildingName = useMemo(() => {
+    const m = new Map();
+    for (const b of deps.buildings) m.set(String(b.id), b.name);
+    return m;
+  }, [deps.buildings]);
+  const equipTypeName = useMemo(() => {
+    const m = new Map();
+    for (const t of deps.equipmentTypes) m.set(String(t.id), t.name);
+    return m;
+  }, [deps.equipmentTypes]);
+
+  const visible = useMemo(() => {
+    const q = filters.tagQuery.trim().toLowerCase();
+    return eligible.filter(e => {
+      if (filters.buildingId && String(e.buildingID ?? '') !== filters.buildingId) return false;
+      if (filters.equipmentTypeId && String(e.equipmentTypeID ?? '') !== filters.equipmentTypeId) return false;
+      if (q && !(e.tag || '').toLowerCase().includes(q) && !String(e.id).includes(q)) return false;
+      if (hideOcrd && ocrdIds.has(String(e.id))) return false;
+      return true;
+    });
+  }, [eligible, filters, hideOcrd, ocrdIds]);
+
+  const hiddenOcrdCount = useMemo(
+    () => eligible.filter(e => ocrdIds.has(String(e.id))).length,
+    [eligible, ocrdIds]
+  );
+
   const updateItem = (id, patch) => setItems(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
+  const toggleSelected = (id) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    const k = String(id);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+  const selectAllVisible = () => setSelectedIds(prev => {
+    const next = new Set(prev);
+    for (const e of visible) next.add(String(e.id));
+    return next;
+  });
+  const clearSelection = () => setSelectedIds(new Set());
+
   const runBatch = async () => {
-    if (!eligible.length) return;
+    const targets = Array.from(selectedIds)
+      .map(id => eligible.find(e => String(e.id) === id))
+      .filter(Boolean);
+    if (!targets.length) return;
     setRunning(true);
-    setProgress({ done: 0, total: eligible.length });
-    // Seed state
-    const seed = {};
-    for (const e of eligible) seed[e.id] = { status: 'pending', expanded: false };
+    setProgress({ done: 0, total: targets.length });
+    const seed = { ...items };
+    for (const e of targets) seed[e.id] = { status: 'pending', expanded: false };
     setItems(seed);
 
-    for (let i = 0; i < eligible.length; i++) {
-      const e = eligible[i];
+    for (let i = 0; i < targets.length; i++) {
+      const e = targets[i];
       updateItem(e.id, { status: 'running' });
       try {
         const full = await getEquipment(projectId, e.id);
@@ -548,10 +627,15 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
           usage: res.usage,
           attachments: res.attachments,
         });
+        setOcrdIds(prev => {
+          const next = new Set(prev);
+          next.add(String(e.id));
+          return next;
+        });
       } catch (err) {
         updateItem(e.id, { status: 'error', error: err?.message || 'OCR failed' });
       }
-      setProgress({ done: i + 1, total: eligible.length });
+      setProgress({ done: i + 1, total: targets.length });
     }
     setRunning(false);
   };
@@ -559,8 +643,10 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
   const toggleExpanded = (id) => updateItem(id, { expanded: !items[id]?.expanded });
   const markApplied = (id, updated) => updateItem(id, { status: 'applied', fullEquipment: updated || items[id]?.fullEquipment });
 
+  const resultIds = Object.keys(items);
+
   return (
-    <Section title="Batch: all equipment with attachments">
+    <Section title="Batch: pick equipment to OCR">
       {!equipment && !equipmentLoading && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <PrimaryButton onClick={onLoadEquipment}>Load project equipment</PrimaryButton>
@@ -573,37 +659,141 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
       {equipment && (
         <>
           <div style={{ fontSize: 12, color: C.textMid, marginBottom: 8 }}>
-            {equipment.length} total equipment · <strong style={{ color: C.navy }}>{eligible.length}</strong> with attachments
-            {eligible.length > 0 && (
-              <> · ~{eligible.reduce((s, e) => s + (e.attachmentIDs?.length || 0), 0)} total attachments</>
+            {equipment.length} total · <strong style={{ color: C.navy }}>{eligible.length}</strong> with attachments · {visible.length} shown · {selectedIds.size} selected
+          </div>
+
+          {/* Filter bar */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
+            padding: 10, border: `1px solid ${C.border}`, borderRadius: 6,
+            background: '#FAFAFA', marginBottom: 10,
+          }}>
+            <select
+              value={filters.buildingId}
+              onChange={e => setFilters(f => ({ ...f, buildingId: e.target.value }))}
+              style={selectStyle}
+              disabled={!deps.buildings.length}
+            >
+              <option value="">All buildings</option>
+              {deps.buildings.map(b => (
+                <option key={b.id} value={String(b.id)}>{b.name}</option>
+              ))}
+            </select>
+            <select
+              value={filters.equipmentTypeId}
+              onChange={e => setFilters(f => ({ ...f, equipmentTypeId: e.target.value }))}
+              style={selectStyle}
+              disabled={!deps.equipmentTypes.length}
+            >
+              <option value="">All equipment types</option>
+              {deps.equipmentTypes.map(t => (
+                <option key={t.id} value={String(t.id)}>{t.name}</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={filters.tagQuery}
+              onChange={e => setFilters(f => ({ ...f, tagQuery: e.target.value }))}
+              placeholder="Search tag or id…"
+              style={{ ...selectStyle, minWidth: 180 }}
+            />
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12, color: C.textDark }}>
+              <input
+                type="checkbox"
+                checked={hideOcrd}
+                onChange={e => setHideOcrd(e.target.checked)}
+              />
+              Hide previously OCR'd
+              {hiddenOcrdCount > 0 && <span style={{ color: C.textLight }}>({hiddenOcrdCount})</span>}
+            </label>
+            <MiniButton onClick={refreshOcrd} disabled={ocrdLoading}>
+              {ocrdLoading ? 'Refreshing…' : 'Refresh OCR\'d'}
+            </MiniButton>
+            {(!deps.buildings.length || !deps.equipmentTypes.length) && (
+              <span style={{ fontSize: 11, color: C.warnText }}>
+                Dependency caches missing — sync Equipment deps from Dependencies tab to enable those filters.
+              </span>
             )}
           </div>
-          <div style={{ maxHeight: 220, overflow: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
-            {eligible.slice(0, 500).map(item => {
+
+          {/* Row list with checkboxes */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <MiniButton onClick={selectAllVisible} disabled={!visible.length}>Select all visible</MiniButton>
+            <MiniButton onClick={clearSelection} disabled={!selectedIds.size}>Clear selection</MiniButton>
+            <span style={{ fontSize: 11, color: C.textMid, marginLeft: 'auto' }}>
+              {selectedIds.size} / {visible.length} selected
+            </span>
+          </div>
+          <div style={{ maxHeight: 260, overflow: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+            {visible.length === 0 && (
+              <div style={{ padding: 14, fontSize: 12, color: C.textMid }}>No equipment matches the current filters.</div>
+            )}
+            {visible.slice(0, 500).map(item => {
               const n = item.attachmentIDs?.length || 0;
+              const id = String(item.id);
+              const checked = selectedIds.has(id);
+              const alreadyOcrd = ocrdIds.has(id);
+              const bName = buildingName.get(String(item.buildingID ?? '')) || '';
+              const tName = equipTypeName.get(String(item.equipmentTypeID ?? '')) || '';
               return (
-                <div key={item.id} style={{ display: 'flex', gap: 10, padding: '6px 10px', borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                <label
+                  key={item.id}
+                  style={{
+                    display: 'flex', gap: 10, padding: '6px 10px',
+                    borderBottom: `1px solid ${C.border}`, fontSize: 12,
+                    cursor: 'pointer',
+                    background: checked ? C.navyTint : '#fff',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleSelected(item.id)}
+                    style={{ marginTop: 2 }}
+                  />
                   <span style={{ fontWeight: 600, color: C.navy, minWidth: 60 }}>#{item.id}</span>
-                  <span style={{ flex: 1, color: C.textDark }}>{item.tag || <em style={{ color: C.textLight }}>(no tag)</em>}</span>
-                  <span style={{ color: C.okText }}>{n}</span>
-                </div>
+                  <span style={{ flex: 1, color: C.textDark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.tag || <em style={{ color: C.textLight }}>(no tag)</em>}
+                  </span>
+                  <span style={{ flex: '0 0 140px', color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={bName}>
+                    {bName || <span style={{ color: C.textLight }}>—</span>}
+                  </span>
+                  <span style={{ flex: '0 0 140px', color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tName}>
+                    {tName || <span style={{ color: C.textLight }}>—</span>}
+                  </span>
+                  <span style={{ color: C.okText, minWidth: 28, textAlign: 'right' }}>{n}</span>
+                  {alreadyOcrd && (
+                    <span style={{
+                      fontSize: 10, padding: '1px 6px', borderRadius: 10,
+                      background: C.okBg, color: C.okText, fontWeight: 600,
+                    }}>
+                      OCR'd
+                    </span>
+                  )}
+                </label>
               );
             })}
-            {eligible.length > 500 && <div style={{ padding: 10, fontSize: 11, color: C.textMid }}>…{eligible.length - 500} more</div>}
+            {visible.length > 500 && <div style={{ padding: 10, fontSize: 11, color: C.textMid }}>…{visible.length - 500} more (filter to narrow)</div>}
           </div>
+
           <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
             <PrimaryButton
               onClick={runBatch}
-              disabled={running || !fieldSelection.length || !eligible.length}
+              disabled={running || !fieldSelection.length || selectedIds.size === 0}
             >
-              {running ? `Running… ${progress.done}/${progress.total}` : `Run OCR on ${eligible.length} items`}
+              {running
+                ? `Running… ${progress.done}/${progress.total}`
+                : `Run OCR on ${selectedIds.size} selected`}
             </PrimaryButton>
             {!fieldSelection.length && <Warn>Select at least one field above.</Warn>}
+            {selectedIds.size === 0 && <Warn>Check at least one equipment row.</Warn>}
           </div>
 
-          {Object.keys(items).length > 0 && (
+          {resultIds.length > 0 && (
             <div style={{ marginTop: 16, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
-              {eligible.map(e => {
+              {resultIds.map(rid => {
+                const e = eligible.find(x => String(x.id) === String(rid));
+                if (!e) return null;
                 const s = items[e.id] || {};
                 return (
                   <div key={e.id} style={{ borderTop: `1px solid ${C.border}` }}>
@@ -640,6 +830,12 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
     </Section>
   );
 }
+
+const selectStyle = {
+  fontSize: 12, padding: '6px 8px',
+  border: `1px solid ${C.border}`, borderRadius: 4, background: '#fff',
+  color: C.textDark,
+};
 
 function StatusPill({ status }) {
   const map = {

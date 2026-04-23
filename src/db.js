@@ -793,6 +793,33 @@ export async function getExtractionRuns(projectId) {
   );
 }
 
+// Return the set of equipment IDs that already have a completed OCR run on
+// this project. The writer side lives in src/equipmentOcr.js where
+// `source_filename` is set to `equipment#<id>` when the extraction_run is
+// created — keep the two in sync if the format ever changes.
+export async function listOcrdEquipmentIds(projectId) {
+  if (!projectId) return new Set();
+  try {
+    const { data, error } = await supabase.from('extraction_runs')
+      .select('source_filename')
+      .eq('project_id', projectId)
+      .eq('migration_type', 'Equipment')
+      .eq('stage', 'ocr')
+      .eq('status', 'complete')
+      .like('source_filename', 'equipment#%');
+    if (error || !data) return new Set();
+    const ids = new Set();
+    for (const row of data) {
+      const sf = row.source_filename || '';
+      const id = sf.startsWith('equipment#') ? sf.slice('equipment#'.length) : '';
+      if (id) ids.add(String(id));
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
 export async function getExtractionRun(runId) {
   return dbQuery(
     () => supabase.from('extraction_runs')
