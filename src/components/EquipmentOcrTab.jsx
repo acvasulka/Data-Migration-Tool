@@ -550,7 +550,6 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
     })();
     refreshOcrd();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   async function refreshOcrd() {
