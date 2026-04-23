@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { C } from '../theme';
 import { syncFmxDataForProject } from '../fmxSync';
 import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
@@ -340,6 +340,18 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
 
   const previewable = (attachments || []).filter(a => !a.skipped && a.base64 && a.contentType);
 
+  // Highlight requested by clicking a Source cell. `bump` lets the preview
+  // re-focus the same attachment if the user clicks the same source twice.
+  const [highlight, setHighlight] = useState(null);
+  const showSource = (p) => {
+    if (!p?.source_attachment_id) return;
+    setHighlight({
+      attachmentId: String(p.source_attachment_id),
+      bbox: Array.isArray(p.bbox) && p.bbox.length === 4 ? p.bbox : null,
+      bump: (highlight?.bump || 0) + 1,
+    });
+  };
+
   return (
     <div style={{ marginTop: 16, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '8px 12px', background: '#F9FAFB', fontSize: 12, color: C.textMid, display: 'flex', justifyContent: 'space-between' }}>
@@ -392,9 +404,19 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
                     />
                   ) : renderVal(null)}
                 </td>
-                <td style={resTd}>{p?.confidence || '—'}</td>
+                <td style={resTd}>{formatConfidence(p?.confidence)}</td>
                 <td style={resTd}>
-                  {p?.source_attachment_id ? `#${p.source_attachment_id}` : '—'}
+                  {p?.source_attachment_id ? (
+                    <button
+                      type="button"
+                      onClick={() => showSource(p)}
+                      title={Array.isArray(p.bbox) ? 'Show extraction region' : 'Open source attachment'}
+                      style={sourceLinkStyle}
+                    >
+                      #{p.source_attachment_id}
+                      {Array.isArray(p.bbox) && <span style={{ marginLeft: 4, fontSize: 10 }}>⌖</span>}
+                    </button>
+                  ) : '—'}
                   {p?.source_text && <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>"{p.source_text.slice(0, 90)}"</div>}
                 </td>
               </tr>
@@ -405,7 +427,7 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
       </div>
       {previewable.length > 0 && (
         <div style={{ flex: '1 1 45%', minWidth: 0, borderLeft: `1px solid ${C.border}`, background: '#F9FAFB' }}>
-          <AttachmentsPreview attachments={previewable} />
+          <AttachmentsPreview attachments={previewable} highlight={highlight} />
         </div>
       )}
       </div>
@@ -441,14 +463,64 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
 // Side-by-side viewer for the attachments Claude just read. Thumbnails along
 // the top switch the main viewer below. Images render inline; PDFs go into an
 // iframe so the user can page through without leaving the app.
-function AttachmentsPreview({ attachments }) {
+function AttachmentsPreview({ attachments, highlight }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [zoomed, setZoomed] = useState(false);
+  // Rendered image rect inside its container — needed to anchor the bbox
+  // overlay because `objectFit: contain` leaves letterbox padding that
+  // normalized (0..1) coordinates must be scaled against.
+  const [imgRect, setImgRect] = useState(null);
+  const imgRef = useRef(null);
+  const imgWrapRef = useRef(null);
+
+  // When a caller highlights a specific attachment, switch to it. Depending
+  // only on the highlight identity avoids re-firing on unrelated state.
+  useEffect(() => {
+    if (!highlight?.attachmentId) return;
+    const idx = attachments.findIndex(a => String(a.id) === String(highlight.attachmentId));
+    if (idx >= 0) setActiveIdx(idx);
+  }, [highlight, attachments]);
+
+  // Recompute the rendered image rect when the image loads, the window resizes,
+  // or zoom toggles. Coordinates are relative to the wrapper (the scroll box).
+  useEffect(() => {
+    const update = () => {
+      const img = imgRef.current;
+      const wrap = imgWrapRef.current;
+      if (!img || !wrap) { setImgRect(null); return; }
+      const ir = img.getBoundingClientRect();
+      const wr = wrap.getBoundingClientRect();
+      setImgRect({
+        left: ir.left - wr.left + wrap.scrollLeft,
+        top: ir.top - wr.top + wrap.scrollTop,
+        width: ir.width,
+        height: ir.height,
+      });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [activeIdx, zoomed, attachments]);
 
   const active = attachments[activeIdx] || attachments[0];
   const dataUrl = active ? `data:${active.contentType};base64,${active.base64}` : null;
 
   if (!active) return null;
+
+  const overlayBox = (() => {
+    if (!highlight || !imgRect) return null;
+    if (String(highlight.attachmentId) !== String(active.id)) return null;
+    if (active.classification !== 'image') return null;
+    const bb = highlight.bbox;
+    if (!Array.isArray(bb) || bb.length !== 4) return null;
+    const [x0, y0, x1, y1] = bb.map(n => Math.max(0, Math.min(1, Number(n) || 0)));
+    return {
+      left: imgRect.left + x0 * imgRect.width,
+      top: imgRect.top + y0 * imgRect.height,
+      width: Math.max(2, (x1 - x0) * imgRect.width),
+      height: Math.max(2, (y1 - y0) * imgRect.height),
+    };
+  })();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 280 }}>
@@ -486,11 +558,27 @@ function AttachmentsPreview({ attachments }) {
             <MiniButton onClick={() => setZoomed(z => !z)}>{zoomed ? 'Fit' : 'Zoom'}</MiniButton>
           )}
         </div>
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'auto' }}>
+        <div
+          ref={imgWrapRef}
+          style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'auto' }}
+        >
           {active.classification === 'image' ? (
             <img
+              ref={imgRef}
               src={dataUrl}
               alt={active.filename || ''}
+              onLoad={() => {
+                const img = imgRef.current; const wrap = imgWrapRef.current;
+                if (!img || !wrap) return;
+                const ir = img.getBoundingClientRect();
+                const wr = wrap.getBoundingClientRect();
+                setImgRect({
+                  left: ir.left - wr.left + wrap.scrollLeft,
+                  top: ir.top - wr.top + wrap.scrollTop,
+                  width: ir.width,
+                  height: ir.height,
+                });
+              }}
               style={zoomed
                 ? { maxWidth: 'none', display: 'block' }
                 : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
@@ -500,6 +588,21 @@ function AttachmentsPreview({ attachments }) {
               title={active.filename || 'attachment'}
               src={dataUrl}
               style={{ width: '100%', height: '100%', minHeight: 260, border: 'none' }}
+            />
+          )}
+          {overlayBox && (
+            <div
+              style={{
+                position: 'absolute',
+                left: overlayBox.left,
+                top: overlayBox.top,
+                width: overlayBox.width,
+                height: overlayBox.height,
+                border: '3px solid #FF1744',
+                boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 6px 2px rgba(255,23,68,0.6)',
+                pointerEvents: 'none',
+                borderRadius: 2,
+              }}
             />
           )}
         </div>
@@ -513,6 +616,30 @@ function renderVal(v) {
   if (typeof v === 'object') return <code style={{ fontSize: 10 }}>{JSON.stringify(v)}</code>;
   return <span>{String(v)}</span>;
 }
+
+// Confidence is a numeric 0-100 under prompt v2. Older runs stored strings
+// ("high"|"medium"|"low") — render those through unchanged so historical
+// extractions still read naturally instead of showing "NaN%".
+function formatConfidence(c) {
+  if (c == null || c === '') return '—';
+  if (typeof c === 'number' && Number.isFinite(c)) return `${Math.round(Math.max(0, Math.min(100, c)))}%`;
+  const asNum = Number(c);
+  if (Number.isFinite(asNum) && String(c).match(/^-?\d+(\.\d+)?$/)) {
+    return `${Math.round(Math.max(0, Math.min(100, asNum)))}%`;
+  }
+  return String(c);
+}
+
+const sourceLinkStyle = {
+  background: 'transparent',
+  border: 'none',
+  padding: 0,
+  color: C.navy,
+  textDecoration: 'underline',
+  cursor: 'pointer',
+  fontSize: 12,
+  fontFamily: 'inherit',
+};
 
 const resTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, borderBottom: `1px solid ${C.border}` };
 const resTd = { padding: '8px 10px', verticalAlign: 'top' };

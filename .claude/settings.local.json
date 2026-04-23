@@ -6,7 +6,9 @@
       "Bash(gh pr:*)",
       "Bash(npx react-scripts:*)",
       "Bash(git add:*)",
-      "Bash(echo \"Exit: $?\")"
+      "Bash(echo \"Exit: $?\")",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

@@ -422,8 +422,11 @@ export function proposeAcceptedRows(parsed, fieldSelection) {
       kind: f.kind, // 'system' | 'custom'
       label: f.label,
       value: p.value,
-      confidence: p.confidence || null,
-      accepted: p.confidence === 'high', // default: only auto-accept high-confidence
+      confidence: p.confidence ?? null,
+      // Default: auto-accept when the model is >=80% confident. Confidence is
+      // now a numeric 0-100 (prompt v2); older runs with the enum "high" still
+      // auto-accept for backward compat.
+      accepted: (typeof p.confidence === 'number' && p.confidence >= 80) || p.confidence === 'high',
     });
   }
   return rows;
