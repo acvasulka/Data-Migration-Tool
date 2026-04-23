@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { C } from '../theme';
 import { syncFmxDataForProject } from '../fmxSync';
 import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
@@ -340,21 +340,6 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
 
   const previewable = (attachments || []).filter(a => !a.skipped && a.base64 && a.contentType);
 
-  // Highlight requested by clicking a Source cell. `bump` lets the preview
-  // re-focus the same attachment if the user clicks the same source twice.
-  const [highlight, setHighlight] = useState(null);
-  const showSource = (p, fieldLabel) => {
-    if (!p?.source_attachment_id) return;
-    if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
-      console.info('[ocr source]', { field: fieldLabel, bbox: p.bbox, source_text: p.source_text, attachmentId: p.source_attachment_id });
-    }
-    setHighlight({
-      attachmentId: String(p.source_attachment_id),
-      bbox: p.bbox ?? null,
-      bump: (highlight?.bump || 0) + 1,
-    });
-  };
-
   return (
     <div style={{ marginTop: 16, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '8px 12px', background: '#F9FAFB', fontSize: 12, color: C.textMid, display: 'flex', justifyContent: 'space-between' }}>
@@ -407,19 +392,9 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
                     />
                   ) : renderVal(null)}
                 </td>
-                <td style={resTd}>{formatConfidence(p?.confidence)}</td>
+                <td style={resTd}>{p?.confidence || '—'}</td>
                 <td style={resTd}>
-                  {p?.source_attachment_id ? (
-                    <button
-                      type="button"
-                      onClick={() => showSource(p, f.label)}
-                      title={hasBbox(p?.bbox) ? 'Show approximate extraction region' : 'Open source attachment'}
-                      style={sourceLinkStyle}
-                    >
-                      #{p.source_attachment_id}
-                      {hasBbox(p?.bbox) && <span style={{ marginLeft: 4, fontSize: 10 }}>⌖</span>}
-                    </button>
-                  ) : '—'}
+                  {p?.source_attachment_id ? `#${p.source_attachment_id}` : '—'}
                   {p?.source_text && <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>"{p.source_text.slice(0, 90)}"</div>}
                 </td>
               </tr>
@@ -430,7 +405,7 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
       </div>
       {previewable.length > 0 && (
         <div style={{ flex: '1 1 45%', minWidth: 0, borderLeft: `1px solid ${C.border}`, background: '#F9FAFB' }}>
-          <AttachmentsPreview attachments={previewable} highlight={highlight} />
+          <AttachmentsPreview attachments={previewable} />
         </div>
       )}
       </div>
@@ -466,89 +441,14 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
 // Side-by-side viewer for the attachments Claude just read. Thumbnails along
 // the top switch the main viewer below. Images render inline; PDFs go into an
 // iframe so the user can page through without leaving the app.
-function AttachmentsPreview({ attachments, highlight }) {
+function AttachmentsPreview({ attachments }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const [zoomed, setZoomed] = useState(false);
-  // Rendered image rect inside its container — needed to anchor the bbox
-  // overlay because `objectFit: contain` leaves letterbox padding that
-  // normalized (0..1) coordinates must be scaled against.
-  const [imgRect, setImgRect] = useState(null);
-  const imgRef = useRef(null);
-  const imgWrapRef = useRef(null);
-
-  // When a caller highlights a specific attachment, switch to it. Depending
-  // only on the highlight identity avoids re-firing on unrelated state.
-  useEffect(() => {
-    if (!highlight?.attachmentId) return;
-    const idx = attachments.findIndex(a => String(a.id) === String(highlight.attachmentId));
-    if (idx >= 0) setActiveIdx(idx);
-  }, [highlight, attachments]);
-
-  // Recompute the rendered image rect when the image loads, the window resizes,
-  // or zoom toggles. Coordinates are relative to the wrapper (the scroll box).
-  useEffect(() => {
-    const update = () => {
-      const img = imgRef.current;
-      const wrap = imgWrapRef.current;
-      if (!img || !wrap) { setImgRect(null); return; }
-      const ir = img.getBoundingClientRect();
-      const wr = wrap.getBoundingClientRect();
-      setImgRect({
-        left: ir.left - wr.left + wrap.scrollLeft,
-        top: ir.top - wr.top + wrap.scrollTop,
-        width: ir.width,
-        height: ir.height,
-        naturalWidth: img.naturalWidth || 0,
-        naturalHeight: img.naturalHeight || 0,
-      });
-    };
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, [activeIdx, zoomed, attachments]);
 
   const active = attachments[activeIdx] || attachments[0];
   const dataUrl = active ? `data:${active.contentType};base64,${active.base64}` : null;
 
   if (!active) return null;
-
-  // Vision LLMs are imprecise with coordinates (typically off by 10-30% of
-  // image dimensions), so the overlay treats the model's bbox as an
-  // "approximate region": the box is padded 20% on each side and drawn
-  // dashed, and a softer 9x9 grid cell containing the bbox center is tinted
-  // to steer the eye to the general neighborhood even when the padded box
-  // misses.
-  const overlays = (() => {
-    if (!highlight || !imgRect) return null;
-    if (String(highlight.attachmentId) !== String(active.id)) return null;
-    if (active.classification !== 'image') return null;
-    const norm = normalizeBbox(highlight.bbox, imgRect.naturalWidth, imgRect.naturalHeight);
-    if (!norm) return null;
-    const [x0, y0, x1, y1] = norm;
-
-    const w = x1 - x0, h = y1 - y0;
-    const px0 = Math.max(0, x0 - 0.2 * w);
-    const py0 = Math.max(0, y0 - 0.2 * h);
-    const px1 = Math.min(1, x1 + 0.2 * w);
-    const py1 = Math.min(1, y1 + 0.2 * h);
-
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    const col = Math.max(0, Math.min(8, Math.floor(cx * 9)));
-    const row = Math.max(0, Math.min(8, Math.floor(cy * 9)));
-
-    const toRect = (a, b, c, d) => ({
-      left: imgRect.left + a * imgRect.width,
-      top: imgRect.top + b * imgRect.height,
-      width: Math.max(2, (c - a) * imgRect.width),
-      height: Math.max(2, (d - b) * imgRect.height),
-    });
-
-    return {
-      padded: toRect(px0, py0, px1, py1),
-      cell: toRect(col / 9, row / 9, (col + 1) / 9, (row + 1) / 9),
-      cellLabel: `R${row + 1}·C${col + 1}`,
-    };
-  })();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 280 }}>
@@ -586,29 +486,11 @@ function AttachmentsPreview({ attachments, highlight }) {
             <MiniButton onClick={() => setZoomed(z => !z)}>{zoomed ? 'Fit' : 'Zoom'}</MiniButton>
           )}
         </div>
-        <div
-          ref={imgWrapRef}
-          style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'auto' }}
-        >
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 4, overflow: 'auto' }}>
           {active.classification === 'image' ? (
             <img
-              ref={imgRef}
               src={dataUrl}
               alt={active.filename || ''}
-              onLoad={() => {
-                const img = imgRef.current; const wrap = imgWrapRef.current;
-                if (!img || !wrap) return;
-                const ir = img.getBoundingClientRect();
-                const wr = wrap.getBoundingClientRect();
-                setImgRect({
-                  left: ir.left - wr.left + wrap.scrollLeft,
-                  top: ir.top - wr.top + wrap.scrollTop,
-                  width: ir.width,
-                  height: ir.height,
-                  naturalWidth: img.naturalWidth || 0,
-                  naturalHeight: img.naturalHeight || 0,
-                });
-              }}
               style={zoomed
                 ? { maxWidth: 'none', display: 'block' }
                 : { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
@@ -619,53 +501,6 @@ function AttachmentsPreview({ attachments, highlight }) {
               src={dataUrl}
               style={{ width: '100%', height: '100%', minHeight: 260, border: 'none' }}
             />
-          )}
-          {overlays && (
-            <>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: overlays.cell.left,
-                  top: overlays.cell.top,
-                  width: overlays.cell.width,
-                  height: overlays.cell.height,
-                  background: 'rgba(255, 23, 68, 0.12)',
-                  border: '1px solid rgba(255, 23, 68, 0.35)',
-                  pointerEvents: 'none',
-                  borderRadius: 2,
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  left: overlays.padded.left,
-                  top: overlays.padded.top,
-                  width: overlays.padded.width,
-                  height: overlays.padded.height,
-                  border: '2px dashed #FF1744',
-                  boxShadow: '0 0 0 1px rgba(255,255,255,0.85)',
-                  pointerEvents: 'none',
-                  borderRadius: 2,
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  left: overlays.cell.left + 2,
-                  top: overlays.cell.top + 2,
-                  fontSize: 9,
-                  padding: '1px 4px',
-                  background: 'rgba(255, 23, 68, 0.85)',
-                  color: '#fff',
-                  borderRadius: 2,
-                  fontWeight: 600,
-                  letterSpacing: 0.3,
-                  pointerEvents: 'none',
-                }}
-              >
-                approx · {overlays.cellLabel}
-              </div>
-            </>
           )}
         </div>
       </div>
@@ -678,84 +513,6 @@ function renderVal(v) {
   if (typeof v === 'object') return <code style={{ fontSize: 10 }}>{JSON.stringify(v)}</code>;
   return <span>{String(v)}</span>;
 }
-
-// Confidence is a numeric 0-100 under prompt v2. Older runs stored strings
-// ("high"|"medium"|"low") — render those through unchanged so historical
-// extractions still read naturally instead of showing "NaN%".
-function formatConfidence(c) {
-  if (c == null || c === '') return '—';
-  if (typeof c === 'number' && Number.isFinite(c)) return `${Math.round(Math.max(0, Math.min(100, c)))}%`;
-  const asNum = Number(c);
-  if (Number.isFinite(asNum) && String(c).match(/^-?\d+(\.\d+)?$/)) {
-    return `${Math.round(Math.max(0, Math.min(100, asNum)))}%`;
-  }
-  return String(c);
-}
-
-// Accept bbox in any of: [x0,y0,x1,y1], {x0,y0,x1,y1}, {x,y,width,height},
-// [x,y,w,h]. Returns [x0,y0,x1,y1] normalized 0-1, or null if unparseable.
-// If any coordinate exceeds 1, values are treated as pixel-space and rescaled
-// by the image's natural dimensions (when available).
-function normalizeBbox(bb, naturalW, naturalH) {
-  if (bb == null) return null;
-  let a, b, c, d, isXYWH = false;
-  if (Array.isArray(bb)) {
-    if (bb.length !== 4) return null;
-    [a, b, c, d] = bb.map(n => Number(n));
-    // Heuristic: if a+c or b+d > ~1.5 AND c,d are both smaller than a,b isn't
-    // a reliable signal either way. Prefer to treat as x0y0x1y1 unless the 3rd
-    // or 4th value is clearly a size (< the first pair). We can't always tell,
-    // so only treat as xywh when x1<x0 or y1<y0 would result — otherwise
-    // assume corners.
-    if (c < a || d < b) isXYWH = true;
-  } else if (typeof bb === 'object') {
-    if ('x0' in bb && 'y0' in bb && 'x1' in bb && 'y1' in bb) {
-      a = Number(bb.x0); b = Number(bb.y0); c = Number(bb.x1); d = Number(bb.y1);
-    } else if ('x' in bb && 'y' in bb && ('width' in bb || 'w' in bb) && ('height' in bb || 'h' in bb)) {
-      a = Number(bb.x); b = Number(bb.y);
-      c = Number(bb.width ?? bb.w); d = Number(bb.height ?? bb.h);
-      isXYWH = true;
-    } else {
-      return null;
-    }
-  } else {
-    return null;
-  }
-  if (![a, b, c, d].every(Number.isFinite)) return null;
-
-  let x0, y0, x1, y1;
-  if (isXYWH) { x0 = a; y0 = b; x1 = a + c; y1 = b + d; }
-  else { x0 = a; y0 = b; x1 = c; y1 = d; }
-
-  // Pixel-space detection: any coord > 1 => assume pixel, rescale.
-  const maxV = Math.max(x0, y0, x1, y1);
-  if (maxV > 1) {
-    if (!naturalW || !naturalH) return null;
-    x0 /= naturalW; x1 /= naturalW;
-    y0 /= naturalH; y1 /= naturalH;
-  }
-  x0 = Math.max(0, Math.min(1, x0));
-  y0 = Math.max(0, Math.min(1, y0));
-  x1 = Math.max(0, Math.min(1, x1));
-  y1 = Math.max(0, Math.min(1, y1));
-  if (x1 <= x0 || y1 <= y0) return null;
-  return [x0, y0, x1, y1];
-}
-
-function hasBbox(bb) {
-  return normalizeBbox(bb, 10000, 10000) != null;
-}
-
-const sourceLinkStyle = {
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  color: C.navy,
-  textDecoration: 'underline',
-  cursor: 'pointer',
-  fontSize: 12,
-  fontFamily: 'inherit',
-};
 
 const resTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, borderBottom: `1px solid ${C.border}` };
 const resTd = { padding: '8px 10px', verticalAlign: 'top' };

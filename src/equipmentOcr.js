@@ -148,10 +148,6 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
       for (const fp of fieldPrompts) {
         composedBody += `\n— "${fp.fieldLabel}" —\n${fp.body.trim()}\n`;
       }
-      // Field-specific prompts are admin-authored and may informally describe
-      // their own JSON shape. Reassert that the stage prompt owns the schema,
-      // so bbox and the other required keys don't get dropped.
-      composedBody += '\nOutput schema is defined in OUTPUT above. The per-field guidance sections constrain which values are acceptable but do NOT change the JSON keys — every extracted image-sourced field MUST still include `bbox` per rule 1.\n';
     }
     const system = buildSystemPrompt({
       body: composedBody,
@@ -229,13 +225,6 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     const parsed = Object.keys(mergedFields).length
       ? { fields: mergedFields, notes: `merged from ${perAttachmentUsage.length} attachment call(s)` }
       : null;
-
-    // Dev-only breadcrumb: surfaces the merged model output so we can tell at a
-    // glance whether bbox/confidence came through. Stripped in production builds
-    // to keep console chatter down.
-    if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
-      console.info('[ocr parsed]', { equipmentId: equipment.id, parsed });
-    }
     const usage = perAttachmentUsage.reduce(
       (acc, u) => ({
         inputTokens: (acc.inputTokens || 0) + (u?.inputTokens || 0),
@@ -433,11 +422,8 @@ export function proposeAcceptedRows(parsed, fieldSelection) {
       kind: f.kind, // 'system' | 'custom'
       label: f.label,
       value: p.value,
-      confidence: p.confidence ?? null,
-      // Default: auto-accept when the model is >=80% confident. Confidence is
-      // now a numeric 0-100 (prompt v2); older runs with the enum "high" still
-      // auto-accept for backward compat.
-      accepted: (typeof p.confidence === 'number' && p.confidence >= 80) || p.confidence === 'high',
+      confidence: p.confidence || null,
+      accepted: p.confidence === 'high', // default: only auto-accept high-confidence
     });
   }
   return rows;
