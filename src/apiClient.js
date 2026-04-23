@@ -18,6 +18,29 @@ export async function fmxFetch(opts) {
   return res;
 }
 
+// Download an FMX attachment by its `downloadUrl` (returned from
+// /v1/attachments/{id}) via the binary mode of /api/fmx. The server injects
+// the project's saved Basic-auth credentials, fetches the bytes, and returns
+// them base64-encoded so the browser can hand the data to Claude vision
+// without the password or raw URL ever touching the browser.
+export async function fmxAttachmentDownload({ projectId, downloadUrl }) {
+  const res = await fetch('/api/fmx', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, mode: 'binary', attachmentDownloadUrl: downloadUrl }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    // Surface the exact server branch in the console so downstream callers
+    // (which often swallow the message in per-attachment try/catch) don't
+    // hide it. The downloadUrl is logged too so hostname issues are easy to
+    // spot in the network tab.
+    console.error('[fmxAttachmentDownload]', res.status, data?.error || '(no error body)', { downloadUrl });
+    throw new Error(data?.error || `Attachment download failed: ${res.status}`);
+  }
+  return data; // { base64, contentType, filename, byteCount }
+}
+
 // Save/encrypt FMX credentials server-side. Plaintext password crosses the
 // browser/server boundary exactly once (here); thereafter the client refers
 // to them only by projectId.

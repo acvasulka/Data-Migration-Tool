@@ -1,0 +1,430 @@
+// Pure helpers for the Equipment Attachment OCR tool.
+//
+// Kept framework-free so the UI components stay thin and the FMX-side logic
+// can be exercised without React.
+
+import { fmxFetch, fmxAttachmentDownload, claudeFetch, parseClaudeText } from './apiClient';
+import { fetchAllPages } from './fmxSync';
+import { getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun } from './db';
+import { buildSystemPrompt, extractUsage } from './promptTemplates';
+import { resolvePromptKeyForField, getOcrFieldPromptMeta } from './equipmentOcrFields';
+
+// Claude vision-supported MIME types (bitmap images) and document types (PDF).
+// Anything else is skipped per-attachment so a stray .docx/.dwg doesn't sink
+// the run.
+const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const DOCUMENT_MIMES = new Set(['application/pdf']);
+
+export function classifyAttachment(mime) {
+  if (!mime) return 'unsupported';
+  const m = mime.toLowerCase();
+  if (IMAGE_MIMES.has(m)) return 'image';
+  if (DOCUMENT_MIMES.has(m)) return 'document';
+  return 'unsupported';
+}
+
+// Paginate /v1/equipment. `fields` lets callers keep payloads small; we always
+// include attachmentIDs + customFields because the tool depends on them.
+export async function listEquipment(projectId, extraFields = []) {
+  const baseFields = ['id', 'tag', 'attachmentIDs', 'buildingID', 'equipmentTypeID', 'customFields', ...extraFields];
+  const fields = Array.from(new Set(baseFields)).join(',');
+  const { items } = await fetchAllPages({ projectId }, '/v1/equipment', fields, 100);
+  return items;
+}
+
+// Filter list helper: only equipment with at least one attachment.
+export function withAttachments(equipmentList) {
+  return (equipmentList || []).filter(e => Array.isArray(e.attachmentIDs) && e.attachmentIDs.length > 0);
+}
+
+// GET /v1/equipment/{id} — used by single mode to get the full record (incl.
+// untouched customFields the PUT must round-trip).
+export async function getEquipment(projectId, equipmentId) {
+  const res = await fmxFetch({ projectId, endpoint: `/v1/equipment/${equipmentId}`, method: 'GET' });
+  if (!res.ok) throw new Error(`Failed to load equipment ${equipmentId}: ${res.status}`);
+  return res.json();
+}
+
+// GET /v1/attachments/{id} — returns metadata w/ downloadUrl (no bytes).
+export async function getAttachmentMeta(projectId, attachmentId) {
+  const res = await fmxFetch({ projectId, endpoint: `/v1/attachments/${attachmentId}`, method: 'GET' });
+  if (!res.ok) throw new Error(`Failed to load attachment ${attachmentId}: ${res.status}`);
+  return res.json();
+}
+
+// Resolve an attachment into { classification, base64, contentType, filename, meta }.
+// Returns classification: 'image' | 'document' | 'unsupported'. When unsupported
+// the bytes are not fetched (we skip the download to save bandwidth).
+export async function fetchAttachmentForOcr(projectId, attachmentId) {
+  const meta = await getAttachmentMeta(projectId, attachmentId);
+  const classification = classifyAttachment(meta.contentType);
+  if (classification === 'unsupported') {
+    return { classification, meta };
+  }
+  if (!meta.downloadUrl) {
+    return { classification: 'unsupported', meta, reason: 'No downloadUrl on attachment metadata' };
+  }
+  const { base64, contentType, filename, byteCount } = await fmxAttachmentDownload({
+    projectId,
+    downloadUrl: meta.downloadUrl,
+  });
+  return { classification, base64, contentType, filename, byteCount, meta };
+}
+
+// Run OCR on one equipment item.
+// - `equipment`: the full equipment record (must include id, tag, attachmentIDs, customFields).
+// - `fieldSelection`: [{ id, key, label, kind: 'system'|'custom', fieldType, raw }] from EquipmentOcrTab.
+// - `projectId`, `userId`: used for run logging.
+// Returns { parsed, runId, usage, attachments: [{ id, classification, skipped? }] } or throws.
+export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSelection }) {
+  if (!equipment?.id) throw new Error('Missing equipment record');
+  if (!Array.isArray(fieldSelection) || fieldSelection.length === 0) {
+    throw new Error('No fields selected for extraction');
+  }
+
+  const prompt = await getActivePrompt('Equipment', 'ocr', null);
+  if (!prompt) throw new Error('No active Equipment OCR prompt. Admin must seed one.');
+  const examples = await getEnabledExamplesForPrompt(prompt.id);
+
+  // Per-field prompts: for each selected field, resolve it to a registered
+  // prompt key (by label) and pull its active body if one exists. Fields with
+  // no dedicated prompt fall back to the overall stage prompt silently.
+  const fieldPromptEntries = await Promise.all(
+    fieldSelection.map(async (f) => {
+      const key = resolvePromptKeyForField(f);
+      if (!key) return null;
+      const row = await getActivePrompt('Equipment', 'ocr', key);
+      if (!row) return null;
+      const meta = getOcrFieldPromptMeta(key);
+      return { key, label: meta?.label || f.label, fieldLabel: f.label, body: row.body };
+    })
+  );
+  const fieldPrompts = fieldPromptEntries.filter(Boolean);
+
+  // Fetch attachment bytes in parallel, but skip unsupported MIME types.
+  const rawAttachments = await Promise.all(
+    (equipment.attachmentIDs || []).map(async (attId) => {
+      try {
+        return await fetchAttachmentForOcr(projectId, attId);
+      } catch (e) {
+        return { classification: 'unsupported', meta: { id: attId }, reason: e?.message || 'Download failed' };
+      }
+    })
+  );
+
+  const usable = rawAttachments.filter(a => a.classification !== 'unsupported' && a.base64);
+  const skipped = rawAttachments
+    .filter(a => a.classification === 'unsupported' || !a.base64)
+    .map(a => ({ id: a.meta?.id, filename: a.meta?.filename, reason: a.reason || `unsupported (${a.meta?.contentType || 'unknown'})` }));
+
+  const runStart = Date.now();
+  const run = await createExtractionRun({
+    projectId,
+    userId,
+    migrationType: 'Equipment',
+    stage: 'ocr',
+    sourceFilename: `equipment#${equipment.id}`,
+    pageCount: usable.length,
+    promptId: prompt.id,
+    promptVersion: prompt.version,
+  });
+
+  try {
+    if (usable.length === 0) {
+      await completeExtractionRun(run?.id, {
+        status: 'error',
+        error: 'No supported attachments to OCR (all skipped).',
+        durationMs: Date.now() - runStart,
+      });
+      return { parsed: { fields: {}, notes: 'No supported attachments.' }, runId: run?.id, usage: null, attachments: skipped.map(s => ({ ...s, skipped: true })) };
+    }
+
+    // Compose the system prompt: overall body first, then any field-specific
+    // guidance blocks so Claude sees the general rules before the per-field
+    // specifics. Buildup is plain-text concatenation — no placeholders.
+    let composedBody = prompt.body;
+    if (fieldPrompts.length) {
+      composedBody += '\n\nFIELD-SPECIFIC GUIDANCE\n';
+      for (const fp of fieldPrompts) {
+        composedBody += `\n— "${fp.fieldLabel}" —\n${fp.body.trim()}\n`;
+      }
+    }
+    const system = buildSystemPrompt({
+      body: composedBody,
+      vars: { MIGRATION_TYPE: 'Equipment' },
+      examples,
+    });
+
+    // Shrink oversized images client-side so each POST to /api/claude stays
+    // under Vercel's ~4.5 MB serverless body limit. PDFs are left untouched
+    // (can't easily resize in-browser); oversized PDFs are skipped below.
+    const prepared = [];
+    for (const a of usable) {
+      if (a.classification === 'image') {
+        const shrunk = await shrinkImageIfNeeded(a);
+        prepared.push(shrunk);
+      } else {
+        prepared.push(a);
+      }
+    }
+
+    // Batch: one Claude call per attachment. Multi-attachment equipment with
+    // several phone photos will otherwise pile up past the 4.5 MB request cap
+    // even after shrinking. Per-attachment calls also give us real source
+    // attribution (the attachment ID that produced a field) without relying
+    // on Claude to self-report it.
+    const PER_CALL_BUDGET = 4_000_000; // per-request base64 budget (safety margin under 4.5 MB)
+    const mergedFields = {};
+    const perAttachmentUsage = [];
+    const overflowed = [];
+    const includedForPreview = [];
+
+    for (const a of prepared) {
+      const size = a.base64 ? a.base64.length : 0;
+      if (!a.base64 || size > PER_CALL_BUDGET) {
+        overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: 'skipped: attachment exceeds per-request size budget' });
+        continue;
+      }
+      const content = [
+        { type: 'text', text: buildUserPromptText(equipment, fieldSelection) },
+        attachmentToClaudeBlock(a),
+      ];
+      try {
+        const resp = await claudeFetch({
+          max_tokens: 2000,
+          system,
+          messages: [{ role: 'user', content }],
+        });
+        const parsed = parseJsonResponse(resp);
+        const u = extractUsage(resp);
+        perAttachmentUsage.push(u);
+        includedForPreview.push(a);
+
+        const fields = parsed?.fields || {};
+        for (const [label, entry] of Object.entries(fields)) {
+          if (!entry || entry.value == null || entry.value === '') continue;
+          const existing = mergedFields[label];
+          const incoming = {
+            ...entry,
+            source_attachment_id: entry.source_attachment_id || a.meta?.id || null,
+          };
+          if (!existing) {
+            mergedFields[label] = incoming;
+            continue;
+          }
+          // Prefer the higher-confidence answer; fall back to first non-empty.
+          const ec = Number(existing.confidence ?? 0);
+          const ic = Number(incoming.confidence ?? 0);
+          if (ic > ec) mergedFields[label] = incoming;
+        }
+      } catch (e) {
+        overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: `OCR call failed: ${e?.message || 'unknown'}` });
+      }
+    }
+
+    const parsed = Object.keys(mergedFields).length
+      ? { fields: mergedFields, notes: `merged from ${perAttachmentUsage.length} attachment call(s)` }
+      : null;
+    const usage = perAttachmentUsage.reduce(
+      (acc, u) => ({
+        inputTokens: (acc.inputTokens || 0) + (u?.inputTokens || 0),
+        outputTokens: (acc.outputTokens || 0) + (u?.outputTokens || 0),
+        costUsd: (acc.costUsd || 0) + (u?.costUsd || 0),
+      }),
+      { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+    );
+
+    await completeExtractionRun(run?.id, {
+      status: parsed ? 'complete' : 'error',
+      resultJson: parsed,
+      error: parsed ? null : 'No OCR results (all attachment calls failed or returned empty)',
+      durationMs: Date.now() - runStart,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCostUsd: usage.costUsd,
+    });
+
+    return {
+      parsed: parsed || { fields: {}, notes: 'no results' },
+      runId: run?.id,
+      usage,
+      // base64 + contentType are kept so the review UI can render the same
+      // bytes Claude saw, without a second round-trip through /api/fmx.
+      attachments: [
+        ...includedForPreview.map(a => ({
+          id: a.meta?.id,
+          filename: a.meta?.filename,
+          classification: a.classification,
+          contentType: a.contentType,
+          base64: a.base64,
+        })),
+        ...overflowed.map(s => ({ ...s, skipped: true })),
+        ...skipped.map(s => ({ ...s, skipped: true })),
+      ],
+    };
+  } catch (err) {
+    await completeExtractionRun(run?.id, {
+      status: 'error',
+      error: err?.message || 'OCR failed',
+      durationMs: Date.now() - runStart,
+    });
+    throw err;
+  }
+}
+
+function buildUserPromptText(equipment, fieldSelection) {
+  const lines = [];
+  lines.push(`Equipment #${equipment.id}${equipment.tag ? ` — ${equipment.tag}` : ''}`);
+  lines.push('');
+  lines.push('Requested fields:');
+  for (const f of fieldSelection) {
+    const opts = describeFieldOptions(f);
+    const type = f.kind === 'custom' ? (f.fieldType || 'Text') : 'system';
+    lines.push(`- "${f.label}" (${type}${opts ? `; options: ${opts}` : ''})`);
+  }
+  lines.push('');
+  lines.push('Attachments follow. Extract per the system instructions and return the JSON object.');
+  return lines.join('\n');
+}
+
+function describeFieldOptions(field) {
+  const raw = field.raw || {};
+  if (Array.isArray(raw.options) && raw.options.length) {
+    return raw.options.map(o => (typeof o === 'string' ? o : (o.label || o.value || ''))).filter(Boolean).join(' | ');
+  }
+  return null;
+}
+
+function attachmentToClaudeBlock(a) {
+  if (a.classification === 'document') {
+    return {
+      type: 'document',
+      source: { type: 'base64', media_type: a.contentType || 'application/pdf', data: a.base64 },
+    };
+  }
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: a.contentType || 'image/jpeg', data: a.base64 },
+  };
+}
+
+// Downscale an image attachment if its base64 payload is beyond a threshold.
+// Uses the browser Canvas — no extra deps. Targets ~1600px longest edge and
+// re-encodes JPEG at quality 0.82, which is plenty for nameplate OCR and
+// reliably lands well under Vercel's 4.5 MB body cap.
+async function shrinkImageIfNeeded(a) {
+  const THRESHOLD = 1_200_000; // ~1.2 MB of base64 ≈ ~900 KB binary
+  if (!a?.base64 || a.base64.length <= THRESHOLD) return a;
+  if (typeof document === 'undefined' || typeof Image === 'undefined') return a;
+
+  try {
+    const dataUrl = `data:${a.contentType || 'image/jpeg'};base64,${a.base64}`;
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('image decode failed'));
+      el.src = dataUrl;
+    });
+
+    const maxEdge = 1600;
+    const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const outUrl = canvas.toDataURL('image/jpeg', 0.82);
+    const comma = outUrl.indexOf(',');
+    const outBase64 = comma >= 0 ? outUrl.slice(comma + 1) : '';
+    if (!outBase64 || outBase64.length >= a.base64.length) return a;
+
+    return { ...a, base64: outBase64, contentType: 'image/jpeg' };
+  } catch {
+    return a;
+  }
+}
+
+function parseJsonResponse(response) {
+  const text = parseClaudeText(response);
+  if (!text) return null;
+  try {
+    const first = text.indexOf('{');
+    const last = text.lastIndexOf('}');
+    const jsonStr = first !== -1 && last > first ? text.slice(first, last + 1) : text;
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+// Merge proposed field values with the equipment record's existing
+// customFields so a PUT never wipes a field the user didn't touch.
+//
+// `proposed` shape: { [fieldRowId]: { value, raw: { kind: 'system'|'custom', key } } }
+// Returns a payload ready for PUT /v1/equipment/{id}.
+export function buildEquipmentPutPayload(existing, proposed) {
+  const payload = {};
+  const existingCustom = Array.isArray(existing?.customFields) ? existing.customFields : [];
+  // Start from existing customFields so untouched entries survive.
+  const customByKey = new Map();
+  for (const cf of existingCustom) {
+    const k = cf.customFieldID ?? cf.customFieldId ?? cf.id;
+    if (k != null) customByKey.set(String(k), { ...cf });
+  }
+
+  for (const row of proposed || []) {
+    if (!row || row.accepted === false) continue;
+    if (row.kind === 'custom') {
+      customByKey.set(String(row.key), { customFieldID: row.key, value: row.value });
+    } else if (row.kind === 'system') {
+      payload[row.key] = row.value;
+    }
+  }
+
+  payload.customFields = Array.from(customByKey.values());
+  return payload;
+}
+
+// PUT /v1/equipment/{id} with an already-merged payload. Returns the parsed
+// response or throws with a descriptive error.
+export async function updateEquipment(projectId, equipmentId, payload) {
+  const res = await fmxFetch({
+    projectId,
+    endpoint: `/v1/equipment/${equipmentId}`,
+    method: 'PUT',
+    payload,
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch {}
+    throw new Error(`FMX PUT failed (${res.status}): ${detail}`.slice(0, 400));
+  }
+  if (res.status === 204) return { status: 204 };
+  try { return await res.json(); } catch { return { status: res.status }; }
+}
+
+// Build an "accepted rows" list from an OCR parsed result + the field catalog.
+// Callers (UI) decide per row whether to accept and may override the value
+// before handing the list to buildEquipmentPutPayload.
+export function proposeAcceptedRows(parsed, fieldSelection) {
+  const proposed = parsed?.fields || {};
+  const rows = [];
+  for (const f of fieldSelection) {
+    const p = proposed[f.label] || proposed[f.key] || null;
+    if (!p || p.value == null || p.value === '') continue;
+    rows.push({
+      rowId: f.id,
+      key: f.key,
+      kind: f.kind, // 'system' | 'custom'
+      label: f.label,
+      value: p.value,
+      confidence: p.confidence || null,
+      accepted: p.confidence === 'high', // default: only auto-accept high-confidence
+    });
+  }
+  return rows;
+}

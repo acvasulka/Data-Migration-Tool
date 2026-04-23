@@ -4,7 +4,7 @@ import { buildFieldDefinitions, hasEnrichments } from "./fmxFieldMetadata";
 import { parseCSV, buildMappedRows, computeCellErrors, downloadCSV, suggestMapping } from "./utils";
 import { C } from "./theme";
 import { supabase } from "./supabase";
-import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects, getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, recordCorrections, incrementExampleUsage, getFieldOverrides } from "./db";
+import { getMappingSuggestions, getSavedRulesForSchema, getProjectImports, getImportRows, getAllDependencyCaches, saveFmxReferenceCache, getCurrentProfile, getAllProfiles, getProjects, getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, recordCorrections, incrementExampleUsage, getFieldOverrides, hasFeature } from "./db";
 import { buildSystemPrompt, extractUsage } from "./promptTemplates";
 import UserMenu from "./components/UserMenu";
 import ProfileEditModal from "./components/ProfileEditModal";
@@ -20,6 +20,7 @@ import ProjectScreen from "./components/ProjectScreen";
 import SchemaOverview from "./components/SchemaOverview";
 import DependenciesView from "./components/DependenciesView";
 import ProjectSettingsView from "./components/ProjectSettingsView";
+import EquipmentOcrTab from "./components/EquipmentOcrTab";
 import StepUpload from "./components/StepUpload";
 import StepMapFields from "./components/StepMapFields";
 import StepValidate from "./components/StepValidate";
@@ -1033,11 +1034,14 @@ export default function App() {
         }}>
           {(() => {
             const baseTabs = ['overview', 'dependencies', 'settings'];
+            if (hasFeature(currentProfile, 'equipment_ocr')) baseTabs.push('equipment-ocr');
             const tabs = schemaType ? [...baseTabs, 'wizard'] : baseTabs;
             return tabs.map(tab => {
               const isActive = mainTab === tab;
               const label = tab === 'wizard'
                 ? `Wizard · ${schemaType} (${WIZARD_LABELS[wStep - 1] || ''})`
+                : tab === 'equipment-ocr'
+                ? 'Equipment Label Property Upload'
                 : tab.charAt(0).toUpperCase() + tab.slice(1);
               return (
                 <button
@@ -1136,6 +1140,14 @@ export default function App() {
           <ProjectSettingsView
             selectedProject={selectedProject}
             onProjectUpdated={(u) => setSelectedProject(u)}
+          />
+        )}
+
+        {/* Equipment OCR tab — gated by profiles.feature_permissions.equipment_ocr */}
+        {mainTab === 'equipment-ocr' && hasFeature(currentProfile, 'equipment_ocr') && (
+          <EquipmentOcrTab
+            project={selectedProject}
+            currentProfile={currentProfile}
           />
         )}
 

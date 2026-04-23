@@ -74,7 +74,16 @@ export async function getProjectByFmxUrl(fmxSiteUrl) {
 
 // --- PROFILES ---
 
+// Profile SELECTs try the feature_permissions column first but gracefully
+// fall back to the legacy column set if migration 018 has not been applied
+// yet — otherwise a missing column fails the query at PostgREST and
+// `currentProfile` ends up null across the app.
 export async function getAllProfiles() {
+  const withFlags = await dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions'),
+    null
+  );
+  if (withFlags !== null) return withFlags;
   return dbQuery(
     () => supabase.from('profiles').select('id, full_name, email, role'),
     []
@@ -82,8 +91,38 @@ export async function getAllProfiles() {
 }
 
 export async function getCurrentProfile(userId) {
+  const withFlags = await dbQuery(
+    () => supabase.from('profiles').select('id, full_name, email, role, feature_permissions').eq('id', userId).single(),
+    null
+  );
+  if (withFlags) return withFlags;
   return dbQuery(
     () => supabase.from('profiles').select('id, full_name, email, role').eq('id', userId).single(),
+    null
+  );
+}
+
+// Feature-flag helpers. Admins implicitly have every feature.
+// Shape on profiles.feature_permissions: { "<key>": true }.
+export function hasFeature(profile, key) {
+  if (!profile) return false;
+  if (profile.role === 'admin') return true;
+  const flags = profile.feature_permissions || {};
+  return flags[key] === true;
+}
+
+export async function setUserFeature(userId, key, enabled) {
+  // Read-modify-write the JSONB column. Admin RLS policy guards this call.
+  const { data: current } = await supabase
+    .from('profiles')
+    .select('feature_permissions')
+    .eq('id', userId)
+    .single();
+  const next = { ...(current?.feature_permissions || {}) };
+  if (enabled) next[key] = true;
+  else delete next[key];
+  return dbQuery(
+    () => supabase.from('profiles').update({ feature_permissions: next }).eq('id', userId).select('id, feature_permissions').single(),
     null
   );
 }
@@ -613,15 +652,20 @@ export async function markPushUndone(pushId, undoResult) {
 
 // --- PROMPTS (PDF extraction) ---
 
-export async function getActivePrompt(migrationType, stage = 'extraction') {
+// `fieldKey` addresses per-field variants of the Equipment OCR stage.
+// Pass null (the default) for the stage-level overall prompt; pass a slug
+// from equipmentOcrFields.js to target that field's dedicated prompt.
+export async function getActivePrompt(migrationType, stage = 'extraction', fieldKey = null) {
   return dbQuery(
-    () => supabase.from('prompts')
-      .select('id, migration_type, stage, version, body, active, notes')
-      .eq('migration_type', migrationType)
-      .eq('stage', stage)
-      .eq('active', true)
-      .limit(1)
-      .maybeSingle(),
+    () => {
+      let q = supabase.from('prompts')
+        .select('id, migration_type, stage, field_key, version, body, active, notes')
+        .eq('migration_type', migrationType)
+        .eq('stage', stage)
+        .eq('active', true);
+      q = fieldKey == null ? q.is('field_key', null) : q.eq('field_key', fieldKey);
+      return q.limit(1).maybeSingle();
+    },
     null
   );
 }
@@ -629,7 +673,7 @@ export async function getActivePrompt(migrationType, stage = 'extraction') {
 export async function getAllPrompts() {
   return dbQuery(
     () => supabase.from('prompts')
-      .select('id, migration_type, stage, version, body, active, notes, created_at, created_by')
+      .select('id, migration_type, stage, field_key, version, body, active, notes, created_at, created_by')
       .order('migration_type')
       .order('stage')
       .order('version', { ascending: false }),
@@ -637,30 +681,33 @@ export async function getAllPrompts() {
   );
 }
 
-// Adds a new version for (migration_type, stage); if makeActive, flips off any prior active row
-// in the same (migration_type, stage) so the single-active uniqueness constraint is preserved.
-export async function createPromptVersion({ migrationType, stage = 'extraction', body, notes, makeActive = true, createdBy = null }) {
+// Adds a new version for (migration_type, stage, field_key); if makeActive, flips off any prior
+// active row in the same triple so the single-active uniqueness constraint is preserved.
+export async function createPromptVersion({ migrationType, stage = 'extraction', fieldKey = null, body, notes, makeActive = true, createdBy = null }) {
   try {
-    const { data: existing } = await supabase.from('prompts')
+    let sel = supabase.from('prompts')
       .select('version')
       .eq('migration_type', migrationType)
-      .eq('stage', stage)
-      .order('version', { ascending: false })
-      .limit(1);
+      .eq('stage', stage);
+    sel = fieldKey == null ? sel.is('field_key', null) : sel.eq('field_key', fieldKey);
+    const { data: existing } = await sel.order('version', { ascending: false }).limit(1);
     const nextVersion = (existing?.[0]?.version || 0) + 1;
 
     if (makeActive) {
-      await supabase.from('prompts')
+      let upd = supabase.from('prompts')
         .update({ active: false })
         .eq('migration_type', migrationType)
         .eq('stage', stage)
         .eq('active', true);
+      upd = fieldKey == null ? upd.is('field_key', null) : upd.eq('field_key', fieldKey);
+      await upd;
     }
 
     const { data, error } = await supabase.from('prompts')
       .insert({
         migration_type: migrationType,
         stage,
+        field_key: fieldKey,
         version: nextVersion,
         body,
         notes: notes || null,
@@ -679,15 +726,17 @@ export async function createPromptVersion({ migrationType, stage = 'extraction',
 export async function activatePromptVersion(promptId) {
   try {
     const { data: target } = await supabase.from('prompts')
-      .select('migration_type, stage')
+      .select('migration_type, stage, field_key')
       .eq('id', promptId)
       .single();
     if (!target) return false;
-    await supabase.from('prompts')
+    let upd = supabase.from('prompts')
       .update({ active: false })
       .eq('migration_type', target.migration_type)
       .eq('stage', target.stage)
       .eq('active', true);
+    upd = target.field_key == null ? upd.is('field_key', null) : upd.eq('field_key', target.field_key);
+    await upd;
     const { error } = await supabase.from('prompts')
       .update({ active: true })
       .eq('id', promptId);
@@ -742,6 +791,33 @@ export async function getExtractionRuns(projectId) {
       .limit(50),
     []
   );
+}
+
+// Return the set of equipment IDs that already have a completed OCR run on
+// this project. The writer side lives in src/equipmentOcr.js where
+// `source_filename` is set to `equipment#<id>` when the extraction_run is
+// created — keep the two in sync if the format ever changes.
+export async function listOcrdEquipmentIds(projectId) {
+  if (!projectId) return new Set();
+  try {
+    const { data, error } = await supabase.from('extraction_runs')
+      .select('source_filename')
+      .eq('project_id', projectId)
+      .eq('migration_type', 'Equipment')
+      .eq('stage', 'ocr')
+      .eq('status', 'complete')
+      .like('source_filename', 'equipment#%');
+    if (error || !data) return new Set();
+    const ids = new Set();
+    for (const row of data) {
+      const sf = row.source_filename || '';
+      const id = sf.startsWith('equipment#') ? sf.slice('equipment#'.length) : '';
+      if (id) ids.add(String(id));
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
 }
 
 export async function getExtractionRun(runId) {
