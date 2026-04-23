@@ -413,7 +413,7 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
                     <button
                       type="button"
                       onClick={() => showSource(p, f.label)}
-                      title={hasBbox(p?.bbox) ? 'Show extraction region' : 'Open source attachment'}
+                      title={hasBbox(p?.bbox) ? 'Show approximate extraction region' : 'Open source attachment'}
                       style={sourceLinkStyle}
                     >
                       #{p.source_attachment_id}
@@ -512,18 +512,41 @@ function AttachmentsPreview({ attachments, highlight }) {
 
   if (!active) return null;
 
-  const overlayBox = (() => {
+  // Vision LLMs are imprecise with coordinates (typically off by 10-30% of
+  // image dimensions), so the overlay treats the model's bbox as an
+  // "approximate region": the box is padded 20% on each side and drawn
+  // dashed, and a softer 9x9 grid cell containing the bbox center is tinted
+  // to steer the eye to the general neighborhood even when the padded box
+  // misses.
+  const overlays = (() => {
     if (!highlight || !imgRect) return null;
     if (String(highlight.attachmentId) !== String(active.id)) return null;
     if (active.classification !== 'image') return null;
     const norm = normalizeBbox(highlight.bbox, imgRect.naturalWidth, imgRect.naturalHeight);
     if (!norm) return null;
     const [x0, y0, x1, y1] = norm;
+
+    const w = x1 - x0, h = y1 - y0;
+    const px0 = Math.max(0, x0 - 0.2 * w);
+    const py0 = Math.max(0, y0 - 0.2 * h);
+    const px1 = Math.min(1, x1 + 0.2 * w);
+    const py1 = Math.min(1, y1 + 0.2 * h);
+
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const col = Math.max(0, Math.min(8, Math.floor(cx * 9)));
+    const row = Math.max(0, Math.min(8, Math.floor(cy * 9)));
+
+    const toRect = (a, b, c, d) => ({
+      left: imgRect.left + a * imgRect.width,
+      top: imgRect.top + b * imgRect.height,
+      width: Math.max(2, (c - a) * imgRect.width),
+      height: Math.max(2, (d - b) * imgRect.height),
+    });
+
     return {
-      left: imgRect.left + x0 * imgRect.width,
-      top: imgRect.top + y0 * imgRect.height,
-      width: Math.max(2, (x1 - x0) * imgRect.width),
-      height: Math.max(2, (y1 - y0) * imgRect.height),
+      padded: toRect(px0, py0, px1, py1),
+      cell: toRect(col / 9, row / 9, (col + 1) / 9, (row + 1) / 9),
+      cellLabel: `R${row + 1}·C${col + 1}`,
     };
   })();
 
@@ -597,20 +620,52 @@ function AttachmentsPreview({ attachments, highlight }) {
               style={{ width: '100%', height: '100%', minHeight: 260, border: 'none' }}
             />
           )}
-          {overlayBox && (
-            <div
-              style={{
-                position: 'absolute',
-                left: overlayBox.left,
-                top: overlayBox.top,
-                width: overlayBox.width,
-                height: overlayBox.height,
-                border: '3px solid #FF1744',
-                boxShadow: '0 0 0 1px rgba(255,255,255,0.9), 0 0 6px 2px rgba(255,23,68,0.6)',
-                pointerEvents: 'none',
-                borderRadius: 2,
-              }}
-            />
+          {overlays && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  left: overlays.cell.left,
+                  top: overlays.cell.top,
+                  width: overlays.cell.width,
+                  height: overlays.cell.height,
+                  background: 'rgba(255, 23, 68, 0.12)',
+                  border: '1px solid rgba(255, 23, 68, 0.35)',
+                  pointerEvents: 'none',
+                  borderRadius: 2,
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  left: overlays.padded.left,
+                  top: overlays.padded.top,
+                  width: overlays.padded.width,
+                  height: overlays.padded.height,
+                  border: '2px dashed #FF1744',
+                  boxShadow: '0 0 0 1px rgba(255,255,255,0.85)',
+                  pointerEvents: 'none',
+                  borderRadius: 2,
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  left: overlays.cell.left + 2,
+                  top: overlays.cell.top + 2,
+                  fontSize: 9,
+                  padding: '1px 4px',
+                  background: 'rgba(255, 23, 68, 0.85)',
+                  color: '#fff',
+                  borderRadius: 2,
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                  pointerEvents: 'none',
+                }}
+              >
+                approx · {overlays.cellLabel}
+              </div>
+            </>
           )}
         </div>
       </div>
