@@ -343,11 +343,14 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
   // Highlight requested by clicking a Source cell. `bump` lets the preview
   // re-focus the same attachment if the user clicks the same source twice.
   const [highlight, setHighlight] = useState(null);
-  const showSource = (p) => {
+  const showSource = (p, fieldLabel) => {
     if (!p?.source_attachment_id) return;
+    if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
+      console.info('[ocr source]', { field: fieldLabel, bbox: p.bbox, source_text: p.source_text, attachmentId: p.source_attachment_id });
+    }
     setHighlight({
       attachmentId: String(p.source_attachment_id),
-      bbox: Array.isArray(p.bbox) && p.bbox.length === 4 ? p.bbox : null,
+      bbox: p.bbox ?? null,
       bump: (highlight?.bump || 0) + 1,
     });
   };
@@ -409,12 +412,12 @@ function OcrResultsTable({ projectId, parsed, fullEquipment, attachments, fieldS
                   {p?.source_attachment_id ? (
                     <button
                       type="button"
-                      onClick={() => showSource(p)}
-                      title={Array.isArray(p.bbox) ? 'Show extraction region' : 'Open source attachment'}
+                      onClick={() => showSource(p, f.label)}
+                      title={hasBbox(p?.bbox) ? 'Show extraction region' : 'Open source attachment'}
                       style={sourceLinkStyle}
                     >
                       #{p.source_attachment_id}
-                      {Array.isArray(p.bbox) && <span style={{ marginLeft: 4, fontSize: 10 }}>⌖</span>}
+                      {hasBbox(p?.bbox) && <span style={{ marginLeft: 4, fontSize: 10 }}>⌖</span>}
                     </button>
                   ) : '—'}
                   {p?.source_text && <div style={{ fontSize: 10, color: C.textLight, marginTop: 2 }}>"{p.source_text.slice(0, 90)}"</div>}
@@ -495,6 +498,8 @@ function AttachmentsPreview({ attachments, highlight }) {
         top: ir.top - wr.top + wrap.scrollTop,
         width: ir.width,
         height: ir.height,
+        naturalWidth: img.naturalWidth || 0,
+        naturalHeight: img.naturalHeight || 0,
       });
     };
     update();
@@ -511,9 +516,9 @@ function AttachmentsPreview({ attachments, highlight }) {
     if (!highlight || !imgRect) return null;
     if (String(highlight.attachmentId) !== String(active.id)) return null;
     if (active.classification !== 'image') return null;
-    const bb = highlight.bbox;
-    if (!Array.isArray(bb) || bb.length !== 4) return null;
-    const [x0, y0, x1, y1] = bb.map(n => Math.max(0, Math.min(1, Number(n) || 0)));
+    const norm = normalizeBbox(highlight.bbox, imgRect.naturalWidth, imgRect.naturalHeight);
+    if (!norm) return null;
+    const [x0, y0, x1, y1] = norm;
     return {
       left: imgRect.left + x0 * imgRect.width,
       top: imgRect.top + y0 * imgRect.height,
@@ -577,6 +582,8 @@ function AttachmentsPreview({ attachments, highlight }) {
                   top: ir.top - wr.top + wrap.scrollTop,
                   width: ir.width,
                   height: ir.height,
+                  naturalWidth: img.naturalWidth || 0,
+                  naturalHeight: img.naturalHeight || 0,
                 });
               }}
               style={zoomed
@@ -628,6 +635,60 @@ function formatConfidence(c) {
     return `${Math.round(Math.max(0, Math.min(100, asNum)))}%`;
   }
   return String(c);
+}
+
+// Accept bbox in any of: [x0,y0,x1,y1], {x0,y0,x1,y1}, {x,y,width,height},
+// [x,y,w,h]. Returns [x0,y0,x1,y1] normalized 0-1, or null if unparseable.
+// If any coordinate exceeds 1, values are treated as pixel-space and rescaled
+// by the image's natural dimensions (when available).
+function normalizeBbox(bb, naturalW, naturalH) {
+  if (bb == null) return null;
+  let a, b, c, d, isXYWH = false;
+  if (Array.isArray(bb)) {
+    if (bb.length !== 4) return null;
+    [a, b, c, d] = bb.map(n => Number(n));
+    // Heuristic: if a+c or b+d > ~1.5 AND c,d are both smaller than a,b isn't
+    // a reliable signal either way. Prefer to treat as x0y0x1y1 unless the 3rd
+    // or 4th value is clearly a size (< the first pair). We can't always tell,
+    // so only treat as xywh when x1<x0 or y1<y0 would result — otherwise
+    // assume corners.
+    if (c < a || d < b) isXYWH = true;
+  } else if (typeof bb === 'object') {
+    if ('x0' in bb && 'y0' in bb && 'x1' in bb && 'y1' in bb) {
+      a = Number(bb.x0); b = Number(bb.y0); c = Number(bb.x1); d = Number(bb.y1);
+    } else if ('x' in bb && 'y' in bb && ('width' in bb || 'w' in bb) && ('height' in bb || 'h' in bb)) {
+      a = Number(bb.x); b = Number(bb.y);
+      c = Number(bb.width ?? bb.w); d = Number(bb.height ?? bb.h);
+      isXYWH = true;
+    } else {
+      return null;
+    }
+  } else {
+    return null;
+  }
+  if (![a, b, c, d].every(Number.isFinite)) return null;
+
+  let x0, y0, x1, y1;
+  if (isXYWH) { x0 = a; y0 = b; x1 = a + c; y1 = b + d; }
+  else { x0 = a; y0 = b; x1 = c; y1 = d; }
+
+  // Pixel-space detection: any coord > 1 => assume pixel, rescale.
+  const maxV = Math.max(x0, y0, x1, y1);
+  if (maxV > 1) {
+    if (!naturalW || !naturalH) return null;
+    x0 /= naturalW; x1 /= naturalW;
+    y0 /= naturalH; y1 /= naturalH;
+  }
+  x0 = Math.max(0, Math.min(1, x0));
+  y0 = Math.max(0, Math.min(1, y0));
+  x1 = Math.max(0, Math.min(1, x1));
+  y1 = Math.max(0, Math.min(1, y1));
+  if (x1 <= x0 || y1 <= y0) return null;
+  return [x0, y0, x1, y1];
+}
+
+function hasBbox(bb) {
+  return normalizeBbox(bb, 10000, 10000) != null;
 }
 
 const sourceLinkStyle = {
