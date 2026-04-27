@@ -820,6 +820,138 @@ export async function listOcrdEquipmentIds(projectId) {
   }
 }
 
+// --- EQUIPMENT OCR CACHE (equipment_ocr_results) ---
+//
+// Per-(project, equipment, attachment) cache so repeat scans cost zero
+// tokens. The fields jsonb is shallow-merged on upsert via the
+// merge_equipment_ocr_fields() Postgres function (migration 023).
+
+export async function getEquipmentOcrResults(projectId, equipmentId) {
+  if (!projectId || equipmentId == null) return [];
+  return dbQuery(
+    () => supabase.from('equipment_ocr_results')
+      .select('id, project_id, equipment_id, attachment_id, attachment_filename, attachment_content_type, fields, last_run_id, created_at, updated_at')
+      .eq('project_id', projectId)
+      .eq('equipment_id', String(equipmentId))
+      .order('updated_at', { ascending: false }),
+    []
+  );
+}
+
+// Batch-mode prefetch. Returns Map<equipmentId, rows[]>.
+export async function getEquipmentOcrResultsByEquipmentIds(projectId, equipmentIds) {
+  const out = new Map();
+  if (!projectId || !Array.isArray(equipmentIds) || equipmentIds.length === 0) return out;
+  const ids = Array.from(new Set(equipmentIds.map(String)));
+  const rows = await dbQuery(
+    () => supabase.from('equipment_ocr_results')
+      .select('id, equipment_id, attachment_id, attachment_filename, attachment_content_type, fields, last_run_id, updated_at')
+      .eq('project_id', projectId)
+      .in('equipment_id', ids),
+    []
+  );
+  for (const r of rows || []) {
+    const key = String(r.equipment_id);
+    if (!out.has(key)) out.set(key, []);
+    out.get(key).push(r);
+  }
+  return out;
+}
+
+// Upsert with shallow JSONB merge of fieldsDelta into the existing row.
+// Incoming wins on key collision. Returns the merged row or null on failure.
+export async function upsertEquipmentOcrResult({
+  projectId,
+  equipmentId,
+  attachmentId,
+  attachmentFilename = null,
+  attachmentContentType = null,
+  fieldsDelta = {},
+  runId = null,
+}) {
+  if (!projectId || equipmentId == null || attachmentId == null) return null;
+  return dbQuery(
+    () => supabase.rpc('merge_equipment_ocr_fields', {
+      p_project_id: projectId,
+      p_equipment_id: String(equipmentId),
+      p_attachment_id: String(attachmentId),
+      p_attachment_filename: attachmentFilename,
+      p_attachment_content_type: attachmentContentType,
+      p_fields_delta: fieldsDelta || {},
+      p_last_run_id: runId || null,
+    }),
+    null
+  );
+}
+
+// Per-project summary of OCR'd equipment for the History view: one entry
+// per equipment_id, with attachment count, the union of distinct field
+// labels we've extracted, and the most-recent updated_at across the
+// equipment's attachments. Grouping is done client-side because Supabase
+// REST doesn't expose generic aggregations and the per-project row count
+// is small (one row per attachment).
+export async function getProjectOcrHistory(projectId) {
+  if (!projectId) return [];
+  const rows = await dbQuery(
+    () => supabase.from('equipment_ocr_results')
+      .select('equipment_id, attachment_id, attachment_filename, attachment_content_type, fields, updated_at, last_run_id')
+      .eq('project_id', projectId)
+      .order('updated_at', { ascending: false }),
+    []
+  );
+  const byEquipment = new Map();
+  for (const r of rows || []) {
+    const key = String(r.equipment_id);
+    let agg = byEquipment.get(key);
+    if (!agg) {
+      agg = {
+        equipmentId: key,
+        attachmentCount: 0,
+        fieldLabels: new Set(),
+        lastUpdated: r.updated_at || null,
+        lastRunId: r.last_run_id || null,
+      };
+      byEquipment.set(key, agg);
+    }
+    agg.attachmentCount += 1;
+    for (const label of Object.keys(r.fields || {})) agg.fieldLabels.add(label);
+    const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    const cur = agg.lastUpdated ? new Date(agg.lastUpdated).getTime() : 0;
+    if (t > cur) {
+      agg.lastUpdated = r.updated_at;
+      agg.lastRunId = r.last_run_id || agg.lastRunId;
+    }
+  }
+  return Array.from(byEquipment.values())
+    .map(a => ({ ...a, fieldLabels: Array.from(a.fieldLabels), fieldCount: a.fieldLabels.size }))
+    .sort((a, b) => {
+      const ta = a.lastUpdated ? new Date(a.lastUpdated).getTime() : 0;
+      const tb = b.lastUpdated ? new Date(b.lastUpdated).getTime() : 0;
+      return tb - ta;
+    });
+}
+
+// Equipment IDs (per project) that have ANY cache row. Sibling to
+// listOcrdEquipmentIds — that one reads extraction_runs (audit log); this
+// one reads the actual cache table and is what batch-mode should consult
+// for "already scanned" pre-filtering.
+export async function listCachedEquipmentIds(projectId) {
+  if (!projectId) return new Set();
+  try {
+    const { data, error } = await supabase.from('equipment_ocr_results')
+      .select('equipment_id')
+      .eq('project_id', projectId);
+    if (error || !data) return new Set();
+    const ids = new Set();
+    for (const row of data) {
+      if (row.equipment_id) ids.add(String(row.equipment_id));
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
 export async function getExtractionRun(runId) {
   return dbQuery(
     () => supabase.from('extraction_runs')

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { C } from '../theme';
 import { syncFmxDataForProject } from '../fmxSync';
-import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
-import { getAllDependencyCaches, listOcrdEquipmentIds } from '../db';
+import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment, loadCachedOcrForEquipment } from '../equipmentOcr';
+import { getAllDependencyCaches, listCachedEquipmentIds, getProjectOcrHistory } from '../db';
 
 // Equipment Attachment OCR tool.
 //
@@ -67,10 +67,15 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
     return <Empty>Select a project to use this tool.</Empty>;
   }
 
-  if (!project.fmx_credentials || !project.fmx_site_url) {
+  // The encrypted `fmx_credentials` column is revoked from the browser
+  // (migration 011), so we gate on the public `fmx_connection_verified`
+  // boolean — same flag the rest of the app uses (DependenciesView,
+  // ProjectSettingsView, etc.). Server-side calls in /api/* still look
+  // up the encrypted blob by projectId.
+  if (!project.fmx_connection_verified || !project.fmx_site_url) {
     return (
       <Empty>
-        This project has no saved FMX credentials. Save credentials in
+        This project has no verified FMX credentials. Save credentials in
         Settings → FMX before running OCR.
       </Empty>
     );
@@ -149,7 +154,7 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
       </Section>
 
       {/* Mode-specific runner */}
-      {mode === 'single' ? (
+      {mode === 'single' && (
         <SingleModePanel
           projectId={project.id}
           userId={currentProfile?.id}
@@ -163,7 +168,8 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
           onPick={setPickedEquipmentId}
           fieldSelection={fieldSelection}
         />
-      ) : (
+      )}
+      {mode === 'batch' && (
         <BatchModePanel
           projectId={project.id}
           userId={currentProfile?.id}
@@ -174,6 +180,13 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
           fieldSelection={fieldSelection}
         />
       )}
+      {mode === 'history' && (
+        <HistoryPanel
+          projectId={project.id}
+          userId={currentProfile?.id}
+          fieldSelection={fieldSelection}
+        />
+      )}
     </div>
   );
 }
@@ -181,20 +194,64 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
 function SingleModePanel({ projectId, userId, equipment, equipmentLoading, equipmentError, onLoadEquipment, searchTerm, setSearchTerm, pickedId, onPick, fieldSelection }) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
-  const [result, setResult] = useState(null); // { parsed, fullEquipment, attachments, usage }
+  // result: { parsed, fullEquipment, attachments, usage, cacheStats?, fromCache?, lastUpdated? }
+  const [result, setResult] = useState(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
 
-  // Reset any prior run when the user picks a different item.
-  useEffect(() => { setResult(null); setRunError(null); }, [pickedId]);
+  // When the picked equipment changes, clear prior result and try to
+  // auto-load anything we have cached. If the cache turns up values, the
+  // user sees them immediately — no Claude call required.
+  useEffect(() => {
+    setResult(null);
+    setRunError(null);
+    if (!pickedId || !projectId) return;
+    let cancelled = false;
+    setCacheLoading(true);
+    (async () => {
+      try {
+        const full = await getEquipment(projectId, pickedId);
+        const cached = await loadCachedOcrForEquipment(projectId, pickedId);
+        if (cancelled) return;
+        if (cached?.parsed) {
+          setResult({
+            parsed: cached.parsed,
+            fullEquipment: full,
+            attachments: cached.attachments || [],
+            usage: null,
+            fromCache: true,
+            lastUpdated: cached.lastUpdated || null,
+            cacheStats: { attachmentsCacheHit: (cached.attachments || []).length, attachmentsCalled: 0 },
+          });
+        } else {
+          // No cache yet — just stash the full equipment so Run OCR is fast.
+          setResult({ parsed: null, fullEquipment: full, attachments: [], usage: null, fromCache: false });
+        }
+      } catch {
+        // non-fatal — user can still trigger a run manually
+      } finally {
+        if (!cancelled) setCacheLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pickedId, projectId]);
 
-  const runOcr = async () => {
+  const runOcr = async ({ ignoreCache = false } = {}) => {
     setRunning(true);
     setRunError(null);
     try {
-      const full = await getEquipment(projectId, pickedId);
+      const full = result?.fullEquipment || await getEquipment(projectId, pickedId);
       const res = await runOcrOnEquipment({
-        projectId, userId, equipment: full, fieldSelection,
+        projectId, userId, equipment: full, fieldSelection, ignoreCache,
       });
-      setResult({ parsed: res.parsed, fullEquipment: full, attachments: res.attachments, usage: res.usage });
+      setResult({
+        parsed: res.parsed,
+        fullEquipment: full,
+        attachments: res.attachments,
+        usage: res.usage,
+        fromCache: false,
+        cacheStats: res.cacheStats || null,
+        lastUpdated: Date.now(),
+      });
     } catch (e) {
       setRunError(e?.message || 'OCR failed');
     } finally {
@@ -266,13 +323,31 @@ function SingleModePanel({ projectId, userId, equipment, equipmentLoading, equip
       )}
 
       {picked && (
-        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
-          <PrimaryButton
-            onClick={runOcr}
-            disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
-          >
-            {running ? 'Running OCR…' : `Run OCR on #${picked.id}`}
-          </PrimaryButton>
+        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {result?.fromCache ? (
+            <>
+              <PrimaryButton
+                onClick={() => runOcr({ ignoreCache: false })}
+                disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
+              >
+                {running ? 'Scanning…' : 'Scan missing fields'}
+              </PrimaryButton>
+              <MiniButton
+                onClick={() => runOcr({ ignoreCache: true })}
+                disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
+              >
+                Re-scan all
+              </MiniButton>
+              <CacheBadge lastUpdated={result.lastUpdated} attachmentCount={(result.attachments || []).length} />
+            </>
+          ) : (
+            <PrimaryButton
+              onClick={() => runOcr({ ignoreCache: false })}
+              disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length) || cacheLoading}
+            >
+              {running ? 'Running OCR…' : cacheLoading ? 'Loading…' : `Run OCR on #${picked.id}`}
+            </PrimaryButton>
+          )}
           {!fieldSelection.length && <Warn>Select at least one field above.</Warn>}
           {!(picked.attachmentIDs?.length) && <Warn>This equipment has no attachments.</Warn>}
         </div>
@@ -517,6 +592,307 @@ function renderVal(v) {
 const resTh = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, borderBottom: `1px solid ${C.border}` };
 const resTd = { padding: '8px 10px', verticalAlign: 'top' };
 
+// HistoryPanel — read-only browse + re-review surface for previously
+// scanned equipment. Pulls aggregated cache rows from
+// equipment_ocr_results, joins with FMX equipment metadata for tag /
+// building / type names, and lets the user expand any row into the same
+// review UI the other modes use.
+function HistoryPanel({ projectId, userId, fieldSelection }) {
+  const [history, setHistory] = useState(null); // null = loading; [] = empty
+  const [historyError, setHistoryError] = useState(null);
+  const [equipmentList, setEquipmentList] = useState(null);
+  const [deps, setDeps] = useState({ buildings: [], equipmentTypes: [] });
+  const [searchTerm, setSearchTerm] = useState('');
+  const [expandedId, setExpandedId] = useState(null);
+  const [expandedState, setExpandedState] = useState(null); // { fullEquipment, parsed, attachments, usage, applied, fromCache, lastUpdated }
+  const [expandedLoading, setExpandedLoading] = useState(false);
+  const [expandedError, setExpandedError] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  // Load history + equipment list + dep caches in parallel.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    setHistory(null);
+    setHistoryError(null);
+    (async () => {
+      try {
+        const [rows, eq, caches] = await Promise.all([
+          getProjectOcrHistory(projectId),
+          listEquipment(projectId).catch(() => []),
+          getAllDependencyCaches(projectId).catch(() => []),
+        ]);
+        if (cancelled) return;
+        setHistory(rows || []);
+        setEquipmentList(eq || []);
+        const byKey = Object.fromEntries((caches || []).map(r => [r.schema_type, r.extra?.items || []]));
+        setDeps({
+          buildings: byKey['buildings'] || [],
+          equipmentTypes: byKey['equipment-types'] || [],
+        });
+      } catch (e) {
+        if (!cancelled) setHistoryError(e?.message || 'Failed to load OCR history');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const equipmentById = useMemo(() => {
+    const m = new Map();
+    for (const e of equipmentList || []) m.set(String(e.id), e);
+    return m;
+  }, [equipmentList]);
+
+  const buildingName = useMemo(() => {
+    const m = new Map();
+    for (const b of deps.buildings) m.set(String(b.id), b.name);
+    return m;
+  }, [deps.buildings]);
+  const equipTypeName = useMemo(() => {
+    const m = new Map();
+    for (const t of deps.equipmentTypes) m.set(String(t.id), t.name);
+    return m;
+  }, [deps.equipmentTypes]);
+
+  const filtered = useMemo(() => {
+    if (!history) return [];
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return history;
+    return history.filter(h => {
+      const eq = equipmentById.get(h.equipmentId);
+      if (h.equipmentId.includes(q)) return true;
+      if (eq?.tag && eq.tag.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [history, searchTerm, equipmentById]);
+
+  // When the user clicks a row, fetch the full equipment record + load
+  // the cached parse so the review UI renders with prior values inline.
+  const expand = async (equipmentId) => {
+    if (expandedId === equipmentId) {
+      setExpandedId(null);
+      setExpandedState(null);
+      setExpandedError(null);
+      return;
+    }
+    setExpandedId(equipmentId);
+    setExpandedState(null);
+    setExpandedError(null);
+    setExpandedLoading(true);
+    try {
+      const [full, cached] = await Promise.all([
+        getEquipment(projectId, equipmentId),
+        loadCachedOcrForEquipment(projectId, equipmentId),
+      ]);
+      setExpandedState({
+        fullEquipment: full,
+        parsed: cached?.parsed || null,
+        attachments: cached?.attachments || [],
+        usage: null,
+        fromCache: true,
+        lastUpdated: cached?.lastUpdated || null,
+      });
+    } catch (e) {
+      setExpandedError(e?.message || 'Failed to load equipment');
+    } finally {
+      setExpandedLoading(false);
+    }
+  };
+
+  const runOcrFromHistory = async ({ ignoreCache = false } = {}) => {
+    if (!expandedId || !expandedState?.fullEquipment) return;
+    setRunning(true);
+    setExpandedError(null);
+    try {
+      const res = await runOcrOnEquipment({
+        projectId, userId,
+        equipment: expandedState.fullEquipment,
+        fieldSelection,
+        ignoreCache,
+      });
+      setExpandedState(s => ({
+        ...s,
+        parsed: res.parsed,
+        attachments: res.attachments,
+        usage: res.usage,
+        fromCache: false,
+        lastUpdated: Date.now(),
+      }));
+      // Refresh history aggregate (counts may have changed).
+      const refreshed = await getProjectOcrHistory(projectId);
+      setHistory(refreshed || []);
+    } catch (e) {
+      setExpandedError(e?.message || 'OCR failed');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Section title="Previously OCR'd equipment" right={
+      <span style={{ fontSize: 11, color: C.textMid }}>
+        {history === null ? 'Loading…' : `${history.length} equipment with cached results`}
+      </span>
+    }>
+      {historyError && <ErrorBox>{historyError}</ErrorBox>}
+      {history !== null && history.length === 0 && !historyError && (
+        <Hint>No equipment has been OCR'd in this project yet. Switch to Single or Batch mode to run your first scan — results will appear here automatically.</Hint>
+      )}
+
+      {history && history.length > 0 && (
+        <>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder={`Search ${history.length} cached equipment by tag or id…`}
+            style={{
+              width: '100%', padding: '8px 10px', fontSize: 13,
+              border: `1px solid ${C.border}`, borderRadius: 6, marginBottom: 8, boxSizing: 'border-box',
+            }}
+          />
+
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden' }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: '70px 1fr 160px 140px 110px 80px 60px 100px',
+              gap: 0, padding: '8px 10px', background: '#FAFAFA',
+              fontSize: 11, fontWeight: 600, color: C.navy, borderBottom: `1px solid ${C.border}`,
+            }}>
+              <span>ID</span>
+              <span>Tag</span>
+              <span>Building</span>
+              <span>Type</span>
+              <span>Last scanned</span>
+              <span style={{ textAlign: 'right' }}>Attach.</span>
+              <span style={{ textAlign: 'right' }}>Fields</span>
+              <span style={{ textAlign: 'right' }}></span>
+            </div>
+            <div style={{ maxHeight: 360, overflow: 'auto' }}>
+              {filtered.length === 0 && (
+                <div style={{ padding: 14, fontSize: 12, color: C.textMid }}>No matches.</div>
+              )}
+              {filtered.map(h => {
+                const eq = equipmentById.get(h.equipmentId);
+                const bName = eq ? (buildingName.get(String(eq.buildingID ?? '')) || '') : '';
+                const tName = eq ? (equipTypeName.get(String(eq.equipmentTypeID ?? '')) || '') : '';
+                const isExpanded = expandedId === h.equipmentId;
+                return (
+                  <div key={h.equipmentId} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <div
+                      style={{
+                        display: 'grid', gridTemplateColumns: '70px 1fr 160px 140px 110px 80px 60px 100px',
+                        gap: 0, padding: '8px 10px', alignItems: 'center', fontSize: 12,
+                        background: isExpanded ? C.navyTint : '#fff', cursor: 'pointer',
+                      }}
+                      onClick={() => expand(h.equipmentId)}
+                    >
+                      <span style={{ fontWeight: 600, color: C.navy }}>#{h.equipmentId}</span>
+                      <span style={{ color: C.textDark, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {eq?.tag || <em style={{ color: C.textLight }}>(no tag)</em>}
+                      </span>
+                      <span style={{ color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={bName}>
+                        {bName || <span style={{ color: C.textLight }}>—</span>}
+                      </span>
+                      <span style={{ color: C.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tName}>
+                        {tName || <span style={{ color: C.textLight }}>—</span>}
+                      </span>
+                      <span style={{ color: C.textMid }}>{formatRelative(h.lastUpdated)}</span>
+                      <span style={{ textAlign: 'right', color: C.okText }}>{h.attachmentCount}</span>
+                      <span style={{ textAlign: 'right', color: C.textDark }}>{h.fieldCount}</span>
+                      <span style={{ textAlign: 'right' }}>
+                        <MiniButton onClick={(e) => { e.stopPropagation(); expand(h.equipmentId); }}>
+                          {isExpanded ? 'Hide' : 'Review'}
+                        </MiniButton>
+                      </span>
+                    </div>
+                    {isExpanded && (
+                      <div style={{ padding: 12, background: '#FAFAFA' }}>
+                        {expandedLoading && <Hint>Loading equipment…</Hint>}
+                        {expandedError && <ErrorBox>{expandedError}</ErrorBox>}
+                        {expandedState && (
+                          <>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                              <PrimaryButton
+                                onClick={() => runOcrFromHistory({ ignoreCache: false })}
+                                disabled={running || !fieldSelection.length}
+                              >
+                                {running ? 'Scanning…' : 'Scan missing fields'}
+                              </PrimaryButton>
+                              <MiniButton
+                                onClick={() => runOcrFromHistory({ ignoreCache: true })}
+                                disabled={running || !fieldSelection.length}
+                              >
+                                Re-scan all
+                              </MiniButton>
+                              <CacheBadge lastUpdated={expandedState.lastUpdated} attachmentCount={(expandedState.attachments || []).length} />
+                              {!fieldSelection.length && <Warn>Select at least one field above to enable scanning.</Warn>}
+                            </div>
+                            {expandedState.parsed ? (
+                              <OcrResultsTable
+                                projectId={projectId}
+                                parsed={expandedState.parsed}
+                                fullEquipment={expandedState.fullEquipment}
+                                attachments={expandedState.attachments}
+                                fieldSelection={
+                                  // History rows may have been scanned with a different
+                                  // field set than what's currently selected. Synthesize
+                                  // a selection from the cached field labels so the
+                                  // table actually renders prior values; the user can
+                                  // still apply only what they want.
+                                  buildHistoryFieldSelection(expandedState.parsed, fieldSelection)
+                                }
+                                usage={expandedState.usage}
+                                applied={expandedState.applied}
+                                onApplied={(updated) => setExpandedState(s => ({ ...s, applied: true, fullEquipment: updated || s.fullEquipment }))}
+                              />
+                            ) : (
+                              <Hint>This equipment has cache rows but no field values are populated. Re-scan to refresh.</Hint>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
+// Synthesize a fieldSelection list for the History review table that
+// covers EVERY label present in the cached parse, even if the current
+// session's "Fields to extract" picker doesn't have it checked. Cached
+// labels not in fieldSelection are shown as 'system' rows pointing at
+// the label string itself — read-only-ish (Apply ignores anything the
+// user doesn't actively accept). When the label IS in the current
+// selection, prefer the live row so 'system' vs 'custom' kind + key
+// match the FMX schema for the Apply step.
+function buildHistoryFieldSelection(parsed, currentSelection) {
+  const proposed = parsed?.fields || {};
+  const byLabel = new Map();
+  for (const f of currentSelection || []) byLabel.set(f.label, f);
+  const out = [];
+  for (const f of currentSelection || []) {
+    if (proposed[f.label] != null) out.push(f);
+  }
+  for (const label of Object.keys(proposed)) {
+    if (byLabel.has(label)) continue;
+    out.push({
+      id: `hist:${label}`,
+      key: label,
+      label,
+      kind: 'system',
+      fieldType: 'system',
+      raw: {},
+    });
+  }
+  return out;
+}
+
 function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipmentError, onLoadEquipment, fieldSelection }) {
   const eligible = useMemo(() => withAttachments(equipment || []), [equipment]);
 
@@ -555,7 +931,10 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
   async function refreshOcrd() {
     if (!projectId) return;
     setOcrdLoading(true);
-    const ids = await listOcrdEquipmentIds(projectId);
+    // Source of truth is the cache table (equipment_ocr_results), not the
+    // audit log. The cache reflects "we have results we can show without
+    // re-scanning"; the audit log can include failed runs.
+    const ids = await listCachedEquipmentIds(projectId);
     setOcrdIds(ids);
     setOcrdLoading(false);
   }
@@ -883,6 +1262,7 @@ function ModeSwitcher({ mode, onChange }) {
       {[
         { key: 'single', label: 'Single equipment' },
         { key: 'batch', label: 'Batch (project-wide)' },
+        { key: 'history', label: 'History' },
       ].map(t => {
         const active = mode === t.key;
         return (
@@ -963,6 +1343,39 @@ function ErrorBox({ children }) {
       {children}
     </div>
   );
+}
+
+function CacheBadge({ lastUpdated, attachmentCount }) {
+  const rel = formatRelative(lastUpdated);
+  return (
+    <span
+      title="Loaded from cache. Click 'Scan missing fields' to fill anything new, or 'Re-scan all' to refresh from Claude."
+      style={{
+        fontSize: 11, padding: '3px 8px', borderRadius: 10,
+        background: C.okBg, color: C.okText, fontWeight: 600,
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}
+    >
+      💾 cached{rel ? ` · ${rel}` : ''}{attachmentCount ? ` · ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}` : ''}
+    </span>
+  );
+}
+
+function formatRelative(ts) {
+  if (!ts) return '';
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mon = Math.floor(day / 30);
+  if (mon < 12) return `${mon}mo ago`;
+  return `${Math.floor(mon / 12)}y ago`;
 }
 
 function SubtleCount({ children }) {

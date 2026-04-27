@@ -5,7 +5,7 @@
 
 import { fmxFetch, fmxAttachmentDownload, claudeFetch, parseClaudeText } from './apiClient';
 import { fetchAllPages } from './fmxSync';
-import { getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun } from './db';
+import { getActivePrompt, getEnabledExamplesForPrompt, createExtractionRun, completeExtractionRun, getEquipmentOcrResults, upsertEquipmentOcrResult } from './db';
 import { buildSystemPrompt, extractUsage } from './promptTemplates';
 import { resolvePromptKeyForField, getOcrFieldPromptMeta } from './equipmentOcrFields';
 
@@ -75,8 +75,10 @@ export async function fetchAttachmentForOcr(projectId, attachmentId) {
 // - `equipment`: the full equipment record (must include id, tag, attachmentIDs, customFields).
 // - `fieldSelection`: [{ id, key, label, kind: 'system'|'custom', fieldType, raw }] from EquipmentOcrTab.
 // - `projectId`, `userId`: used for run logging.
-// Returns { parsed, runId, usage, attachments: [{ id, classification, skipped? }] } or throws.
-export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSelection }) {
+// - `ignoreCache`: when true, skip reading the (project, equipment, attachment)
+//   cache so every attachment is sent to Claude. Cache writes still happen.
+// Returns { parsed, runId, usage, attachments, cacheStats } or throws.
+export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSelection, ignoreCache = false }) {
   if (!equipment?.id) throw new Error('Missing equipment record');
   if (!Array.isArray(fieldSelection) || fieldSelection.length === 0) {
     throw new Error('No fields selected for extraction');
@@ -85,6 +87,17 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
   const prompt = await getActivePrompt('Equipment', 'ocr', null);
   if (!prompt) throw new Error('No active Equipment OCR prompt. Admin must seed one.');
   const examples = await getEnabledExamplesForPrompt(prompt.id);
+
+  // Cache read: build attachmentId → fields map of prior values for this
+  // equipment. Skipped when ignoreCache=true so the user's "Re-scan all"
+  // action genuinely re-asks Claude for everything.
+  const cacheByAttachmentId = new Map();
+  if (!ignoreCache) {
+    const cacheRows = await getEquipmentOcrResults(projectId, equipment.id);
+    for (const row of cacheRows || []) {
+      cacheByAttachmentId.set(String(row.attachment_id), row.fields || {});
+    }
+  }
 
   // Per-field prompts: for each selected field, resolve it to a registered
   // prompt key (by label) and pull its active body if one exists. Fields with
@@ -178,15 +191,59 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     const perAttachmentUsage = [];
     const overflowed = [];
     const includedForPreview = [];
+    let attachmentsCalled = 0;
+    let attachmentsCacheHit = 0;
+
+    // mergeEntry: prefer higher-confidence answer; fall back to first non-empty.
+    const mergeEntry = (label, entry, fallbackAttId) => {
+      if (!entry || entry.value == null || entry.value === '') return;
+      const incoming = {
+        ...entry,
+        source_attachment_id: entry.source_attachment_id || fallbackAttId || null,
+      };
+      const existing = mergedFields[label];
+      if (!existing) {
+        mergedFields[label] = incoming;
+        return;
+      }
+      const ec = Number(existing.confidence ?? 0);
+      const ic = Number(incoming.confidence ?? 0);
+      if (ic > ec) mergedFields[label] = incoming;
+    };
 
     for (const a of prepared) {
+      const attId = a.meta?.id != null ? String(a.meta.id) : null;
+      const cachedFields = (attId && cacheByAttachmentId.get(attId)) || null;
+
+      // Determine which fields are still missing from cache for THIS
+      // attachment. If we have full coverage and cache reads are enabled,
+      // skip the Claude call entirely.
+      const missingFields = ignoreCache
+        ? fieldSelection
+        : fieldSelection.filter(f => !cachedFields || !(f.label in cachedFields));
+
+      // Always replay cached values into the merged result so the UI sees
+      // them — even if we still need a Claude call for missing fields.
+      if (cachedFields) {
+        for (const [label, entry] of Object.entries(cachedFields)) {
+          mergeEntry(label, entry, a.meta?.id);
+        }
+      }
+
+      if (missingFields.length === 0) {
+        // Full cache coverage; nothing to ask Claude. Still surface for preview.
+        attachmentsCacheHit += 1;
+        includedForPreview.push(a);
+        continue;
+      }
+
       const size = a.base64 ? a.base64.length : 0;
       if (!a.base64 || size > PER_CALL_BUDGET) {
         overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: 'skipped: attachment exceeds per-request size budget' });
         continue;
       }
       const content = [
-        { type: 'text', text: buildUserPromptText(equipment, fieldSelection) },
+        { type: 'text', text: buildUserPromptText(equipment, missingFields) },
         attachmentToClaudeBlock(a),
       ];
       try {
@@ -199,23 +256,33 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
         const u = extractUsage(resp);
         perAttachmentUsage.push(u);
         includedForPreview.push(a);
+        attachmentsCalled += 1;
 
         const fields = parsed?.fields || {};
+        const cacheableDelta = {};
         for (const [label, entry] of Object.entries(fields)) {
           if (!entry || entry.value == null || entry.value === '') continue;
-          const existing = mergedFields[label];
-          const incoming = {
-            ...entry,
-            source_attachment_id: entry.source_attachment_id || a.meta?.id || null,
-          };
-          if (!existing) {
-            mergedFields[label] = incoming;
-            continue;
+          const stamped = { ...entry, source_attachment_id: entry.source_attachment_id || a.meta?.id || null };
+          mergeEntry(label, stamped, a.meta?.id);
+          cacheableDelta[label] = stamped;
+        }
+
+        // Persist this attachment's contribution. Shallow JSONB merge in
+        // Postgres keeps prior labels untouched; incoming wins on collision.
+        if (Object.keys(cacheableDelta).length > 0) {
+          try {
+            await upsertEquipmentOcrResult({
+              projectId,
+              equipmentId: equipment.id,
+              attachmentId: a.meta?.id,
+              attachmentFilename: a.meta?.filename || a.filename || null,
+              attachmentContentType: a.contentType || null,
+              fieldsDelta: cacheableDelta,
+              runId: run?.id || null,
+            });
+          } catch {
+            // Cache write failures are non-fatal — the user still sees the result.
           }
-          // Prefer the higher-confidence answer; fall back to first non-empty.
-          const ec = Number(existing.confidence ?? 0);
-          const ic = Number(incoming.confidence ?? 0);
-          if (ic > ec) mergedFields[label] = incoming;
         }
       } catch (e) {
         overflowed.push({ id: a.meta?.id, filename: a.meta?.filename, reason: `OCR call failed: ${e?.message || 'unknown'}` });
@@ -223,7 +290,10 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
     }
 
     const parsed = Object.keys(mergedFields).length
-      ? { fields: mergedFields, notes: `merged from ${perAttachmentUsage.length} attachment call(s)` }
+      ? {
+          fields: mergedFields,
+          notes: `merged from ${attachmentsCalled} live + ${attachmentsCacheHit} cached attachment call(s)`,
+        }
       : null;
     const usage = perAttachmentUsage.reduce(
       (acc, u) => ({
@@ -248,6 +318,11 @@ export async function runOcrOnEquipment({ projectId, userId, equipment, fieldSel
       parsed: parsed || { fields: {}, notes: 'no results' },
       runId: run?.id,
       usage,
+      cacheStats: {
+        attachmentsCalled,
+        attachmentsCacheHit,
+        attachmentsTotal: attachmentsCalled + attachmentsCacheHit,
+      },
       // base64 + contentType are kept so the review UI can render the same
       // bytes Claude saw, without a second round-trip through /api/fmx.
       attachments: [
@@ -405,6 +480,46 @@ export async function updateEquipment(projectId, equipmentId, payload) {
   }
   if (res.status === 204) return { status: 204 };
   try { return await res.json(); } catch { return { status: res.status }; }
+}
+
+// Auto-load helper: read cache rows for one equipment and project them into
+// the same `{ fields, notes }` shape `runOcrOnEquipment` returns, so the UI
+// can hand them straight to `proposeAcceptedRows`. When the same field
+// label appears across multiple cached attachments, we keep the
+// higher-confidence entry (matching the merge rule used during a live run).
+export async function loadCachedOcrForEquipment(projectId, equipmentId) {
+  const rows = await getEquipmentOcrResults(projectId, equipmentId);
+  if (!rows || rows.length === 0) {
+    return { parsed: null, attachments: [], rows: [] };
+  }
+  const merged = {};
+  for (const row of rows) {
+    const fields = row.fields || {};
+    for (const [label, entry] of Object.entries(fields)) {
+      if (!entry || entry.value == null || entry.value === '') continue;
+      const incoming = { ...entry, source_attachment_id: entry.source_attachment_id || row.attachment_id };
+      const existing = merged[label];
+      if (!existing) { merged[label] = incoming; continue; }
+      const ec = Number(existing.confidence ?? 0);
+      const ic = Number(incoming.confidence ?? 0);
+      if (ic > ec) merged[label] = incoming;
+    }
+  }
+  const lastUpdated = rows.reduce((acc, r) => {
+    const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    return t > acc ? t : acc;
+  }, 0);
+  return {
+    parsed: Object.keys(merged).length ? { fields: merged, notes: `cached from ${rows.length} attachment(s)` } : null,
+    attachments: rows.map(r => ({
+      id: r.attachment_id,
+      filename: r.attachment_filename || null,
+      contentType: r.attachment_content_type || null,
+      cached: true,
+    })),
+    rows,
+    lastUpdated: lastUpdated || null,
+  };
 }
 
 // Build an "accepted rows" list from an OCR parsed result + the field catalog.
