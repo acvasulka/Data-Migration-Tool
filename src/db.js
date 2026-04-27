@@ -884,6 +884,53 @@ export async function upsertEquipmentOcrResult({
   );
 }
 
+// Per-project summary of OCR'd equipment for the History view: one entry
+// per equipment_id, with attachment count, the union of distinct field
+// labels we've extracted, and the most-recent updated_at across the
+// equipment's attachments. Grouping is done client-side because Supabase
+// REST doesn't expose generic aggregations and the per-project row count
+// is small (one row per attachment).
+export async function getProjectOcrHistory(projectId) {
+  if (!projectId) return [];
+  const rows = await dbQuery(
+    () => supabase.from('equipment_ocr_results')
+      .select('equipment_id, attachment_id, attachment_filename, attachment_content_type, fields, updated_at, last_run_id')
+      .eq('project_id', projectId)
+      .order('updated_at', { ascending: false }),
+    []
+  );
+  const byEquipment = new Map();
+  for (const r of rows || []) {
+    const key = String(r.equipment_id);
+    let agg = byEquipment.get(key);
+    if (!agg) {
+      agg = {
+        equipmentId: key,
+        attachmentCount: 0,
+        fieldLabels: new Set(),
+        lastUpdated: r.updated_at || null,
+        lastRunId: r.last_run_id || null,
+      };
+      byEquipment.set(key, agg);
+    }
+    agg.attachmentCount += 1;
+    for (const label of Object.keys(r.fields || {})) agg.fieldLabels.add(label);
+    const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    const cur = agg.lastUpdated ? new Date(agg.lastUpdated).getTime() : 0;
+    if (t > cur) {
+      agg.lastUpdated = r.updated_at;
+      agg.lastRunId = r.last_run_id || agg.lastRunId;
+    }
+  }
+  return Array.from(byEquipment.values())
+    .map(a => ({ ...a, fieldLabels: Array.from(a.fieldLabels), fieldCount: a.fieldLabels.size }))
+    .sort((a, b) => {
+      const ta = a.lastUpdated ? new Date(a.lastUpdated).getTime() : 0;
+      const tb = b.lastUpdated ? new Date(b.lastUpdated).getTime() : 0;
+      return tb - ta;
+    });
+}
+
 // Equipment IDs (per project) that have ANY cache row. Sibling to
 // listOcrdEquipmentIds — that one reads extraction_runs (audit log); this
 // one reads the actual cache table and is what batch-mode should consult
