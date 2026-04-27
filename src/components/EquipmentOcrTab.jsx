@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { C } from '../theme';
 import { syncFmxDataForProject } from '../fmxSync';
-import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment } from '../equipmentOcr';
-import { getAllDependencyCaches, listOcrdEquipmentIds } from '../db';
+import { listEquipment, withAttachments, getEquipment, runOcrOnEquipment, proposeAcceptedRows, buildEquipmentPutPayload, updateEquipment, loadCachedOcrForEquipment } from '../equipmentOcr';
+import { getAllDependencyCaches, listCachedEquipmentIds } from '../db';
 
 // Equipment Attachment OCR tool.
 //
@@ -181,20 +181,64 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
 function SingleModePanel({ projectId, userId, equipment, equipmentLoading, equipmentError, onLoadEquipment, searchTerm, setSearchTerm, pickedId, onPick, fieldSelection }) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
-  const [result, setResult] = useState(null); // { parsed, fullEquipment, attachments, usage }
+  // result: { parsed, fullEquipment, attachments, usage, cacheStats?, fromCache?, lastUpdated? }
+  const [result, setResult] = useState(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
 
-  // Reset any prior run when the user picks a different item.
-  useEffect(() => { setResult(null); setRunError(null); }, [pickedId]);
+  // When the picked equipment changes, clear prior result and try to
+  // auto-load anything we have cached. If the cache turns up values, the
+  // user sees them immediately — no Claude call required.
+  useEffect(() => {
+    setResult(null);
+    setRunError(null);
+    if (!pickedId || !projectId) return;
+    let cancelled = false;
+    setCacheLoading(true);
+    (async () => {
+      try {
+        const full = await getEquipment(projectId, pickedId);
+        const cached = await loadCachedOcrForEquipment(projectId, pickedId);
+        if (cancelled) return;
+        if (cached?.parsed) {
+          setResult({
+            parsed: cached.parsed,
+            fullEquipment: full,
+            attachments: cached.attachments || [],
+            usage: null,
+            fromCache: true,
+            lastUpdated: cached.lastUpdated || null,
+            cacheStats: { attachmentsCacheHit: (cached.attachments || []).length, attachmentsCalled: 0 },
+          });
+        } else {
+          // No cache yet — just stash the full equipment so Run OCR is fast.
+          setResult({ parsed: null, fullEquipment: full, attachments: [], usage: null, fromCache: false });
+        }
+      } catch {
+        // non-fatal — user can still trigger a run manually
+      } finally {
+        if (!cancelled) setCacheLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pickedId, projectId]);
 
-  const runOcr = async () => {
+  const runOcr = async ({ ignoreCache = false } = {}) => {
     setRunning(true);
     setRunError(null);
     try {
-      const full = await getEquipment(projectId, pickedId);
+      const full = result?.fullEquipment || await getEquipment(projectId, pickedId);
       const res = await runOcrOnEquipment({
-        projectId, userId, equipment: full, fieldSelection,
+        projectId, userId, equipment: full, fieldSelection, ignoreCache,
       });
-      setResult({ parsed: res.parsed, fullEquipment: full, attachments: res.attachments, usage: res.usage });
+      setResult({
+        parsed: res.parsed,
+        fullEquipment: full,
+        attachments: res.attachments,
+        usage: res.usage,
+        fromCache: false,
+        cacheStats: res.cacheStats || null,
+        lastUpdated: Date.now(),
+      });
     } catch (e) {
       setRunError(e?.message || 'OCR failed');
     } finally {
@@ -266,13 +310,31 @@ function SingleModePanel({ projectId, userId, equipment, equipmentLoading, equip
       )}
 
       {picked && (
-        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
-          <PrimaryButton
-            onClick={runOcr}
-            disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
-          >
-            {running ? 'Running OCR…' : `Run OCR on #${picked.id}`}
-          </PrimaryButton>
+        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {result?.fromCache ? (
+            <>
+              <PrimaryButton
+                onClick={() => runOcr({ ignoreCache: false })}
+                disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
+              >
+                {running ? 'Scanning…' : 'Scan missing fields'}
+              </PrimaryButton>
+              <MiniButton
+                onClick={() => runOcr({ ignoreCache: true })}
+                disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length)}
+              >
+                Re-scan all
+              </MiniButton>
+              <CacheBadge lastUpdated={result.lastUpdated} attachmentCount={(result.attachments || []).length} />
+            </>
+          ) : (
+            <PrimaryButton
+              onClick={() => runOcr({ ignoreCache: false })}
+              disabled={running || !fieldSelection.length || !(picked.attachmentIDs?.length) || cacheLoading}
+            >
+              {running ? 'Running OCR…' : cacheLoading ? 'Loading…' : `Run OCR on #${picked.id}`}
+            </PrimaryButton>
+          )}
           {!fieldSelection.length && <Warn>Select at least one field above.</Warn>}
           {!(picked.attachmentIDs?.length) && <Warn>This equipment has no attachments.</Warn>}
         </div>
@@ -555,7 +617,10 @@ function BatchModePanel({ projectId, userId, equipment, equipmentLoading, equipm
   async function refreshOcrd() {
     if (!projectId) return;
     setOcrdLoading(true);
-    const ids = await listOcrdEquipmentIds(projectId);
+    // Source of truth is the cache table (equipment_ocr_results), not the
+    // audit log. The cache reflects "we have results we can show without
+    // re-scanning"; the audit log can include failed runs.
+    const ids = await listCachedEquipmentIds(projectId);
     setOcrdIds(ids);
     setOcrdLoading(false);
   }
@@ -963,6 +1028,39 @@ function ErrorBox({ children }) {
       {children}
     </div>
   );
+}
+
+function CacheBadge({ lastUpdated, attachmentCount }) {
+  const rel = formatRelative(lastUpdated);
+  return (
+    <span
+      title="Loaded from cache. Click 'Scan missing fields' to fill anything new, or 'Re-scan all' to refresh from Claude."
+      style={{
+        fontSize: 11, padding: '3px 8px', borderRadius: 10,
+        background: C.okBg, color: C.okText, fontWeight: 600,
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}
+    >
+      💾 cached{rel ? ` · ${rel}` : ''}{attachmentCount ? ` · ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}` : ''}
+    </span>
+  );
+}
+
+function formatRelative(ts) {
+  if (!ts) return '';
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mon = Math.floor(day / 30);
+  if (mon < 12) return `${mon}mo ago`;
+  return `${Math.floor(mon / 12)}y ago`;
 }
 
 function SubtleCount({ children }) {
