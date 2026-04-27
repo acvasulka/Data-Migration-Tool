@@ -67,10 +67,15 @@ export default function EquipmentOcrTab({ project, currentProfile }) {
     return <Empty>Select a project to use this tool.</Empty>;
   }
 
-  if (!project.fmx_credentials || !project.fmx_site_url) {
+  // The encrypted `fmx_credentials` column is revoked from the browser
+  // (migration 011), so we gate on the public `fmx_connection_verified`
+  // boolean — same flag the rest of the app uses (DependenciesView,
+  // ProjectSettingsView, etc.). Server-side calls in /api/* still look
+  // up the encrypted blob by projectId.
+  if (!project.fmx_connection_verified || !project.fmx_site_url) {
     return (
       <Empty>
-        This project has no saved FMX credentials. Save credentials in
+        This project has no verified FMX credentials. Save credentials in
         Settings → FMX before running OCR.
       </Empty>
     );
